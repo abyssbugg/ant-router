@@ -8,6 +8,7 @@ type Code string
 const (
 	CodeInvalidRevision     Code = "invalid_revision"
 	CodeRevisionCorrupt     Code = "revision_corrupt"
+	CodeRepairUnnecessary   Code = "repair_unnecessary"
 	CodeManifestCorrupt     Code = "manifest_corrupt"
 	CodeManifestNotFound    Code = "manifest_not_found"
 	CodeStoreUnavailable    Code = "store_unavailable"
