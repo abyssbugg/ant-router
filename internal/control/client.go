@@ -74,8 +74,8 @@ func (c *Client) Health(ctx context.Context) (HealthResponse, error) {
 	if err := c.get(ctx, "/v1/health", &response); err != nil {
 		return HealthResponse{}, err
 	}
-	if response.APIVersion != APIVersion {
-		return HealthResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("API version mismatch")}
+	if err := validateHealthResponse(response); err != nil {
+		return HealthResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
 	}
 	return response, nil
 }
@@ -85,8 +85,8 @@ func (c *Client) Version(ctx context.Context) (VersionResponse, error) {
 	if err := c.get(ctx, "/v1/version", &response); err != nil {
 		return VersionResponse{}, err
 	}
-	if response.APIVersion != APIVersion {
-		return VersionResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("API version mismatch")}
+	if response.APIVersion != APIVersion || response.Name != "ant-router" || response.Version == "" {
+		return VersionResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("version response is invalid")}
 	}
 	return response, nil
 }
@@ -161,6 +161,13 @@ func (c *Client) get(ctx context.Context, path string, destination any) error {
 	}
 	if err := strictDecodeJSON(data, destination); err != nil {
 		return &ClientError{Kind: ClientErrorProtocol, Status: response.StatusCode, RequestID: response.Header.Get(RequestIDHeader), Err: err}
+	}
+	return nil
+}
+
+func validateHealthResponse(response HealthResponse) error {
+	if response.Status != "ok" || response.APIVersion != APIVersion {
+		return errors.New("health response is invalid")
 	}
 	return nil
 }
