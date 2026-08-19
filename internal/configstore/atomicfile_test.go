@@ -217,18 +217,9 @@ func TestWriteAtomicBeforeReplaceHookCancels(t *testing.T) {
 		t.Fatalf("failed to create initial file: %v", err)
 	}
 
-	hooks := &atomicWriteHooks{
-		beforeReplace: func() {
-			// Simulate hook cancelling the context by returning early
-			// This is tested by checking the final state
-		},
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
-	origCancel := cancel
-	hooks.beforeReplace = func() {
-		origCancel()
-	}
+	defer cancel()
+	hooks := &atomicWriteHooks{beforeReplace: cancel}
 
 	err := writeAtomicWithHooks(ctx, filePath, newData, 0644, hooks)
 	if err == nil {
@@ -501,7 +492,7 @@ func TestWriteAtomicSyncDirectoryFailure(t *testing.T) {
 		t.Fatalf("failed to read tmpDir: %v", err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") && strings.HasSuffix(e.Name(), ".tmp-") || strings.Contains(e.Name(), ".tmp-") {
+		if strings.HasPrefix(e.Name(), ".") && strings.Contains(e.Name(), ".tmp-") {
 			t.Errorf("found leftover temp file: %s", e.Name())
 		}
 	}

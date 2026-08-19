@@ -133,8 +133,12 @@ func TestTypedNilConfigErrorSafety(t *testing.T) {
 	if err != nil {
 		t.Fatal("test setup: err should be nil")
 	}
-	// Don't call methods on nil receiver - just verify the nil check in Error/Unwrap methods exists
-	// by checking the implementation
+	if got := err.Error(); got != "" {
+		t.Errorf("Error() = %q, want empty", got)
+	}
+	if got := err.Unwrap(); got != nil {
+		t.Errorf("Unwrap() = %v, want nil", got)
+	}
 }
 
 func TestConfigErrorNilErrField(t *testing.T) {

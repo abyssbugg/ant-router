@@ -139,7 +139,10 @@ func TestNewManagerRejectsNilStore(t *testing.T) {
 		t.Errorf("expected CodeValidationFailed, got %q", code)
 	}
 	var e *Error
-	if !errors.As(err, &e) || e.Path != "store" {
+	if !errors.As(err, &e) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if e.Path != "store" {
 		t.Errorf("expected path 'store', got %q", e.Path)
 	}
 }
@@ -476,7 +479,10 @@ func TestActivateRejectsStaleCandidateGeneration(t *testing.T) {
 		t.Errorf("expected CodeStaleCandidate, got %q", code)
 	}
 	var e *Error
-	if !errors.As(err, &e) || e.Path != "generation" {
+	if !errors.As(err, &e) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if e.Path != "generation" {
 		t.Errorf("expected path 'generation', got %q", e.Path)
 	}
 }

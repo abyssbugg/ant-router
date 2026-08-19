@@ -6,15 +6,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
 func TestWriteAtomicUnixPermissions(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Unix permissions test skipped on Windows")
-	}
-
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "perms.txt")
 	data := []byte("test data")
@@ -37,10 +32,6 @@ func TestWriteAtomicUnixPermissions(t *testing.T) {
 }
 
 func TestWriteAtomicUnixPermissionsReplace(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Unix permissions test skipped on Windows")
-	}
-
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "perms_replace.txt")
 	oldData := []byte("old")
@@ -69,10 +60,6 @@ func TestWriteAtomicUnixPermissionsReplace(t *testing.T) {
 }
 
 func TestWriteAtomicSymlinkTarget(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink test skipped on Windows")
-	}
-
 	tmpDir := t.TempDir()
 	targetPath := filepath.Join(tmpDir, "target.txt")
 	symlinkPath := filepath.Join(tmpDir, "symlink.txt")
@@ -127,10 +114,6 @@ func TestWriteAtomicSymlinkTarget(t *testing.T) {
 }
 
 func TestWriteAtomicSymlinkedParentDirectory(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink test skipped on Windows")
-	}
-
 	tmpDir := t.TempDir()
 	realDir := filepath.Join(tmpDir, "real")
 	symlinkDir := filepath.Join(tmpDir, "symlink_dir")

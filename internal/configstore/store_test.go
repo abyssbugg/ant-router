@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -134,6 +135,9 @@ func TestNewFileStoreRevisionsDirSymlink(t *testing.T) {
 
 // TestNewFileStorePermissions tests that directories are created with owner-only permissions.
 func TestNewFileStorePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission semantics")
+	}
 	tmpDir := t.TempDir()
 	storeDir := filepath.Join(tmpDir, "store")
 
@@ -1120,6 +1124,9 @@ func TestReadRevisionDefensiveBytes(t *testing.T) {
 
 // TestPutRevisionPermissions tests that revision files have 0600 permissions.
 func TestPutRevisionPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission semantics")
+	}
 	tmpDir := t.TempDir()
 	fs, err := NewFileStore(tmpDir)
 	if err != nil {
@@ -1143,6 +1150,9 @@ func TestPutRevisionPermissions(t *testing.T) {
 
 // TestWriteManifestPermissions tests that manifest file has 0600 permissions.
 func TestWriteManifestPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission semantics")
+	}
 	tmpDir := t.TempDir()
 	fs, err := NewFileStore(tmpDir)
 	if err != nil {
@@ -1176,6 +1186,9 @@ func TestWriteManifestPermissions(t *testing.T) {
 
 // TestReadRevisionReadError tests handling of read errors.
 func TestReadRevisionReadError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission semantics")
+	}
 	tmpDir := t.TempDir()
 	fs, err := NewFileStore(tmpDir)
 	if err != nil {
@@ -1195,7 +1208,7 @@ func TestReadRevisionReadError(t *testing.T) {
 	if err := os.Chmod(revPath, 0000); err != nil {
 		t.Fatalf("failed to change permissions: %v", err)
 	}
-	defer os.Chmod(revPath, 0600) // restore for cleanup
+	t.Cleanup(func() { _ = os.Chmod(revPath, 0o600) })
 
 	_, err = fs.ReadRevision(ctx, id)
 	if err == nil {

@@ -121,14 +121,15 @@ func TestLoadStartupMissingSourceUsesLastKnownGood(t *testing.T) {
 	seedPath := filepath.Join(t.TempDir(), "seed.toml")
 	writeStartupSource(t, seedPath, Default())
 	seed := seedStartupStore(t, store, seedPath)
-	absoluteMissingPath := filepath.Join(t.TempDir(), "missing.toml")
-	workingDirectory, err := os.Getwd()
+	relativeDirectory, err := os.MkdirTemp(".", "tmp-startup-")
 	if err != nil {
-		t.Fatalf("os.Getwd() failed: %v", err)
+		t.Fatalf("os.MkdirTemp() failed: %v", err)
 	}
-	missingPath, err := filepath.Rel(workingDirectory, absoluteMissingPath)
+	t.Cleanup(func() { _ = os.RemoveAll(relativeDirectory) })
+	missingPath := filepath.Join(relativeDirectory, "missing.toml")
+	absoluteMissingPath, err := filepath.Abs(missingPath)
 	if err != nil {
-		t.Fatalf("filepath.Rel() failed: %v", err)
+		t.Fatalf("filepath.Abs() failed: %v", err)
 	}
 	manager, _ := NewManager(store, time.Now)
 

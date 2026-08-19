@@ -152,7 +152,7 @@ func DecodeFile(path string) (Config, error) {
 			Err:  fmt.Errorf("cannot read configuration file"),
 		}
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	cfg, err := Decode(file)
 	if err != nil {

@@ -4,6 +4,7 @@ package configstore
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,13 +41,22 @@ func TestAtomicWriteCrashRecovery(t *testing.T) {
 			if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
 				t.Fatalf("os.WriteFile old failed: %v", err)
 			}
+			wantExitCode := 71
+			if mode == "after" {
+				wantExitCode = 72
+			}
 			command := exec.Command(os.Args[0], "-test.run=^TestAtomicWriteCrashHelper$")
 			command.Env = append(os.Environ(),
 				atomicCrashModeEnvironment+"="+mode,
 				atomicCrashTargetEnvironment+"="+target,
 			)
-			if err := command.Run(); err == nil {
-				t.Fatal("crash helper exited successfully")
+			runErr := command.Run()
+			var exitErr *exec.ExitError
+			if !errors.As(runErr, &exitErr) {
+				t.Fatalf("crash helper did not exit with a status: %v", runErr)
+			}
+			if exitErr.ExitCode() != wantExitCode {
+				t.Fatalf("crash helper exit code = %d, want %d", exitErr.ExitCode(), wantExitCode)
 			}
 
 			content, err := os.ReadFile(target)

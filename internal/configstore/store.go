@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/abyssbugg/ant-router/internal/revision"
 )
@@ -48,6 +49,7 @@ type Store interface {
 
 // FileStore is an implementation of Store that persists data to the filesystem.
 type FileStore struct {
+	mutationMu   sync.Mutex
 	root         string                                                   // absolute path to root directory
 	revisionsDir string                                                   // absolute path to revisions directory
 	manifestPath string                                                   // absolute path to manifest file
@@ -138,6 +140,9 @@ func NewFileStore(root string) (*FileStore, error) {
 // Creates file at <root>/revisions/<id>.toml with 0600 permissions.
 // If file exists and is valid, operation is idempotent.
 func (fs *FileStore) PutRevision(ctx context.Context, id revision.ID, data []byte) error {
+	fs.mutationMu.Lock()
+	defer fs.mutationMu.Unlock()
+
 	// Check context
 	select {
 	case <-ctx.Done():
@@ -213,8 +218,11 @@ func (fs *FileStore) ReadRevision(ctx context.Context, id revision.ID) ([]byte, 
 	if err != nil {
 		if os.IsNotExist(err) {
 			dirInfo, dirErr := os.Lstat(fs.revisionsDir)
-			if dirErr != nil || !dirInfo.IsDir() {
+			if dirErr != nil {
 				return nil, &Error{Code: CodeStoreUnavailable, Path: fs.revisionsDir, Err: dirErr}
+			}
+			if !dirInfo.IsDir() {
+				return nil, &Error{Code: CodeStoreUnavailable, Path: fs.revisionsDir, Err: os.ErrInvalid}
 			}
 			return nil, &Error{Code: CodeStoreUnavailable, Path: revPath, Err: errRevisionNotFound}
 		}
@@ -291,6 +299,9 @@ func (fs *FileStore) ReadManifest(ctx context.Context) (Manifest, error) {
 // Encodes manifest and writes with fs.writeFile at 0600 permissions.
 // Propagates CodeDurabilityUncertain unchanged.
 func (fs *FileStore) WriteManifest(ctx context.Context, manifest Manifest) error {
+	fs.mutationMu.Lock()
+	defer fs.mutationMu.Unlock()
+
 	// Check context
 	select {
 	case <-ctx.Done():
@@ -338,6 +349,9 @@ func (fs *FileStore) verifyManifestRevision(ctx context.Context, id revision.ID,
 // Ignores directories and unrelated hidden files.
 // Honors context cancellation between entries.
 func (fs *FileStore) CleanupTemps(ctx context.Context) error {
+	fs.mutationMu.Lock()
+	defer fs.mutationMu.Unlock()
+
 	if err := contextError(ctx); err != nil {
 		return err
 	}

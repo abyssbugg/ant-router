@@ -146,6 +146,9 @@ func TestValidateErrorMessageContent(t *testing.T) {
 	}
 
 	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for unsupported schema version")
+	}
 	errMsg := err.Error()
 
 	// Should contain code and path

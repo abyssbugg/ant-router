@@ -126,9 +126,8 @@ func TestDurationString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			got := tt.d.String()
-			// Just verify it's not empty and parses back
-			if got == "" {
-				t.Error("String() returned empty string")
+			if got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -141,8 +140,8 @@ func TestDurationMarshalText(t *testing.T) {
 		t.Errorf("MarshalText() error = %v", err)
 		return
 	}
-	if len(data) == 0 {
-		t.Error("MarshalText() returned empty bytes")
+	if got := string(data); got != "30s" {
+		t.Errorf("MarshalText() = %q, want %q", got, "30s")
 	}
 }
 

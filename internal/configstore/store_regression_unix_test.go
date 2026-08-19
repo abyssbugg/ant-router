@@ -79,6 +79,9 @@ func TestReadManifestRejectsInsecurePermissions(t *testing.T) {
 }
 
 func TestCleanupTempsReportsRemovalFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory write permissions")
+	}
 	store, err := NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewFileStore() failed: %v", err)

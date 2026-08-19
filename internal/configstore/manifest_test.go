@@ -3,7 +3,6 @@ package configstore
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -568,10 +567,8 @@ func TestDecodeManifestDuplicateGenerationKey(t *testing.T) {
 		t.Fatal("DecodeManifest should reject duplicate keys")
 	}
 
-	// Should be CodeManifestCorrupt
-	var cfgErr *Error
-	if !errors.As(err, &cfgErr) || cfgErr.Code != CodeManifestCorrupt {
-		t.Errorf("DecodeManifest error code = %v, want CodeManifestCorrupt", cfgErr.Code)
+	if code, ok := CodeOf(err); !ok || code != CodeManifestCorrupt {
+		t.Errorf("DecodeManifest error code = %q, present = %v, want %q", code, ok, CodeManifestCorrupt)
 	}
 
 	// Error message should not include the key name in error details
@@ -596,9 +593,8 @@ func TestDecodeManifestDuplicateCurrentKey(t *testing.T) {
 		t.Fatal("DecodeManifest should reject duplicate current keys")
 	}
 
-	var cfgErr *Error
-	if !errors.As(err, &cfgErr) || cfgErr.Code != CodeManifestCorrupt {
-		t.Errorf("DecodeManifest error code = %v, want CodeManifestCorrupt", cfgErr.Code)
+	if code, ok := CodeOf(err); !ok || code != CodeManifestCorrupt {
+		t.Errorf("DecodeManifest error code = %q, present = %v, want %q", code, ok, CodeManifestCorrupt)
 	}
 }
 

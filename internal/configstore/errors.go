@@ -60,7 +60,7 @@ func (c Code) String() string {
 // CodeOf extracts the Code from an error if it's a *Error, including through error chains with fmt.Errorf %w
 func CodeOf(err error) (Code, bool) {
 	var e *Error
-	if errors.As(err, &e) {
+	if errors.As(err, &e) && e != nil {
 		return e.Code, true
 	}
 	return "", false

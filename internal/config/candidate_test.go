@@ -400,8 +400,12 @@ shutdown_timeout = "30s"
 }
 
 func TestLoadCandidateRelativePathBecomesAbsolute(t *testing.T) {
-	// Create a temp file in a known directory so we can work with relative paths
-	tmpDir := t.TempDir()
+	// Create the file on the working-directory volume so the relative path is portable.
+	tmpDir, err := os.MkdirTemp(".", "tmp-candidate-")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp() failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 	configPath := filepath.Join(tmpDir, "test.toml")
 
 	configContent := `schema_version = 1
@@ -413,20 +417,7 @@ shutdown_timeout = "30s"
 		t.Fatalf("Failed to write test config: %v", err)
 	}
 
-	// Get current working directory
-	currentWd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get current directory: %v", err)
-	}
-
-	// Compute a relative path from current working directory to the config file
-	relativePath, err := filepath.Rel(currentWd, configPath)
-	if err != nil {
-		t.Fatalf("Failed to compute relative path: %v", err)
-	}
-
-	// Load with the relative path
-	cand, err := LoadCandidate(relativePath, 0)
+	cand, err := LoadCandidate(configPath, 0)
 	if err != nil {
 		t.Fatalf("LoadCandidate with relative path failed: %v", err)
 	}
@@ -436,10 +427,12 @@ shutdown_timeout = "30s"
 		t.Errorf("SourcePath() = %q, want absolute path", sourcePath)
 	}
 
-	// Verify it resolves to the correct absolute file path
-	cleanedAbsPath := filepath.Clean(configPath)
-	if filepath.Clean(sourcePath) != cleanedAbsPath {
-		t.Errorf("SourcePath() = %q, want %q", filepath.Clean(sourcePath), cleanedAbsPath)
+	expectedPath, err := filepath.Abs(configPath)
+	if err != nil {
+		t.Fatalf("filepath.Abs() failed: %v", err)
+	}
+	if filepath.Clean(sourcePath) != filepath.Clean(expectedPath) {
+		t.Errorf("SourcePath() = %q, want %q", filepath.Clean(sourcePath), filepath.Clean(expectedPath))
 	}
 }
 
