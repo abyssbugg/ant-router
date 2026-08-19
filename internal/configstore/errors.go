@@ -6,12 +6,13 @@ import "errors"
 type Code string
 
 const (
-	CodeInvalidRevision  Code = "invalid_revision"
-	CodeRevisionCorrupt  Code = "revision_corrupt"
-	CodeManifestCorrupt  Code = "manifest_corrupt"
-	CodeManifestNotFound Code = "manifest_not_found"
-	CodeStoreUnavailable Code = "store_unavailable"
-	CodeCancelled        Code = "cancelled"
+	CodeInvalidRevision     Code = "invalid_revision"
+	CodeRevisionCorrupt     Code = "revision_corrupt"
+	CodeManifestCorrupt     Code = "manifest_corrupt"
+	CodeManifestNotFound    Code = "manifest_not_found"
+	CodeStoreUnavailable    Code = "store_unavailable"
+	CodeCancelled           Code = "cancelled"
+	CodeDurabilityUncertain Code = "durability_uncertain"
 )
 
 // Error represents a configstore error with context

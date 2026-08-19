@@ -237,3 +237,13 @@ func TestConfigstoreErrorNilErrField(t *testing.T) {
 		t.Errorf("Unwrap() should return nil when Err is nil, got %v", unwrapped)
 	}
 }
+
+func TestErrorCodeDurabilityUncertain(t *testing.T) {
+	// Test that CodeDurabilityUncertain exists and has correct value
+	code := CodeDurabilityUncertain
+	want := "durability_uncertain"
+	got := code.String()
+	if got != want {
+		t.Errorf("CodeDurabilityUncertain.String() = %q, want %q", got, want)
+	}
+}
