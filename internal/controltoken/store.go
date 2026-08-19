@@ -114,7 +114,7 @@ func (s *Store) loadPath(path string) (Token, error) {
 		}
 		return Token{}, &Error{Code: CodeStoreUnavailable, Path: "token_file", Err: err}
 	}
-	if !info.Mode().IsRegular() || !privateTokenFile(info.Mode()) {
+	if !info.Mode().IsRegular() || !privateTokenFile(path, info.Mode()) {
 		return Token{}, &Error{Code: CodeTokenCorrupt, Path: "token_file", Err: errors.New("token file is invalid")}
 	}
 	file, err := os.Open(path)
@@ -212,9 +212,7 @@ func createTokenExclusive(path string, data []byte) error {
 		return &Error{Code: CodeStoreUnavailable, Path: "token_file", Err: err}
 	}
 	if err := syncTokenDirectory(directory); err != nil {
-		_ = os.Remove(path)
-		_ = syncTokenDirectory(directory)
-		return &Error{Code: CodeStoreUnavailable, Path: "token_file", Err: err}
+		return &Error{Code: CodeDurabilityUncertain, Path: "token_file", Err: err}
 	}
 	return nil
 }

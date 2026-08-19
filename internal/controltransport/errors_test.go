@@ -165,16 +165,16 @@ func TestControlTransportErrorNilErrField(t *testing.T) {
 }
 
 func TestErrorPathNotEchoedForInvalidInstance(t *testing.T) {
-	// When path contains sensitive data like invalid instance names, they should not be echoed
-	err := &Error{
-		Code: CodeInvalidInstance,
-		Path: "user_input_here",
-		Err:  nil,
+	const input = "user_input_here"
+	_, err := ParseInstanceName(input)
+	if err == nil {
+		t.Fatal("ParseInstanceName() accepted invalid input")
 	}
-
 	errMsg := err.Error()
-	// The path should be there but marked clearly as the problematic path
 	if !strings.Contains(errMsg, "invalid_instance") {
-		t.Errorf("Error message should contain error code: %q", errMsg)
+		t.Errorf("error message should contain error code: %q", errMsg)
+	}
+	if strings.Contains(errMsg, input) {
+		t.Errorf("error message leaked invalid instance: %q", errMsg)
 	}
 }

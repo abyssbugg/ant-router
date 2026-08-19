@@ -139,8 +139,14 @@ func (c *Client) get(ctx context.Context, path string, destination any) error {
 	}
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, c.maxResponseBody+1))
 	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
+	if readErr != nil {
+		if kind := contextErrorKind(requestContext); kind != "" {
+			return &ClientError{Kind: kind, Status: response.StatusCode, Err: errors.Join(readErr, closeErr)}
+		}
 		return &ClientError{Kind: ClientErrorProtocol, Status: response.StatusCode, Err: errors.Join(readErr, closeErr)}
+	}
+	if closeErr != nil {
+		return &ClientError{Kind: ClientErrorProtocol, Status: response.StatusCode, Err: closeErr}
 	}
 	if int64(len(data)) > c.maxResponseBody {
 		return &ClientError{Kind: ClientErrorProtocol, Status: response.StatusCode, Err: errors.New("response body is too large")}

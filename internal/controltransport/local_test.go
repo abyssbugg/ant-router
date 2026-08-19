@@ -9,7 +9,11 @@ import (
 
 func TestManagedListenerCloseIsIdempotent(t *testing.T) {
 	first, second := net.Pipe()
-	defer second.Close()
+	t.Cleanup(func() {
+		if err := second.Close(); err != nil {
+			t.Errorf("second.Close() failed: %v", err)
+		}
+	})
 	cleanupCalls := 0
 	listener := newManagedListener(&singleConnectionListener{connection: first}, func() error {
 		cleanupCalls++

@@ -51,7 +51,7 @@ func TestServerForcedShutdownWithActiveRequest(t *testing.T) {
 		return (controltransport.LocalDialer{Endpoint: endpoint}).DialContext(ctx)
 	}}
 	client := &http.Client{Transport: transport}
-	request, _ := http.NewRequest(http.MethodGet, "http://local/v1/status", nil)
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://local/v1/status", nil)
 	request.Header.Set("Authorization", "Bearer "+token.String())
 	requestDone := make(chan struct{})
 	go func() {
@@ -102,7 +102,7 @@ func TestServerUnixAuthenticatedLifecycle(t *testing.T) {
 		return (controltransport.LocalDialer{Endpoint: endpoint}).DialContext(ctx)
 	}}
 	client := &http.Client{Transport: transport, Timeout: time.Second}
-	request, _ := http.NewRequest(http.MethodGet, "http://local/v1/health", nil)
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://local/v1/health", nil)
 	request.Header.Set("Authorization", "Bearer "+token.String())
 	response, err := client.Do(request)
 	if err != nil {

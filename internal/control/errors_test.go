@@ -19,9 +19,15 @@ func TestErrorCodesAndSafeMessages(t *testing.T) {
 
 func TestWriteErrorEnvelope(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	WriteError(recorder, http.StatusUnauthorized, CodeUnauthorized, "request-123")
+	if err := WriteError(recorder, http.StatusUnauthorized, CodeUnauthorized, "request-123"); err != nil {
+		t.Fatalf("WriteError() failed: %v", err)
+	}
 	response := recorder.Result()
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("Body.Close() failed: %v", err)
+		}
+	}()
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d", response.StatusCode)
 	}

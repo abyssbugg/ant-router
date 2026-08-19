@@ -3,11 +3,13 @@
 package controltoken
 
 import (
-	"errors"
+	"fmt"
 	"io/fs"
 	"runtime"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -15,13 +17,40 @@ var (
 	tokenMoveFileExW = tokenKernel32.NewProc("MoveFileExW")
 )
 
-func secureTokenDirectory(string) error { return nil }
-func privateTokenFile(fs.FileMode) bool { return true }
-func syncTokenDirectory(string) error   { return nil }
+func secureTokenDirectory(path string) error { return applyPrivateWindowsACL(path) }
+func privateTokenFile(path string, _ fs.FileMode) bool {
+	return applyPrivateWindowsACL(path) == nil
+}
+func syncTokenDirectory(string) error { return nil }
+
+func applyPrivateWindowsACL(path string) error {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return err
+	}
+	sddl := fmt.Sprintf("D:P(A;;FA;;;SY)(A;;FA;;;%s)", user.User.Sid.String())
+	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil,
+		nil,
+		dacl,
+		nil,
+	)
+}
 
 func installTokenFile(source, target string) error {
 	err := moveTokenFile(source, target, 0x8)
-	if errors.Is(err, syscall.ERROR_FILE_EXISTS) || errors.Is(err, syscall.ERROR_ALREADY_EXISTS) {
+	if err == syscall.ERROR_FILE_EXISTS || err == syscall.ERROR_ALREADY_EXISTS {
 		return errTokenExists
 	}
 	return err

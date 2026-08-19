@@ -8,8 +8,8 @@ import (
 	"os"
 )
 
-func secureTokenDirectory(path string) error { return os.Chmod(path, 0o700) }
-func privateTokenFile(mode fs.FileMode) bool { return mode.Perm() == 0o600 }
+func secureTokenDirectory(path string) error           { return os.Chmod(path, 0o700) }
+func privateTokenFile(_ string, mode fs.FileMode) bool { return mode.Perm() == 0o600 }
 func installTokenFile(source, target string) error {
 	if err := os.Link(source, target); err != nil {
 		if os.IsExist(err) {

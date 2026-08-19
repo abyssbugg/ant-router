@@ -28,7 +28,7 @@ func (w *failingResponseWriter) Write([]byte) (int, error) {
 func TestHandlerDoesNotWriteSecondResponseAfterWriteFailure(t *testing.T) {
 	router := newTestRouter(t, nil)
 	writer := &failingResponseWriter{}
-	router.ServeHTTP(writer, httptest.NewRequest(http.MethodGet, "/v1/health", nil))
+	router.ServeHTTP(writer, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/health", nil))
 	if len(writer.statuses) != 1 || writer.statuses[0] != http.StatusOK {
 		t.Errorf("statuses = %v, want [200]", writer.statuses)
 	}

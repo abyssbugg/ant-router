@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +19,7 @@ func FuzzAuthorizationHeader(f *testing.F) {
 		handler := Authenticate(verifier)(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			writer.WriteHeader(http.StatusNoContent)
 		}))
-		request := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/health", nil)
 		if header != "" {
 			request.Header.Set("Authorization", header)
 		}

@@ -30,9 +30,7 @@ func resolveLocalEndpoint(instance InstanceName, options ResolveOptions) (Endpoi
 			return Endpoint{}, &Error{Code: CodePermissionDenied, Path: "user_identity", Err: errors.New("cannot resolve Windows user identity")}
 		}
 	}
-	digest := sha256.Sum256([]byte(identity))
-	userHash := hex.EncodeToString(digest[:8])
-	address := windowsPipePrefix + userHash + "-" + instance.String()
+	address := windowsPipeAddress(instance, identity)
 	return NewEndpoint(instance, "npipe", address, paths.TokenPath)
 }
 
@@ -43,6 +41,9 @@ func listenLocal(endpoint Endpoint) (*ManagedListener, error) {
 	sid, err := currentWindowsSID()
 	if err != nil {
 		return nil, &Error{Code: CodePermissionDenied, Path: "user_identity", Err: errors.New("cannot resolve Windows user identity")}
+	}
+	if endpoint.Address != windowsPipeAddress(endpoint.Instance, sid) {
+		return nil, &Error{Code: CodePermissionDenied, Path: "endpoint", Err: errors.New("named-pipe endpoint does not belong to current user")}
 	}
 	securityDescriptor := fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GA;;;%s)", sid)
 	listener, err := winio.ListenPipe(endpoint.Address, &winio.PipeConfig{
@@ -76,6 +77,11 @@ func dialLocal(ctx context.Context, endpoint Endpoint) (net.Conn, error) {
 		return nil, err
 	}
 	return connection, nil
+}
+
+func windowsPipeAddress(instance InstanceName, identity string) string {
+	digest := sha256.Sum256([]byte(identity))
+	return windowsPipePrefix + hex.EncodeToString(digest[:8]) + "-" + instance.String()
 }
 
 func currentWindowsSID() (string, error) {

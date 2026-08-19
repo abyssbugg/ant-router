@@ -42,10 +42,10 @@ func ResolveInstancePaths(stateRoot string, instance InstanceName) (InstancePath
 	if err != nil {
 		return InstancePaths{}, err
 	}
-	root := strings.TrimSpace(stateRoot)
-	if root == "" {
+	if strings.TrimSpace(stateRoot) == "" {
 		return InstancePaths{}, &Error{Code: CodePathResolutionFailed, Path: "state_root", Err: errors.New("state root is required")}
 	}
+	root := stateRoot
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return InstancePaths{}, &Error{Code: CodePathResolutionFailed, Path: "state_root", Err: errors.New("cannot resolve state root")}

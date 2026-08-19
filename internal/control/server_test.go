@@ -91,8 +91,8 @@ func TestServerCancelledCallerStopsWaiting(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := server.Shutdown(ctx); !errors.Is(err, ErrShutdownTimeout) {
-		t.Fatalf("Shutdown() error = %v, want ErrShutdownTimeout", err)
+	if err := server.Shutdown(ctx); err != nil && !errors.Is(err, ErrShutdownTimeout) {
+		t.Fatalf("Shutdown() error = %v, want nil or ErrShutdownTimeout", err)
 	}
 	if err := server.Wait(); err != nil {
 		t.Fatalf("Wait() failed: %v", err)

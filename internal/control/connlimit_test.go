@@ -10,11 +10,14 @@ func TestLimitListenerBlocksUntilConnectionCloses(t *testing.T) {
 	base := &queuedListener{connections: make(chan net.Conn, 2), closed: make(chan struct{})}
 	firstServer, firstClient := net.Pipe()
 	secondServer, secondClient := net.Pipe()
-	defer firstClient.Close()
-	defer secondClient.Close()
 	base.connections <- firstServer
 	base.connections <- secondServer
 	listener := newLimitListener(base, 1)
+	t.Cleanup(func() {
+		_ = listener.Close()
+		_ = firstClient.Close()
+		_ = secondClient.Close()
+	})
 	first, err := listener.Accept()
 	if err != nil {
 		t.Fatalf("first Accept() failed: %v", err)
@@ -27,7 +30,8 @@ func TestLimitListenerBlocksUntilConnectionCloses(t *testing.T) {
 		}
 	}()
 	select {
-	case <-secondResult:
+	case second := <-secondResult:
+		_ = second.Close()
 		t.Fatal("second connection bypassed limit")
 	case <-time.After(50 * time.Millisecond):
 	}
@@ -40,7 +44,6 @@ func TestLimitListenerBlocksUntilConnectionCloses(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("second Accept() did not resume")
 	}
-	_ = listener.Close()
 }
 
 type queuedListener struct {

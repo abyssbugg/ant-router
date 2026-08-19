@@ -38,6 +38,12 @@ func TestAuthenticatedServerStress(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Start() failed: %v", err)
 	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		_ = server.Wait()
+	})
 	client, err := NewClient(controltransport.LocalDialer{Endpoint: endpoint}, tokenSourceFunc(func(context.Context) (controltoken.Token, error) { return token, nil }), DefaultClientOptions())
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)

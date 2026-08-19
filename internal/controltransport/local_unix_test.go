@@ -184,6 +184,48 @@ func TestUnixCloseDoesNotRemoveReplacementSocket(t *testing.T) {
 	}
 }
 
+func TestUnixConcurrentStaleSocketReclamation(t *testing.T) {
+	endpoint := unixTestEndpoint(t, InstanceName("race"))
+	if err := os.MkdirAll(filepath.Dir(endpoint.Address), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll() failed: %v", err)
+	}
+	address, _ := net.ResolveUnixAddr("unix", endpoint.Address)
+	stale, err := net.ListenUnix("unix", address)
+	if err != nil {
+		t.Fatalf("net.ListenUnix(stale) failed: %v", err)
+	}
+	stale.SetUnlinkOnClose(false)
+	_ = stale.Close()
+
+	type result struct {
+		listener *ManagedListener
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			<-start
+			listener, listenErr := ListenLocal(endpoint)
+			results <- result{listener: listener, err: listenErr}
+		}()
+	}
+	close(start)
+	first, second := <-results, <-results
+	successes, collisions := 0, 0
+	for _, outcome := range []result{first, second} {
+		if outcome.err == nil {
+			successes++
+			t.Cleanup(func() { _ = outcome.listener.Close() })
+		} else if transportCode(outcome.err) == CodeAlreadyRunning {
+			collisions++
+		}
+	}
+	if successes != 1 || collisions != 1 {
+		t.Fatalf("concurrent starts: successes=%d collisions=%d errors=%v/%v", successes, collisions, first.err, second.err)
+	}
+}
+
 func TestUnixDialDeadline(t *testing.T) {
 	endpoint := unixTestEndpoint(t, DefaultInstance)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)

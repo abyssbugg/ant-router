@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,8 +32,7 @@ func newTestRouter(t *testing.T, provider StatusProvider) http.Handler {
 
 func performRequest(t *testing.T, handler http.Handler, method, path string) *httptest.ResponseRecorder {
 	t.Helper()
-	request := httptest.NewRequest(method, path, nil)
-	request = request.WithContext(WithRequestID(request.Context(), "request-123"))
+	request := httptest.NewRequestWithContext(WithRequestID(context.Background(), "request-123"), method, path, nil)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	return recorder
@@ -104,13 +104,13 @@ func TestStatusProviderErrorAndCancellation(t *testing.T) {
 	})
 	router := newTestRouter(t, provider)
 	recorder := performRequest(t, router, http.MethodGet, "/v1/status")
-	if recorder.Code != http.StatusServiceUnavailable || string(recorder.Body.Bytes()) == "synthetic provider marker" {
+	if recorder.Code != http.StatusServiceUnavailable || strings.Contains(recorder.Body.String(), "synthetic provider marker") {
 		t.Errorf("provider error response = %d %q", recorder.Code, recorder.Body.String())
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	request := httptest.NewRequest(http.MethodGet, "/v1/status", nil).WithContext(WithRequestID(ctx, "request-123"))
+	request := httptest.NewRequestWithContext(WithRequestID(ctx, "request-123"), http.MethodGet, "/v1/status", nil)
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusServiceUnavailable {

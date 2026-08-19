@@ -33,6 +33,7 @@ func TestAuthenticate(t *testing.T) {
 		{name: "oversized", headers: []string{"Bearer " + strings.Repeat("a", MaxAuthorizationLength)}, want: http.StatusUnauthorized},
 		{name: "wrong token", headers: []string{"Bearer " + strings.Repeat("b", 43)}, want: http.StatusUnauthorized},
 		{name: "valid", headers: []string{"Bearer " + validToken}, want: http.StatusNoContent},
+		{name: "lowercase scheme", headers: []string{"bearer " + validToken}, want: http.StatusNoContent},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -56,7 +57,7 @@ func TestAuthenticate(t *testing.T) {
 			}
 		})
 	}
-	if called != 2 {
-		t.Errorf("verifier calls = %d, want 2 for well-formed wrong and valid tokens", called)
+	if called != 3 {
+		t.Errorf("verifier calls = %d, want 3 for well-formed wrong and valid tokens", called)
 	}
 }
