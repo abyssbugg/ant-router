@@ -674,7 +674,7 @@ func TestDecodeManifestMalformedJSONNoEcho(t *testing.T) {
 	// Malformed JSON with secret-like field should not echo the secret
 	malformed := []byte(`{
 		"format_version": 1,
-		"secret_key": "sk_live_abcdef123456",
+		"secret_key": "synthetic_secret_marker_67890",
 		"current": invalid json here
 	}`)
 
@@ -685,7 +685,7 @@ func TestDecodeManifestMalformedJSONNoEcho(t *testing.T) {
 
 	errMsg := err.Error()
 	// Should not contain the secret value
-	if strings.Contains(errMsg, "sk_live_") {
+	if strings.Contains(errMsg, "synthetic_secret_marker_67890") {
 		t.Errorf("Error message leaked secret: %q", errMsg)
 	}
 

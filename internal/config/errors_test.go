@@ -166,7 +166,7 @@ func TestDecodeManifestNoSecretEcho(t *testing.T) {
 	// Unknown field with secret-like value should not echo the secret in error
 	jsonWithSecret := []byte(`{
 		"schema_version": 1,
-		"secret_api_key": "sk_live_51234567890abcdef"
+		"secret_api_key": "synthetic_secret_marker_12345"
 	}`)
 
 	_, err := Decode(bytes.NewReader(jsonWithSecret))
@@ -176,7 +176,7 @@ func TestDecodeManifestNoSecretEcho(t *testing.T) {
 
 	errMsg := err.Error()
 	// Error message should not contain the actual secret value
-	if strings.Contains(errMsg, "sk_live_") {
+	if strings.Contains(errMsg, "synthetic_secret_marker_12345") {
 		t.Errorf("Error message leaked secret: %q", errMsg)
 	}
 }

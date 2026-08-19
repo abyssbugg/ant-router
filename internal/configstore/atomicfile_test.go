@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -333,6 +334,9 @@ func TestWriteAtomicErrorsNoDataPayload(t *testing.T) {
 }
 
 func TestWriteAtomicBoundedConcurrentReaders(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows may deny replacement while readers hold the destination open")
+	}
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "concurrent.txt")
 
