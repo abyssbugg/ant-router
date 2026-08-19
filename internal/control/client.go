@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/abyssbugg/ant-router/internal/config"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
 )
 
@@ -71,7 +72,7 @@ func NewClient(dialer Dialer, tokenSource TokenSource, options ClientOptions) (*
 
 func (c *Client) Health(ctx context.Context) (HealthResponse, error) {
 	var response HealthResponse
-	if err := c.get(ctx, "/v1/health", &response); err != nil {
+	if err := c.request(ctx, http.MethodGet, "/v1/health", nil, &response); err != nil {
 		return HealthResponse{}, err
 	}
 	if err := validateHealthResponse(response); err != nil {
@@ -82,7 +83,7 @@ func (c *Client) Health(ctx context.Context) (HealthResponse, error) {
 
 func (c *Client) Version(ctx context.Context) (VersionResponse, error) {
 	var response VersionResponse
-	if err := c.get(ctx, "/v1/version", &response); err != nil {
+	if err := c.request(ctx, http.MethodGet, "/v1/version", nil, &response); err != nil {
 		return VersionResponse{}, err
 	}
 	if response.APIVersion != APIVersion || response.Name != "ant-router" || response.Version == "" {
@@ -93,13 +94,71 @@ func (c *Client) Version(ctx context.Context) (VersionResponse, error) {
 
 func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
 	var response StatusResponse
-	err := c.get(ctx, "/v1/status", &response)
+	err := c.request(ctx, http.MethodGet, "/v1/status", nil, &response)
 	return response, err
+}
+
+func (c *Client) CurrentConfig(ctx context.Context) (ConfigCurrentResponse, error) {
+	var response ConfigCurrentResponse
+	if err := c.request(ctx, http.MethodGet, "/v1/config", nil, &response); err != nil {
+		return ConfigCurrentResponse{}, err
+	}
+	if err := validateConfigCurrent(response); err != nil {
+		return ConfigCurrentResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
+	}
+	return response, nil
+}
+
+func (c *Client) ValidateConfig(ctx context.Context, tomlBytes []byte) (ConfigValidateResponse, error) {
+	if len(tomlBytes) > config.MaxSourceBytes {
+		return ConfigValidateResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("configuration is too large")}
+	}
+	body, err := json.Marshal(ConfigValidateRequest{TOML: string(tomlBytes)})
+	if err != nil {
+		return ConfigValidateResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
+	}
+	var response ConfigValidateResponse
+	if err := c.request(ctx, http.MethodPost, "/v1/config/validate", body, &response); err != nil {
+		return ConfigValidateResponse{}, err
+	}
+	if !config.RevisionID(response.Revision).Valid() || response.CanonicalSize <= 0 {
+		return ConfigValidateResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("validation response is invalid")}
+	}
+	return response, nil
+}
+
+func (c *Client) ApplyConfig(ctx context.Context, tomlBytes []byte, proof ConfigValidateResponse) (ConfigMutationResponse, error) {
+	if len(tomlBytes) > config.MaxSourceBytes || !config.RevisionID(proof.Revision).Valid() {
+		return ConfigMutationResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("apply request is invalid")}
+	}
+	body, err := json.Marshal(ConfigApplyRequest{TOML: string(tomlBytes), ExpectedRevision: proof.Revision, ExpectedGeneration: proof.BaseGeneration})
+	if err != nil {
+		return ConfigMutationResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
+	}
+	var response ConfigMutationResponse
+	if err := c.request(ctx, http.MethodPost, "/v1/config/apply", body, &response); err != nil {
+		return ConfigMutationResponse{}, err
+	}
+	if err := validateConfigMutation(response); err != nil {
+		return ConfigMutationResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
+	}
+	return response, nil
+}
+
+func (c *Client) RollbackConfig(ctx context.Context) (ConfigMutationResponse, error) {
+	var response ConfigMutationResponse
+	if err := c.request(ctx, http.MethodPost, "/v1/config/rollback", nil, &response); err != nil {
+		return ConfigMutationResponse{}, err
+	}
+	if err := validateConfigMutation(response); err != nil {
+		return ConfigMutationResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
+	}
+	return response, nil
 }
 
 func (c *Client) CloseIdleConnections() { c.transport.CloseIdleConnections() }
 
-func (c *Client) get(ctx context.Context, path string, destination any) error {
+func (c *Client) request(ctx context.Context, method, path string, requestBody []byte, destination any) error {
 	requestContext, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	token, err := c.tokenSource.Token(requestContext)
@@ -109,12 +168,19 @@ func (c *Client) get(ctx context.Context, path string, destination any) error {
 		}
 		return &ClientError{Kind: ClientErrorToken, Err: err}
 	}
-	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, "http://local"+path, nil)
+	var body io.Reader
+	if requestBody != nil {
+		body = bytes.NewReader(requestBody)
+	}
+	request, err := http.NewRequestWithContext(requestContext, method, "http://local"+path, body)
 	if err != nil {
 		return &ClientError{Kind: ClientErrorProtocol, Err: err}
 	}
 	request.Header.Set("Authorization", "Bearer "+token.String())
 	request.Header.Set("Accept", "application/json")
+	if requestBody != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
 		if kind := contextErrorKind(requestContext); kind != "" {
@@ -171,6 +237,30 @@ func (c *Client) get(ctx context.Context, path string, destination any) error {
 	return nil
 }
 
+func validateConfigCurrent(response ConfigCurrentResponse) error {
+	switch response.State {
+	case "awaiting_configuration", "degraded":
+		if response.Revision != "" || response.Generation != 0 || response.Status != "" || response.ActivatedAt != nil {
+			return errors.New("configuration state response is invalid")
+		}
+		return nil
+	case "running":
+		if !config.RevisionID(response.Revision).Valid() || response.Generation == 0 || response.Status == "" || response.ActivatedAt == nil || response.ActivatedAt.IsZero() {
+			return errors.New("configuration state response is invalid")
+		}
+		return nil
+	default:
+		return errors.New("configuration state response is invalid")
+	}
+}
+
+func validateConfigMutation(response ConfigMutationResponse) error {
+	if response.State != "running" || !config.RevisionID(response.Revision).Valid() || response.Generation == 0 || response.Status == "" || response.ActivatedAt.IsZero() {
+		return errors.New("configuration mutation response is invalid")
+	}
+	return nil
+}
+
 func validateHealthResponse(response HealthResponse) error {
 	if response.Status != "ok" || response.APIVersion != APIVersion {
 		return errors.New("health response is invalid")
@@ -190,7 +280,8 @@ func contextErrorKind(ctx context.Context) ClientErrorKind {
 
 func validAPIErrorCode(code ErrorCode) bool {
 	switch code {
-	case CodeUnauthorized, CodeInvalidRequest, CodeNotFound, CodeMethodNotAllowed, CodeBodyTooLarge, CodeUnsupportedMediaType, CodeRequestTimeout, CodeServiceUnavailable, CodeInternalError:
+	case CodeUnauthorized, CodeInvalidRequest, CodeNotFound, CodeMethodNotAllowed, CodeBodyTooLarge, CodeUnsupportedMediaType, CodeRequestTimeout, CodeServiceUnavailable, CodeInternalError,
+		CodeConfigurationInvalid, CodeConfigurationTooLarge, CodeRevisionMismatch, CodeGenerationConflict, CodeNoConfiguration, CodeNoPreviousRevision, CodeConfigurationUnavailable:
 		return true
 	default:
 		return false

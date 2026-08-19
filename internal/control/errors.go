@@ -8,15 +8,22 @@ import (
 type ErrorCode string
 
 const (
-	CodeUnauthorized         ErrorCode = "unauthorized"
-	CodeInvalidRequest       ErrorCode = "invalid_request"
-	CodeNotFound             ErrorCode = "not_found"
-	CodeMethodNotAllowed     ErrorCode = "method_not_allowed"
-	CodeBodyTooLarge         ErrorCode = "body_too_large"
-	CodeUnsupportedMediaType ErrorCode = "unsupported_media_type"
-	CodeRequestTimeout       ErrorCode = "request_timeout"
-	CodeServiceUnavailable   ErrorCode = "service_unavailable"
-	CodeInternalError        ErrorCode = "internal_error"
+	CodeUnauthorized             ErrorCode = "unauthorized"
+	CodeInvalidRequest           ErrorCode = "invalid_request"
+	CodeNotFound                 ErrorCode = "not_found"
+	CodeMethodNotAllowed         ErrorCode = "method_not_allowed"
+	CodeBodyTooLarge             ErrorCode = "body_too_large"
+	CodeUnsupportedMediaType     ErrorCode = "unsupported_media_type"
+	CodeRequestTimeout           ErrorCode = "request_timeout"
+	CodeServiceUnavailable       ErrorCode = "service_unavailable"
+	CodeInternalError            ErrorCode = "internal_error"
+	CodeConfigurationInvalid     ErrorCode = "configuration_invalid"
+	CodeConfigurationTooLarge    ErrorCode = "configuration_too_large"
+	CodeRevisionMismatch         ErrorCode = "revision_mismatch"
+	CodeGenerationConflict       ErrorCode = "generation_conflict"
+	CodeNoConfiguration          ErrorCode = "no_configuration"
+	CodeNoPreviousRevision       ErrorCode = "no_previous_revision"
+	CodeConfigurationUnavailable ErrorCode = "configuration_unavailable"
 )
 
 type ErrorResponse struct {
@@ -47,6 +54,20 @@ func safeMessage(code ErrorCode) string {
 		return "request timed out"
 	case CodeServiceUnavailable:
 		return "service unavailable"
+	case CodeConfigurationInvalid:
+		return "configuration is invalid"
+	case CodeConfigurationTooLarge:
+		return "configuration is too large"
+	case CodeRevisionMismatch:
+		return "configuration revision mismatch"
+	case CodeGenerationConflict:
+		return "configuration generation conflict"
+	case CodeNoConfiguration:
+		return "configuration not found"
+	case CodeNoPreviousRevision:
+		return "previous configuration not found"
+	case CodeConfigurationUnavailable:
+		return "configuration unavailable"
 	default:
 		return "internal error"
 	}
