@@ -9,6 +9,10 @@ const (
 	CodeValidationFailed  Code = "validation_failed"
 	CodeUnsupportedSchema Code = "unsupported_schema"
 	CodeCancelled         Code = "cancelled"
+	CodeSourceNotFound    Code = "source_not_found"
+	CodeSourceTooLarge    Code = "source_too_large"
+	CodeDecodeFailed      Code = "decode_failed"
+	CodeUnknownField      Code = "unknown_field"
 )
 
 // Error represents a configuration error with context
