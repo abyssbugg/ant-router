@@ -61,7 +61,7 @@ func listenLocal(endpoint Endpoint) (*ManagedListener, error) {
 			return nil, &Error{Code: CodeAlreadyRunning, Path: "endpoint", Err: errors.New("named-pipe endpoint is active")}
 		}
 		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-			return nil, &Error{Code: CodePermissionDenied, Path: "endpoint", Err: errors.New("named-pipe endpoint permission denied")}
+			return nil, &Error{Code: CodeAlreadyRunning, Path: "endpoint", Err: errors.New("named-pipe endpoint is active")}
 		}
 		return nil, &Error{Code: CodeInvalidEndpoint, Path: "endpoint", Err: errors.New("named-pipe endpoint is unavailable")}
 	}
