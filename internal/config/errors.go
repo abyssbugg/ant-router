@@ -15,6 +15,8 @@ const (
 	CodeUnknownField         Code = "unknown_field"
 	CodePathResolutionFailed Code = "path_resolution_failed"
 	CodeStaleCandidate       Code = "stale_candidate"
+	CodeNoPreviousRevision   Code = "no_previous_revision"
+	CodeNoValidConfiguration Code = "no_valid_configuration"
 )
 
 // Error represents a configuration error with context
