@@ -14,6 +14,7 @@ const (
 	CodeDecodeFailed         Code = "decode_failed"
 	CodeUnknownField         Code = "unknown_field"
 	CodePathResolutionFailed Code = "path_resolution_failed"
+	CodeStaleCandidate       Code = "stale_candidate"
 )
 
 // Error represents a configuration error with context

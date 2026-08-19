@@ -22,6 +22,9 @@ func TestCodeConstantsLowercase(t *testing.T) {
 	if CodePathResolutionFailed != "path_resolution_failed" {
 		t.Errorf("CodePathResolutionFailed = %v, want 'path_resolution_failed'", CodePathResolutionFailed)
 	}
+	if CodeStaleCandidate != "stale_candidate" {
+		t.Errorf("CodeStaleCandidate = %v, want 'stale_candidate'", CodeStaleCandidate)
+	}
 }
 
 func TestErrorType(t *testing.T) {
