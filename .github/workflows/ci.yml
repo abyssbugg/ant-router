@@ -28,6 +28,9 @@ jobs:
       - run: make config-test
       - run: make config-race
       - run: make fault-test
+      - run: make control-test
+      - run: make control-race
+      - run: make control-fault
 
   platform-tests:
     name: Tests (${{ matrix.os }})
@@ -46,6 +49,10 @@ jobs:
           cache: true
       - run: go version
       - run: go test ./...
+      - if: runner.os == 'macOS'
+        run: go test ./internal/controltransport -run 'TestUnix|TestResolveLocal' -count=20
+      - if: runner.os == 'Windows'
+        run: go test ./internal/controltransport -run 'TestWindows' -count=20
 
   fuzz-smoke:
     name: Fuzz smoke
@@ -59,3 +66,4 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: make fuzz-smoke FUZZ_TIME=10s
+      - run: make control-fuzz FUZZ_TIME=10s
