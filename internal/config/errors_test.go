@@ -18,6 +18,9 @@ func TestCodeConstantsLowercase(t *testing.T) {
 	if CodeCancelled != "cancelled" {
 		t.Errorf("CodeCancelled = %v, want 'cancelled'", CodeCancelled)
 	}
+	if CodePathResolutionFailed != "path_resolution_failed" {
+		t.Errorf("CodePathResolutionFailed = %v, want 'path_resolution_failed'", CodePathResolutionFailed)
+	}
 }
 
 func TestErrorType(t *testing.T) {

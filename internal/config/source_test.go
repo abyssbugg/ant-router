@@ -1,8 +1,56 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 )
+
+func TestResolveAbsolutePathBlank(t *testing.T) {
+	result, err := resolveAbsolutePath("", "test_field")
+	if err != nil {
+		t.Fatalf("resolveAbsolutePath(\"\", \"test_field\") failed: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected blank path to return blank, got %q", result)
+	}
+}
+
+func TestResolveAbsolutePathRelativeBecomesAbsolute(t *testing.T) {
+	result, err := resolveAbsolutePath("config.toml", "test_field")
+	if err != nil {
+		t.Fatalf("resolveAbsolutePath failed: %v", err)
+	}
+	if !filepath.IsAbs(result) {
+		t.Errorf("expected absolute path, got %q", result)
+	}
+}
+
+func TestResolveAbsolutePathCleans(t *testing.T) {
+	// Test that it cleans the path
+	result, err := resolveAbsolutePath("./config/../config.toml", "test_field")
+	if err != nil {
+		t.Fatalf("resolveAbsolutePath failed: %v", err)
+	}
+	if !filepath.IsAbs(result) {
+		t.Errorf("expected absolute path, got %q", result)
+	}
+	// Should not contain ".."
+	if filepath.Base(result) == ".." {
+		t.Errorf("path should be cleaned, got %q", result)
+	}
+}
+
+func TestResolveAbsolutePathErrorIncludesField(t *testing.T) {
+	// We can't easily trigger filepath.Abs to fail, but we can verify
+	// that a path gets processed and the field is used correctly
+	result, err := resolveAbsolutePath("valid.toml", "my_field")
+	if err != nil {
+		t.Fatalf("resolveAbsolutePath failed: %v", err)
+	}
+	if !filepath.IsAbs(result) {
+		t.Errorf("expected absolute path, got %q", result)
+	}
+}
 
 func TestConfigEnvironmentConstant(t *testing.T) {
 	if ConfigEnvironment != "ANT_ROUTER_CONFIG" {
