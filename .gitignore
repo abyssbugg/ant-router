@@ -1,0 +1,15 @@
+.worktrees/
+
+# Go build and test artifacts
+bin/
+coverage.out
+*.test
+
+# Runtime state
+.ant-router/
+*.log
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/
