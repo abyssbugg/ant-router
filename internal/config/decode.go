@@ -84,7 +84,7 @@ func Decode(r io.Reader) (Config, error) {
 		return Config{}, &Error{
 			Code: CodeDecodeFailed,
 			Path: "",
-			Err:  fmt.Errorf("invalid TOML format"),
+			Err:  errors.New("invalid TOML format"),
 		}
 	}
 

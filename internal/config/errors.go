@@ -25,6 +25,9 @@ type Error struct {
 
 // Error implements the error interface and returns stable string even when Err is nil
 func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
 	errText := ""
 	if e.Err != nil {
 		errText = e.Err.Error()
@@ -44,6 +47,9 @@ func (e *Error) Error() string {
 
 // Unwrap implements the errors.Unwrap interface for error chain traversal
 func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.Err
 }
 
