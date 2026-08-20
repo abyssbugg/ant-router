@@ -1,0 +1,67 @@
+package main
+
+import (
+	"errors"
+
+	"github.com/abyssbugg/ant-router/internal/control"
+	"github.com/abyssbugg/ant-router/internal/controltoken"
+)
+
+var errConnection = errors.New("daemon connection failed")
+
+const (
+	ExitSuccess        = 0
+	ExitUsage          = 2
+	ExitConnection     = 3
+	ExitAuthentication = 4
+	ExitValidation     = 5
+	ExitConflict       = 6
+	ExitUnavailable    = 7
+	ExitInternal       = 8
+)
+
+func exitCode(err error) int {
+	if err == nil {
+		return ExitSuccess
+	}
+	if errors.Is(err, errUsage) {
+		return ExitUsage
+	}
+	if errors.Is(err, errConnection) {
+		return ExitConnection
+	}
+	if errors.Is(err, errConfigurationTooLarge) || errors.Is(err, errConfigurationRead) {
+		return ExitValidation
+	}
+	if code, ok := controltoken.CodeOf(err); ok {
+		switch code {
+		case controltoken.CodeTokenNotFound, controltoken.CodeInvalidToken, controltoken.CodeTokenCorrupt:
+			return ExitAuthentication
+		case controltoken.CodePermissionDenied, controltoken.CodeStoreUnavailable:
+			return ExitConnection
+		case controltoken.CodeDurabilityUncertain:
+			return ExitInternal
+		}
+	}
+	var clientErr *control.ClientError
+	if errors.As(err, &clientErr) && clientErr != nil {
+		switch clientErr.Kind {
+		case control.ClientErrorConnection, control.ClientErrorTimeout, control.ClientErrorCancelled:
+			return ExitConnection
+		case control.ClientErrorToken:
+			return ExitAuthentication
+		case control.ClientErrorAPI:
+			switch clientErr.API {
+			case control.CodeUnauthorized:
+				return ExitAuthentication
+			case control.CodeConfigurationInvalid, control.CodeConfigurationTooLarge:
+				return ExitValidation
+			case control.CodeRevisionMismatch, control.CodeGenerationConflict:
+				return ExitConflict
+			case control.CodeNoConfiguration, control.CodeNoPreviousRevision, control.CodeConfigurationUnavailable:
+				return ExitUnavailable
+			}
+		}
+	}
+	return ExitInternal
+}

@@ -2,41 +2,33 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"testing"
 )
 
-func TestVersionCommand(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-
-	code := run([]string{"version"}, stdout, stderr)
-
-	if code != 0 {
-		t.Errorf("version command: expected exit code 0, got %d", code)
+func TestRunVersionHelpAndUsage(t *testing.T) {
+	factory := func(cliOptions) (controlClient, error) { t.Fatal("factory called"); return nil, nil }
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"version"}, bytes.NewReader(nil), &stdout, &stderr, factory); code != 0 || !bytes.Contains(stdout.Bytes(), []byte("ant-router dev")) {
+		t.Fatalf("version = code %d stdout %q stderr %q", code, stdout.String(), stderr.String())
 	}
-
-	expected := "ant-router dev (commit unknown, built unknown)\n"
-	if stdout.String() != expected {
-		t.Errorf("version command: expected stdout %q, got %q", expected, stdout.String())
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), []string{"--help"}, bytes.NewReader(nil), &stdout, &stderr, factory); code != 0 {
+		t.Errorf("help code = %d", code)
 	}
-
-	if stderr.String() != "" {
-		t.Errorf("version command should not write to stderr, got: %q", stderr.String())
+	stderr.Reset()
+	if code := run(context.Background(), []string{"bogus"}, bytes.NewReader(nil), &stdout, &stderr, factory); code != ExitUsage || !bytes.Contains(stderr.Bytes(), []byte("invalid command or arguments")) {
+		t.Errorf("unknown = code %d stderr %q", code, stderr.String())
 	}
 }
 
-func TestUnknownCommand(t *testing.T) {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-
-	code := run([]string{"bogus"}, stdout, stderr)
-
-	if code == 0 {
-		t.Errorf("unknown command: expected nonzero exit code, got %d", code)
-	}
-
-	expected := "ant-router: unknown command \"bogus\"\n"
-	if stderr.String() != expected {
-		t.Errorf("unknown command: expected stderr %q, got %q", expected, stderr.String())
+func TestRunClientFactoryFailure(t *testing.T) {
+	sentinel := errors.New("connection failed")
+	var stderr bytes.Buffer
+	code := run(context.Background(), []string{"status"}, bytes.NewReader(nil), &bytes.Buffer{}, &stderr, func(cliOptions) (controlClient, error) { return nil, sentinel })
+	if code != ExitConnection || !bytes.Contains(stderr.Bytes(), []byte("unable to connect to daemon")) {
+		t.Errorf("factory failure = code %d stderr %q", code, stderr.String())
 	}
 }
