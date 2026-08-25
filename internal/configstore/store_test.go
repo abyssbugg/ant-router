@@ -108,6 +108,9 @@ func TestNewFileStoreRootSymlink(t *testing.T) {
 
 // TestNewFileStoreRevisionsDirSymlink tests rejection of revisions dir symlink (Unix only).
 func TestNewFileStoreRevisionsDirSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory symlink cleanup semantics are Unix-specific")
+	}
 	tmpDir := t.TempDir()
 	storeDir := filepath.Join(tmpDir, "store")
 	realDir := filepath.Join(tmpDir, "real_revisions")
