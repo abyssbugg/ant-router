@@ -15,6 +15,7 @@ jobs:
   quality:
     name: Quality and cross-builds
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -31,6 +32,12 @@ jobs:
       - run: make control-test
       - run: make control-race
       - run: make control-fault
+      - run: make configservice-test
+      - run: make configservice-race
+      - run: make cli-test
+      - run: make cli-race
+      - run: make phase1c-fault
+      - run: make phase1c-e2e
 
   platform-tests:
     name: Tests (${{ matrix.os }})
@@ -39,6 +46,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -53,10 +61,12 @@ jobs:
         run: go test ./internal/controltransport -run 'TestUnix|TestResolveLocal' -count=20
       - if: runner.os == 'Windows'
         run: go test ./internal/controltransport -run 'TestWindows' -count=20
+      - run: make phase1c-e2e
 
   fuzz-smoke:
     name: Fuzz smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -67,3 +77,4 @@ jobs:
           cache: true
       - run: make fuzz-smoke FUZZ_TIME=10s
       - run: make control-fuzz FUZZ_TIME=10s
+      - run: make phase1c-fuzz FUZZ_TIME=10s

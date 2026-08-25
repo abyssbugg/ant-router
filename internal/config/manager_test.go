@@ -115,6 +115,10 @@ func (fs *fakeStore) CleanupTemps(ctx context.Context) error {
 	return nil
 }
 
+func (fs *fakeStore) RepairRevision(ctx context.Context, id revision.ID, data []byte) error {
+	return fs.PutRevision(ctx, id, data)
+}
+
 func (fs *fakeStore) getOperations() []string {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()

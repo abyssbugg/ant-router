@@ -15,7 +15,10 @@ import (
 	"github.com/abyssbugg/ant-router/internal/revision"
 )
 
-var errRevisionNotFound = errors.New("revision not found")
+var (
+	errRevisionNotFound = errors.New("revision not found")
+	errFileTooLarge     = errors.New("file exceeds maximum size")
+)
 
 const (
 	// MaxRevisionBytes is the maximum size of a revision in bytes (1 MiB).
@@ -45,6 +48,7 @@ type Store interface {
 	// CleanupTemps removes temporary files matching the atomic write pattern
 	// (.<base>.tmp-*) from root and revisions directories.
 	CleanupTemps(context.Context) error
+	RepairRevision(context.Context, revision.ID, []byte) error
 }
 
 // FileStore is an implementation of Store that persists data to the filesystem.
@@ -54,6 +58,7 @@ type FileStore struct {
 	revisionsDir string                                                   // absolute path to revisions directory
 	manifestPath string                                                   // absolute path to manifest file
 	writeFile    func(context.Context, string, []byte, fs.FileMode) error // injectable write function
+	readFile     func(string, int) ([]byte, error)                        // injectable bounded read
 }
 
 // NewFileStore creates a new FileStore at the given root directory.
@@ -129,8 +134,9 @@ func NewFileStore(root string) (*FileStore, error) {
 		manifestPath: manifestPath,
 	}
 
-	// Set default writeFile function
+	// Set injectable filesystem operations.
 	fs.writeFile = writeAtomic
+	fs.readFile = readBoundedFile
 
 	return fs, nil
 }
@@ -232,11 +238,11 @@ func (fs *FileStore) ReadRevision(ctx context.Context, id revision.ID) ([]byte, 
 	if !stat.Mode().IsRegular() {
 		return nil, &Error{Code: CodeRevisionCorrupt, Path: revPath, Err: fmt.Errorf("revision is not a regular file")}
 	}
-	if !privateFilePermissions(stat.Mode()) {
+	if !privateFilePermissions(revPath, stat.Mode()) {
 		return nil, &Error{Code: CodeRevisionCorrupt, Path: revPath, Err: fmt.Errorf("revision permissions are not private")}
 	}
 
-	data, err := readBoundedFile(revPath, MaxRevisionBytes)
+	data, err := fs.readFile(revPath, MaxRevisionBytes)
 	if err != nil {
 		return nil, &Error{Code: CodeStoreUnavailable, Path: revPath, Err: err}
 	}
@@ -276,11 +282,11 @@ func (fs *FileStore) ReadManifest(ctx context.Context) (Manifest, error) {
 	if !stat.Mode().IsRegular() {
 		return Manifest{}, &Error{Code: CodeManifestCorrupt, Path: fs.manifestPath, Err: fmt.Errorf("manifest is not a regular file")}
 	}
-	if !privateFilePermissions(stat.Mode()) {
+	if !privateFilePermissions(fs.manifestPath, stat.Mode()) {
 		return Manifest{}, &Error{Code: CodeManifestCorrupt, Path: fs.manifestPath, Err: fmt.Errorf("manifest permissions are not private")}
 	}
 
-	data, err := readBoundedFile(fs.manifestPath, MaxManifestBytes)
+	data, err := fs.readFile(fs.manifestPath, MaxManifestBytes)
 	if err != nil {
 		return Manifest{}, &Error{Code: CodeStoreUnavailable, Path: fs.manifestPath, Err: err}
 	}
@@ -399,7 +405,7 @@ func isRevisionTempName(name string) bool {
 }
 
 func readBoundedFile(path string, maximum int) ([]byte, error) {
-	file, err := os.Open(path)
+	file, err := openManagedFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +418,7 @@ func readBoundedFile(path string, maximum int) ([]byte, error) {
 		return nil, closeErr
 	}
 	if len(data) > maximum {
-		return nil, fmt.Errorf("file exceeds maximum size")
+		return nil, errFileTooLarge
 	}
 	return data, nil
 }

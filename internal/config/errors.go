@@ -17,6 +17,7 @@ const (
 	CodeStaleCandidate       Code = "stale_candidate"
 	CodeNoPreviousRevision   Code = "no_previous_revision"
 	CodeNoValidConfiguration Code = "no_valid_configuration"
+	CodeNoConfiguration      Code = "no_configuration"
 )
 
 // Error represents a configuration error with context
