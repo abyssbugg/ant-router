@@ -34,6 +34,16 @@ func TestParseCLIOptionsAndCommands(t *testing.T) {
 	}
 }
 
+func TestParseCLIUsageErrorPreservesJSONOption(t *testing.T) {
+	options, _, err := parseCLI([]string{"--json", "bogus"}, &bytes.Buffer{})
+	if !errors.Is(err, errUsage) {
+		t.Fatalf("error = %v, want errUsage", err)
+	}
+	if !options.JSON {
+		t.Error("JSON option was lost on usage error")
+	}
+}
+
 func TestParseCLIUsageErrors(t *testing.T) {
 	invalid := [][]string{nil, []string{"config"}, []string{"config", "validate"}, []string{"config", "rollback", "extra"}, []string{"status", "extra"}, []string{"--bad"}}
 	for _, args := range invalid {

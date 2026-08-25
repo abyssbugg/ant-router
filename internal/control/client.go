@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abyssbugg/ant-router/internal/config"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
@@ -113,6 +114,9 @@ func (c *Client) ValidateConfig(ctx context.Context, tomlBytes []byte) (ConfigVa
 	if len(tomlBytes) > config.MaxSourceBytes {
 		return ConfigValidateResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("configuration is too large")}
 	}
+	if !utf8.Valid(tomlBytes) {
+		return ConfigValidateResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("configuration is not valid UTF-8")}
+	}
 	body, err := json.Marshal(ConfigValidateRequest{TOML: string(tomlBytes)})
 	if err != nil {
 		return ConfigValidateResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
@@ -128,7 +132,7 @@ func (c *Client) ValidateConfig(ctx context.Context, tomlBytes []byte) (ConfigVa
 }
 
 func (c *Client) ApplyConfig(ctx context.Context, tomlBytes []byte, proof ConfigValidateResponse) (ConfigMutationResponse, error) {
-	if len(tomlBytes) > config.MaxSourceBytes || !config.RevisionID(proof.Revision).Valid() {
+	if len(tomlBytes) > config.MaxSourceBytes || !utf8.Valid(tomlBytes) || !config.RevisionID(proof.Revision).Valid() {
 		return ConfigMutationResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: errors.New("apply request is invalid")}
 	}
 	body, err := json.Marshal(ConfigApplyRequest{TOML: string(tomlBytes), ExpectedRevision: proof.Revision, ExpectedGeneration: proof.BaseGeneration})

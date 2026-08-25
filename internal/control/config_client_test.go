@@ -61,6 +61,31 @@ func TestConfigClientWorkflow(t *testing.T) {
 	}
 }
 
+func TestConfigClientRejectsInvalidUTF8BeforeTokenOrDial(t *testing.T) {
+	tokenCalls, dials := 0, 0
+	client, err := NewClient(clientDialerFunc(func(context.Context) (net.Conn, error) {
+		dials++
+		return nil, context.Canceled
+	}), tokenSourceFunc(func(context.Context) (controltoken.Token, error) {
+		tokenCalls++
+		return controltoken.Token{}, nil
+	}), DefaultClientOptions())
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	invalid := []byte{0xff, 0xfe}
+	if _, err := client.ValidateConfig(context.Background(), invalid); ClientErrorKindValue(err) != ClientErrorProtocol {
+		t.Fatalf("ValidateConfig kind = %q, want %q", ClientErrorKindValue(err), ClientErrorProtocol)
+	}
+	proof := ConfigValidateResponse{Revision: strings.Repeat("a", 64), BaseGeneration: 0, CanonicalSize: 2}
+	if _, err := client.ApplyConfig(context.Background(), invalid, proof); ClientErrorKindValue(err) != ClientErrorProtocol {
+		t.Fatalf("ApplyConfig kind = %q, want %q", ClientErrorKindValue(err), ClientErrorProtocol)
+	}
+	if tokenCalls != 0 || dials != 0 {
+		t.Errorf("invalid UTF-8 reached token/dial: token=%d dial=%d", tokenCalls, dials)
+	}
+}
+
 func TestConfigClientRejectsOversizedTOMLBeforeDial(t *testing.T) {
 	dials := 0
 	client, err := NewClient(clientDialerFunc(func(context.Context) (net.Conn, error) {
