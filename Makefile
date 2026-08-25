@@ -3,11 +3,12 @@ BIN_DIR ?= bin
 PACKAGES := ./...
 CONFIG_PACKAGES := ./internal/config ./internal/configstore ./internal/revision
 CONTROL_PACKAGES := ./internal/control ./internal/controltransport ./internal/controltoken
+PHASE1C_PACKAGES := ./internal/configservice ./internal/runtimepaths ./cmd/routerd ./cmd/routerctl
 TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 FUZZ_TIME ?= 10s
 export GOTOOLCHAIN ?= local
 
-.PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci build cross-build verify ci clean
+.PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci build cross-build verify ci clean
 
 fmt-check:
 	@files="$$(gofmt -l cmd internal)"; \
@@ -61,6 +62,32 @@ control-fuzz:
 
 control-ci: control-test control-race control-fault control-fuzz
 
+configservice-test:
+	$(GO) test ./internal/configservice -count=100
+
+configservice-race:
+	$(GO) test -race ./internal/configservice
+
+cli-test:
+	$(GO) test ./cmd/routerd ./cmd/routerctl -count=100
+
+cli-race:
+	$(GO) test -race ./cmd/routerd ./cmd/routerctl
+
+phase1c-fault:
+	$(GO) test ./internal/configservice -run 'TestConcurrentApplyOneGenerationConflict|TestApplyRepairsIdenticalCorruptRevision' -count=10
+	$(GO) test ./internal/daemon -run 'TestDaemonBootstrapApplyAndRestart|TestDaemonEndpointCollision' -count=10
+
+phase1c-e2e:
+	$(GO) test -tags=e2e ./test/e2e -count=1
+
+phase1c-fuzz:
+	$(GO) test ./internal/configservice -run=^$$ -fuzz=FuzzValidateConfiguration -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/control -run=^$$ -fuzz=FuzzConfigRequestJSON -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./cmd/routerctl -run=^$$ -fuzz=FuzzParseCLI -fuzztime=$(FUZZ_TIME)
+
+phase1c-ci: configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz
+
 build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BIN_DIR)/routerd ./cmd/routerd
@@ -82,7 +109,7 @@ cross-build:
 
 verify: fmt-check vet test test-race build cross-build
 
-ci: verify config-test fault-test fuzz-smoke control-test control-fault
+ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault
 
 clean:
 	rm -rf $(BIN_DIR)

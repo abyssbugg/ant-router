@@ -8,6 +8,11 @@ import (
 
 var errUsage = errors.New("usage error")
 
+const (
+	maxCLIArguments      = 16
+	maxCLIArgumentLength = 4096
+)
+
 type cliOptions struct {
 	Instance    string
 	StateRoot   string
@@ -22,6 +27,14 @@ type cliCommand struct {
 }
 
 func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
+	if len(args) > maxCLIArguments {
+		return cliOptions{}, cliCommand{}, errUsage
+	}
+	for _, argument := range args {
+		if len(argument) > maxCLIArgumentLength {
+			return cliOptions{}, cliCommand{}, errUsage
+		}
+	}
 	flags := flag.NewFlagSet("routerctl", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var options cliOptions
