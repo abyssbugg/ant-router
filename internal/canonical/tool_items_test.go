@@ -1,6 +1,7 @@
 package canonical
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
@@ -43,6 +44,18 @@ func TestToolCallRejectsInvalid(t *testing.T) {
 		if _, err := NewToolCall(test.item, test.call, test.tool, test.args); codeOfCanonical(err) != test.code {
 			t.Errorf("%s code = %q, want %q", test.name, codeOfCanonical(err), test.code)
 		}
+	}
+}
+
+func TestToolCallOversizedArguments(t *testing.T) {
+	data := []byte(`{"value":"` + strings.Repeat("x", MaxJSONBytes) + `"}`)
+	arguments, err := canonicaljson.Parse(data, canonicaljson.Limits{MaximumBytes: len(data), MaximumDepth: MaxJSONDepth})
+	if err != nil {
+		t.Fatalf("canonicaljson.Parse() failed: %v", err)
+	}
+	_, err = NewToolCall(testItemID(t, 1), testCallID(t, 1), "Tool", arguments)
+	if codeOfCanonical(err) != CodeLimitExceeded {
+		t.Fatalf("code = %q, want %q; error: %v", codeOfCanonical(err), CodeLimitExceeded, err)
 	}
 }
 

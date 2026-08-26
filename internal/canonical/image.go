@@ -34,7 +34,7 @@ func NewRemoteImage(rawURL, mime string, detail ImageDetail, width, height int) 
 		return ImageContent{}, contentError(CodeLimitExceeded, "content.image.url")
 	}
 	parsed, err := url.Parse(rawURL)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
 		return ImageContent{}, contentError(CodeInvalidURL, "content.image.url")
 	}
 	image := ImageContent{source: ImageSourceURL, url: parsed.String(), mime: mime, detail: detail, width: width, height: height}

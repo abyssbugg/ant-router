@@ -163,7 +163,7 @@ func DecodeEvent(data []byte) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
-	if len(data) > MaxOrdinaryEventBytes && !eventAllowsLargeImage(event) {
+	if len(prepared) > MaxOrdinaryEventBytes && !eventAllowsLargeImage(event) {
 		return Event{}, codecError(CodeLimitExceeded, "event")
 	}
 	return event, nil

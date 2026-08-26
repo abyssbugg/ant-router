@@ -21,8 +21,11 @@ func NewToolCall(id ItemID, callID ToolCallID, name string, arguments canonicalj
 	if !validToolName(name) {
 		return ToolCall{}, itemError(CodeInvalidInvariant, "tool_call.name")
 	}
-	if !arguments.IsObject() || len(arguments.Bytes()) > MaxJSONBytes {
+	if !arguments.IsObject() {
 		return ToolCall{}, itemError(CodeInvalidJSON, "tool_call.arguments")
+	}
+	if len(arguments.Bytes()) > MaxJSONBytes {
+		return ToolCall{}, itemError(CodeLimitExceeded, "tool_call.arguments")
 	}
 	return ToolCall{id: id, callID: callID, name: name, arguments: arguments}, nil
 }

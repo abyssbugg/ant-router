@@ -52,6 +52,10 @@ func TestImageRejectsInvalidSources(t *testing.T) {
 			_, err := NewRemoteImage("http://example.com/a.png", "image/png", ImageDetailAuto, 0, 0)
 			return err
 		}, CodeInvalidURL},
+		{"missing hostname", func() error {
+			_, err := NewRemoteImage("https://:443/a.png", "image/png", ImageDetailAuto, 0, 0)
+			return err
+		}, CodeInvalidURL},
 		{"userinfo", func() error {
 			_, err := NewRemoteImage("https://user@example.com/a.png", "image/png", ImageDetailAuto, 0, 0)
 			return err

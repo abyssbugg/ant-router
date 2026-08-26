@@ -48,6 +48,22 @@ func TestEventCodecRoundTripAllVariants(t *testing.T) {
 	}
 }
 
+func TestDecodeEventUsesCanonicalPreparedSize(t *testing.T) {
+	event, err := NewResponseStartedEvent(testEventID(t, 1), testResponseID(t, 1), 0, "model")
+	if err != nil {
+		t.Fatalf("NewResponseStartedEvent() failed: %v", err)
+	}
+	encoded, err := EncodeEvent(event)
+	if err != nil {
+		t.Fatalf("EncodeEvent() failed: %v", err)
+	}
+	padding := MaxOrdinaryEventBytes - len(encoded) + 1
+	padded := append(append([]byte(nil), encoded...), bytes.Repeat([]byte{' '}, padding)...)
+	if _, err := DecodeEvent(padded); err != nil {
+		t.Fatalf("DecodeEvent() rejected canonical-size event with whitespace padding: %v", err)
+	}
+}
+
 func TestEventCodecStrictRejections(t *testing.T) {
 	valid, _ := EncodeEvent(codecEvents(t)[0])
 	tests := []struct {
