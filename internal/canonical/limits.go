@@ -19,6 +19,14 @@ const (
 	MaxToolNameBytes = 64
 	// MaxToolDescriptionBytes limits one UTF-8 tool description.
 	MaxToolDescriptionBytes = 4096
+	// MaxModelNameBytes limits a provider-neutral model name.
+	MaxModelNameBytes = 256
+	// MaxProviderNamespaceBytes limits a continuation provider namespace.
+	MaxProviderNamespaceBytes = 64
+	// MaxSchemaNameBytes limits a structured-output schema name.
+	MaxSchemaNameBytes = 64
+	// MaxOutputTokens limits an explicit maximum output token request.
+	MaxOutputTokens = 1_000_000
 	// MaxToolSchemaBytes limits one tool input schema.
 	MaxToolSchemaBytes = 256 << 10
 	// MaxInlineImageBytes limits one inline image payload.

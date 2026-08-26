@@ -7,6 +7,15 @@ import (
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 )
 
+func testRequestID(t *testing.T, value byte) RequestID {
+	t.Helper()
+	id, err := GenerateRequestID(bytes.NewReader(bytes.Repeat([]byte{value}, IDRandomBytes)))
+	if err != nil {
+		t.Fatalf("GenerateRequestID() failed: %v", err)
+	}
+	return id
+}
+
 func testItemID(t *testing.T, value byte) ItemID {
 	t.Helper()
 	id, err := GenerateItemID(bytes.NewReader(bytes.Repeat([]byte{value}, IDRandomBytes)))

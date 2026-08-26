@@ -34,6 +34,22 @@ func NewReasoningSummaryItem(value ReasoningSummary) (Item, error) {
 	return Item{kind: ItemType("reasoning_summary"), reasoning: value}, nil
 }
 
+// ID returns the selected item's canonical ID.
+func (i Item) ID() ItemID {
+	switch i.kind {
+	case ItemType("message"):
+		return i.message.ID()
+	case ItemType("tool_call"):
+		return i.toolCall.ID()
+	case ItemType("tool_result"):
+		return i.toolResult.ID()
+	case ItemType("reasoning_summary"):
+		return i.reasoning.ID()
+	default:
+		return ""
+	}
+}
+
 func (i Item) Type() ItemType                 { return i.kind }
 func (i Item) Message() (Message, bool)       { return i.message, i.kind == ItemType("message") }
 func (i Item) ToolCall() (ToolCall, bool)     { return i.toolCall, i.kind == ItemType("tool_call") }

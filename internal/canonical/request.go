@@ -1,0 +1,235 @@
+package canonical
+
+import (
+	"errors"
+	"strings"
+	"unicode/utf8"
+)
+
+type RequestParams struct {
+	ID           RequestID
+	Model        string
+	Input        []Item
+	Tools        []ToolDefinition
+	ToolChoice   ToolChoice
+	Output       OutputConstraints
+	Sampling     Sampling
+	Continuation *Continuation
+}
+
+// Request is an immutable provider-neutral canonical request.
+type Request struct {
+	id           RequestID
+	model        string
+	input        []Item
+	tools        []ToolDefinition
+	toolChoice   ToolChoice
+	output       OutputConstraints
+	sampling     Sampling
+	continuation *Continuation
+	capabilities CapabilitySet
+}
+
+// NewRequest validates and defensively copies a canonical request.
+func NewRequest(params RequestParams) (Request, error) {
+	if !params.ID.Valid() {
+		return Request{}, requestError(CodeInvalidID, "request.id")
+	}
+	if params.Model == "" || strings.TrimSpace(params.Model) != params.Model {
+		return Request{}, requestError(CodeInvalidInvariant, "request.model")
+	}
+	if !utf8.ValidString(params.Model) {
+		return Request{}, requestError(CodeInvalidUTF8, "request.model")
+	}
+	if len(params.Model) > MaxModelNameBytes {
+		return Request{}, requestError(CodeLimitExceeded, "request.model")
+	}
+	if len(params.Input) == 0 {
+		return Request{}, requestError(CodeInvalidInvariant, "request.input")
+	}
+	if len(params.Input) > MaxInputItems {
+		return Request{}, requestError(CodeLimitExceeded, "request.input")
+	}
+	if len(params.Tools) > MaxTools {
+		return Request{}, requestError(CodeLimitExceeded, "request.tools")
+	}
+	choice := params.ToolChoice
+	if !choice.Valid() && choice.Kind() == "" {
+		choice, _ = NewToolChoice(ToolChoiceKind("auto"), "")
+	}
+	if !choice.Valid() {
+		return Request{}, requestError(CodeInvalidInvariant, "request.tool_choice")
+	}
+	output := params.Output
+	if !output.Valid() && output.Format() == "" {
+		output, _ = NewOutputConstraints(OutputParams{Format: OutputFormat("text")})
+	}
+	if !output.Valid() || !params.Sampling.Valid() {
+		return Request{}, requestError(CodeInvalidInvariant, "request.options")
+	}
+	if params.Continuation != nil && (!params.Continuation.Valid() || params.Continuation.Model() != params.Model) {
+		return Request{}, requestError(CodeContinuationAffinityRequired, "request.continuation")
+	}
+	if err := validateRequestItemsAndTools(params.Input, params.Tools, choice, output); err != nil {
+		return Request{}, err
+	}
+	request := Request{
+		id:         params.ID,
+		model:      params.Model,
+		input:      append([]Item(nil), params.Input...),
+		tools:      append([]ToolDefinition(nil), params.Tools...),
+		toolChoice: choice,
+		output:     output,
+		sampling:   params.Sampling,
+	}
+	if params.Continuation != nil {
+		copyValue, _ := NewContinuation(params.Continuation.Provider(), params.Continuation.Model(), params.Continuation.Bytes())
+		request.continuation = &copyValue
+	}
+	request.capabilities, _ = computeCapabilities(request.input, request.tools, request.output, request.continuation)
+	return request, nil
+}
+
+func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice ToolChoice, output OutputConstraints) error {
+	toolNames := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if !tool.Valid() {
+			return requestError(CodeInvalidInvariant, "request.tools")
+		}
+		if _, exists := toolNames[tool.Name()]; exists {
+			return requestError(CodeInvalidInvariant, "request.tools")
+		}
+		toolNames[tool.Name()] = struct{}{}
+	}
+	if choice.Kind() == ToolChoiceKind("specific") {
+		if _, exists := toolNames[choice.Name()]; !exists {
+			return requestError(CodeInvalidInvariant, "request.tool_choice")
+		}
+	}
+	if choice.Kind() == ToolChoiceKind("required") && len(tools) == 0 || output.ParallelToolCalls() && len(tools) == 0 {
+		return requestError(CodeInvalidInvariant, "request.tools")
+	}
+	itemIDs := make(map[ItemID]struct{}, len(input))
+	callIDs := make(map[ToolCallID]struct{})
+	for _, item := range input {
+		if !item.Valid() || !item.ID().Valid() {
+			return requestError(CodeInvalidInvariant, "request.input")
+		}
+		if _, exists := itemIDs[item.ID()]; exists {
+			return requestError(CodeInvalidInvariant, "request.input")
+		}
+		itemIDs[item.ID()] = struct{}{}
+		switch item.Type() {
+		case ItemType("tool_call"):
+			call, _ := item.ToolCall()
+			if _, declared := toolNames[call.Name()]; !declared {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
+			if _, duplicate := callIDs[call.CallID()]; duplicate {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
+			callIDs[call.CallID()] = struct{}{}
+		case ItemType("tool_result"):
+			result, _ := item.ToolResult()
+			if _, exists := callIDs[result.CallID()]; !exists {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
+		}
+	}
+	return nil
+}
+
+func computeCapabilities(input []Item, tools []ToolDefinition, output OutputConstraints, continuation *Continuation) (CapabilitySet, error) {
+	var values []Capability
+	for _, item := range input {
+		switch item.Type() {
+		case ItemType("message"):
+			message, _ := item.Message()
+			for _, block := range message.Content() {
+				if block.Type() == ContentType("text") {
+					values = append(values, CapabilityText)
+				} else if block.Type() == ContentType("image") {
+					values = append(values, CapabilityImageInput)
+				}
+			}
+		case ItemType("tool_call"):
+			values = append(values, CapabilityTools)
+		case ItemType("tool_result"):
+			values = append(values, CapabilityTools)
+			result, _ := item.ToolResult()
+			for _, block := range result.Content() {
+				if block.Type() == ContentType("text") {
+					values = append(values, CapabilityText)
+				} else if block.Type() == ContentType("image") {
+					values = append(values, CapabilityImageInput)
+				}
+			}
+		case ItemType("reasoning_summary"):
+			values = append(values, CapabilityReasoningSummary)
+		}
+	}
+	if len(tools) > 0 {
+		values = append(values, CapabilityTools)
+	}
+	if output.ParallelToolCalls() {
+		values = append(values, CapabilityParallelTools)
+	}
+	if output.Format() != OutputFormat("text") {
+		values = append(values, CapabilityStructuredOutput)
+	}
+	if continuation != nil {
+		values = append(values, CapabilityContinuation)
+	}
+	return NewCapabilitySet(values...)
+}
+
+// ID returns the canonical request ID.
+func (r Request) ID() RequestID { return r.id }
+
+// Model returns the provider-neutral model name or alias.
+func (r Request) Model() string { return r.model }
+
+// Input returns a defensive ordered item copy.
+func (r Request) Input() []Item { return append([]Item(nil), r.input...) }
+
+// Tools returns a defensive tool-definition copy.
+func (r Request) Tools() []ToolDefinition { return append([]ToolDefinition(nil), r.tools...) }
+
+// ToolChoice returns the immutable tool choice.
+func (r Request) ToolChoice() ToolChoice { return r.toolChoice }
+
+// Output returns immutable output constraints.
+func (r Request) Output() OutputConstraints { return r.output }
+
+// Sampling returns immutable sampling controls.
+func (r Request) Sampling() Sampling { return r.sampling }
+
+// Capabilities returns the computed immutable capability set.
+func (r Request) Capabilities() CapabilitySet { return r.capabilities }
+
+// Continuation returns a defensive continuation copy or nil.
+func (r Request) Continuation() *Continuation {
+	if r.continuation == nil {
+		return nil
+	}
+	copyValue, _ := NewContinuation(r.continuation.Provider(), r.continuation.Model(), r.continuation.Bytes())
+	return &copyValue
+}
+
+// WithoutContinuation returns an otherwise equivalent portable request.
+func (r Request) WithoutContinuation() Request {
+	copyValue := r
+	copyValue.continuation = nil
+	copyValue.capabilities, _ = computeCapabilities(copyValue.input, copyValue.tools, copyValue.output, nil)
+	return copyValue
+}
+
+// Valid reports whether the request satisfies all local and cross-value invariants.
+func (r Request) Valid() bool {
+	_, err := NewRequest(RequestParams{ID: r.id, Model: r.model, Input: r.input, Tools: r.tools, ToolChoice: r.toolChoice, Output: r.output, Sampling: r.sampling, Continuation: r.continuation})
+	return err == nil
+}
+
+func requestError(code ErrorCode, path string) error {
+	return &Error{Code: code, Path: path, Err: errors.New("request is invalid")}
+}
