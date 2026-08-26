@@ -39,6 +39,8 @@ const (
 	MaxContinuationBytes = 256 << 10
 	// MaxOrdinaryEventBytes limits events that do not contain completed images.
 	MaxOrdinaryEventBytes = 2 << 20
+	// MaxImageEventBytes allows one completed inline image plus its event envelope.
+	MaxImageEventBytes = MaxInlineImageBytes + MaxOrdinaryEventBytes
 	// MaxResponseItems limits ordered completed response items.
 	MaxResponseItems = 1024
 	// MaxFailureMessageBytes limits a safe canonical failure message.
