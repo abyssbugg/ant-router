@@ -16,6 +16,24 @@ func streamEventID(t *testing.T, value byte) canonical.EventID {
 	return id
 }
 
+func streamItemID(t *testing.T, value byte) canonical.ItemID {
+	t.Helper()
+	id, err := canonical.GenerateItemID(bytes.NewReader(bytes.Repeat([]byte{value}, canonical.IDRandomBytes)))
+	if err != nil {
+		t.Fatalf("GenerateItemID: %v", err)
+	}
+	return id
+}
+
+func streamCallID(t *testing.T, value byte) canonical.ToolCallID {
+	t.Helper()
+	id, err := canonical.GenerateToolCallID(bytes.NewReader(bytes.Repeat([]byte{value}, canonical.IDRandomBytes)))
+	if err != nil {
+		t.Fatalf("GenerateToolCallID: %v", err)
+	}
+	return id
+}
+
 func streamResponseID(t *testing.T, value byte) canonical.ResponseID {
 	t.Helper()
 	id, err := canonical.GenerateResponseID(bytes.NewReader(bytes.Repeat([]byte{value}, canonical.IDRandomBytes)))
