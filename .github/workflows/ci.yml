@@ -38,6 +38,10 @@ jobs:
       - run: make cli-race
       - run: make phase1c-fault
       - run: make phase1c-e2e
+      - run: make canonical-test
+      - run: make canonical-race
+      - run: make canonical-golden
+      - run: make canonical-stress
 
   platform-tests:
     name: Tests (${{ matrix.os }})
@@ -62,6 +66,7 @@ jobs:
       - if: runner.os == 'Windows'
         run: go test ./internal/controltransport -run 'TestWindows' -count=20
       - run: make phase1c-e2e
+      - run: go test ./internal/canonical ./internal/canonicaljson -count=20
 
   fuzz-smoke:
     name: Fuzz smoke
@@ -78,3 +83,4 @@ jobs:
       - run: make fuzz-smoke FUZZ_TIME=10s
       - run: make control-fuzz FUZZ_TIME=10s
       - run: make phase1c-fuzz FUZZ_TIME=10s
+      - run: make canonical-fuzz FUZZ_TIME=10s
