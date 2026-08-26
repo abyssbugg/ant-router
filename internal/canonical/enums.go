@@ -12,6 +12,12 @@ type OutputFormat string
 // ImageDetail is a provider-neutral image quality hint.
 type ImageDetail string
 
+const (
+	ImageDetailAuto ImageDetail = "auto"
+	ImageDetailLow  ImageDetail = "low"
+	ImageDetailHigh ImageDetail = "high"
+)
+
 // ItemType discriminates canonical item variants.
 type ItemType string
 
