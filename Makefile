@@ -4,11 +4,12 @@ PACKAGES := ./...
 CONFIG_PACKAGES := ./internal/config ./internal/configstore ./internal/revision
 CONTROL_PACKAGES := ./internal/control ./internal/controltransport ./internal/controltoken
 PHASE1C_PACKAGES := ./internal/configservice ./internal/runtimepaths ./cmd/routerd ./cmd/routerctl
+CANONICAL_PACKAGES := ./internal/canonical ./internal/canonicaljson
 TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 FUZZ_TIME ?= 10s
 export GOTOOLCHAIN ?= local
 
-.PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci build cross-build verify ci clean
+.PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz phase2a-ci build cross-build verify ci clean
 
 fmt-check:
 	@files="$$(gofmt -l cmd internal)"; \
@@ -88,6 +89,31 @@ phase1c-fuzz:
 
 phase1c-ci: configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz
 
+canonical-test:
+	$(GO) test $(CANONICAL_PACKAGES) -count=100
+
+canonical-race:
+	$(GO) test -race $(CANONICAL_PACKAGES)
+
+canonical-golden:
+	$(GO) test ./internal/canonical -run TestGoldenFixtures -count=10
+
+canonical-stress:
+	$(GO) test -tags=canonicalstress ./internal/canonical -run TestCanonicalConcurrentReadStress -count=3
+
+canonical-fuzz:
+	$(GO) test ./internal/canonicaljson -run=^$$ -fuzz=FuzzParseRoundTrip -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzParseRequestID -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzRemoteImageURL -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzToolName -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzTextDelta -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzContinuation -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzDecodeRequest -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzDecodeResponse -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzDecodeEvent -fuzztime=$(FUZZ_TIME)
+
+phase2a-ci: canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz
+
 build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BIN_DIR)/routerd ./cmd/routerd
@@ -109,7 +135,7 @@ cross-build:
 
 verify: fmt-check vet test test-race build cross-build
 
-ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault
+ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault canonical-test canonical-golden canonical-stress
 
 clean:
 	rm -rf $(BIN_DIR)
