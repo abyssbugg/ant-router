@@ -15,6 +15,10 @@ const (
 	MaxJSONDepth = 64
 	// MaxTools limits tool definitions in one request.
 	MaxTools = 128
+	// MaxToolNameBytes limits a portable tool name.
+	MaxToolNameBytes = 64
+	// MaxToolDescriptionBytes limits one UTF-8 tool description.
+	MaxToolDescriptionBytes = 4096
 	// MaxToolSchemaBytes limits one tool input schema.
 	MaxToolSchemaBytes = 256 << 10
 	// MaxInlineImageBytes limits one inline image payload.
