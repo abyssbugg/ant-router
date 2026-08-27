@@ -11,9 +11,24 @@ type itemState struct {
 	name        string
 	contents    map[int]*contentState
 	nextContent int
+	arguments   []byte
 	completed   bool
+	finalItem   canonical.Item
 }
 
 func newItemState(payload canonical.ItemStartedPayload) *itemState {
 	return &itemState{index: payload.Index(), id: payload.ID(), kind: payload.Type(), role: payload.Role(), callID: payload.CallID(), name: payload.Name(), contents: make(map[int]*contentState)}
+}
+
+func (s *itemState) clone() *itemState {
+	if s == nil {
+		return nil
+	}
+	copyValue := *s
+	copyValue.arguments = append([]byte(nil), s.arguments...)
+	copyValue.contents = make(map[int]*contentState, len(s.contents))
+	for index, content := range s.contents {
+		copyValue.contents[index] = content.clone()
+	}
+	return &copyValue
 }

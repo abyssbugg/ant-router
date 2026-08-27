@@ -70,21 +70,51 @@ func (m *Machine) Accept(event canonical.Event) (Transition, error) {
 	if event.ResponseID() != m.responseID {
 		return Transition{}, m.error(CodeResponseMismatch, "event.response_id")
 	}
+	outcome := acceptOutcome{terminal: TerminalNone}
 	var err error
 	switch event.Type() {
 	case canonical.EventType("item_started"):
 		err = m.acceptItemStarted(event)
 	case canonical.EventType("content_started"):
 		err = m.acceptContentStarted(event)
+	case canonical.EventType("text_delta"), canonical.EventType("json_delta"), canonical.EventType("tool_arguments_delta"):
+		outcome, err = m.acceptDelta(event)
+	case canonical.EventType("content_completed"):
+		outcome, err = m.acceptContentCompleted(event)
+	case canonical.EventType("item_completed"):
+		outcome, err = m.acceptItemCompleted(event)
+	case canonical.EventType("usage_updated"):
+		outcome, err = m.acceptUsage(event)
+	case canonical.EventType("response_completed"), canonical.EventType("response_failed"), canonical.EventType("response_cancelled"):
+		outcome, err = m.acceptTerminal(event)
 	default:
 		err = m.error(CodeInvalidItemState, "event.type")
 	}
 	if err != nil {
 		return Transition{}, err
 	}
+	if outcome.terminal == "" {
+		outcome.terminal = TerminalNone
+	}
 	m.eventIDs[event.ID()] = struct{}{}
 	m.nextSequence++
-	return newTransition(event, false, false, TerminalNone, nil, nil, nil), nil
+	justCommitted := false
+	if outcome.semantic && !m.committed {
+		m.committed = true
+		justCommitted = true
+	}
+	if outcome.usage != nil {
+		m.latestUsage = *outcome.usage
+	}
+	if outcome.terminal != TerminalNone {
+		m.terminal = outcome.terminal
+		m.state = StateTerminal
+	} else if m.committed {
+		m.state = StateCommitted
+	} else {
+		m.state = StatePrecommit
+	}
+	return newTransition(event, outcome.semantic, justCommitted, outcome.terminal, outcome.response, outcome.failure, outcome.usage), nil
 }
 
 func (m *Machine) acceptInitial(event canonical.Event) (Transition, error) {
