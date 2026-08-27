@@ -17,9 +17,10 @@ type requestDTO struct {
 }
 
 type toolDTO struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description"`
+	InputSchema       json.RawMessage `json:"input_schema"`
+	SchemaEnforcement string          `json:"schema_enforcement"`
 }
 
 type toolChoiceDTO struct {
@@ -29,6 +30,7 @@ type toolChoiceDTO struct {
 
 type outputDTO struct {
 	Format            string          `json:"format"`
+	SchemaEnforcement string          `json:"schema_enforcement"`
 	SchemaName        string          `json:"schema_name,omitempty"`
 	Schema            json.RawMessage `json:"schema,omitempty"`
 	MaxTokens         int             `json:"max_tokens,omitempty"`

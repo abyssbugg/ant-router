@@ -7,7 +7,7 @@ import (
 )
 
 func encodeTool(value ToolDefinition) toolDTO {
-	return toolDTO{Name: value.Name(), Description: value.Description(), InputSchema: json.RawMessage(value.InputSchema().Bytes())}
+	return toolDTO{Name: value.Name(), Description: value.Description(), InputSchema: json.RawMessage(value.InputSchema().Bytes()), SchemaEnforcement: string(value.Enforcement())}
 }
 
 func decodeTool(dto toolDTO) (ToolDefinition, error) {
@@ -15,7 +15,7 @@ func decodeTool(dto toolDTO) (ToolDefinition, error) {
 	if err != nil {
 		return ToolDefinition{}, codecError(CodeInvalidJSON, "tool.input_schema")
 	}
-	return NewToolDefinition(dto.Name, dto.Description, schema)
+	return NewToolDefinitionWithEnforcement(dto.Name, dto.Description, schema, SchemaEnforcement(dto.SchemaEnforcement))
 }
 
 func encodeToolChoice(value ToolChoice) toolChoiceDTO {
@@ -27,7 +27,7 @@ func decodeToolChoice(dto toolChoiceDTO) (ToolChoice, error) {
 }
 
 func encodeOutput(value OutputConstraints) outputDTO {
-	dto := outputDTO{Format: string(value.Format()), SchemaName: value.SchemaName(), MaxTokens: value.MaxTokens(), ParallelToolCalls: value.ParallelToolCalls()}
+	dto := outputDTO{Format: string(value.Format()), SchemaEnforcement: string(value.Enforcement()), SchemaName: value.SchemaName(), MaxTokens: value.MaxTokens(), ParallelToolCalls: value.ParallelToolCalls()}
 	if value.Schema().Kind() != canonicaljson.KindInvalid {
 		dto.Schema = json.RawMessage(value.Schema().Bytes())
 	}
@@ -35,7 +35,7 @@ func encodeOutput(value OutputConstraints) outputDTO {
 }
 
 func decodeOutput(dto outputDTO) (OutputConstraints, error) {
-	params := OutputParams{Format: OutputFormat(dto.Format), SchemaName: dto.SchemaName, MaxTokens: dto.MaxTokens, ParallelToolCalls: dto.ParallelToolCalls}
+	params := OutputParams{Format: OutputFormat(dto.Format), SchemaName: dto.SchemaName, MaxTokens: dto.MaxTokens, ParallelToolCalls: dto.ParallelToolCalls, Enforcement: SchemaEnforcement(dto.SchemaEnforcement)}
 	if len(dto.Schema) != 0 {
 		schema, err := canonicaljson.Parse(dto.Schema, canonicaljson.Limits{MaximumBytes: MaxToolSchemaBytes, MaximumDepth: MaxJSONDepth})
 		if err != nil {

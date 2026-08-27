@@ -9,10 +9,16 @@ type ToolChoiceKind string
 // OutputFormat identifies the requested response representation.
 type OutputFormat string
 
+// SchemaEnforcement identifies how strictly a provider must enforce a JSON schema.
+type SchemaEnforcement string
+
 // ImageDetail is a provider-neutral image quality hint.
 type ImageDetail string
 
 const (
+	SchemaEnforcementBestEffort SchemaEnforcement = "best_effort"
+	SchemaEnforcementStrict     SchemaEnforcement = "strict"
+
 	ImageDetailAuto ImageDetail = "auto"
 	ImageDetailLow  ImageDetail = "low"
 	ImageDetailHigh ImageDetail = "high"
@@ -41,6 +47,9 @@ func (v ToolChoiceKind) Valid() bool { return oneOf(string(v), "auto", "none", "
 
 // Valid reports whether the output format is supported.
 func (v OutputFormat) Valid() bool { return oneOf(string(v), "text", "json_object", "json_schema") }
+
+// Valid reports whether the schema enforcement mode is supported.
+func (v SchemaEnforcement) Valid() bool { return oneOf(string(v), "best_effort", "strict") }
 
 // Valid reports whether the image detail hint is supported.
 func (v ImageDetail) Valid() bool { return oneOf(string(v), "auto", "low", "high") }

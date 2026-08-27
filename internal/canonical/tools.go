@@ -12,10 +12,16 @@ type ToolDefinition struct {
 	name        string
 	description string
 	inputSchema canonicaljson.Value
+	enforcement SchemaEnforcement
 }
 
-// NewToolDefinition validates a tool name, description, and object schema.
+// NewToolDefinition validates a tool name, description, and object schema using best-effort enforcement.
 func NewToolDefinition(name, description string, schema canonicaljson.Value) (ToolDefinition, error) {
+	return NewToolDefinitionWithEnforcement(name, description, schema, SchemaEnforcementBestEffort)
+}
+
+// NewToolDefinitionWithEnforcement validates a tool and its schema enforcement mode.
+func NewToolDefinitionWithEnforcement(name, description string, schema canonicaljson.Value, enforcement SchemaEnforcement) (ToolDefinition, error) {
 	if !validToolName(name) {
 		code := CodeInvalidInvariant
 		if len(name) > MaxToolNameBytes {
@@ -35,7 +41,13 @@ func NewToolDefinition(name, description string, schema canonicaljson.Value) (To
 	if len(schema.Bytes()) > MaxToolSchemaBytes {
 		return ToolDefinition{}, itemError(CodeLimitExceeded, "tool.input_schema")
 	}
-	return ToolDefinition{name: name, description: description, inputSchema: schema}, nil
+	if enforcement == "" {
+		enforcement = SchemaEnforcementBestEffort
+	}
+	if !enforcement.Valid() {
+		return ToolDefinition{}, itemError(CodeInvalidInvariant, "tool.schema_enforcement")
+	}
+	return ToolDefinition{name: name, description: description, inputSchema: schema, enforcement: enforcement}, nil
 }
 
 // Name returns the portable tool name.
@@ -47,9 +59,12 @@ func (t ToolDefinition) Description() string { return t.description }
 // InputSchema returns the immutable canonical input schema.
 func (t ToolDefinition) InputSchema() canonicaljson.Value { return t.inputSchema }
 
+// Enforcement returns the tool schema enforcement mode.
+func (t ToolDefinition) Enforcement() SchemaEnforcement { return t.enforcement }
+
 // Valid reports whether the tool definition satisfies local invariants.
 func (t ToolDefinition) Valid() bool {
-	return validToolName(t.name) && utf8.ValidString(t.description) && len(t.description) <= MaxToolDescriptionBytes && t.inputSchema.IsObject() && len(t.inputSchema.Bytes()) <= MaxToolSchemaBytes
+	return validToolName(t.name) && utf8.ValidString(t.description) && len(t.description) <= MaxToolDescriptionBytes && t.inputSchema.IsObject() && len(t.inputSchema.Bytes()) <= MaxToolSchemaBytes && t.enforcement.Valid()
 }
 
 // ToolChoice controls canonical tool selection.
