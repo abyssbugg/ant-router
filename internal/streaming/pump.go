@@ -73,13 +73,15 @@ func (p *Pump) run(ctx context.Context) Result {
 			return p.result(TerminalNone, nil, nil, nil, p.runtimeError(CodeSourceFailed, path, errInvalidTransition))
 		}
 		p.received++
-		transition, err := p.machine.Accept(event)
-		if err != nil {
-			return p.result(TerminalNone, nil, nil, nil, rephase(err, p.phase))
-		}
-
+		var transition Transition
 		if p.phase == DeliveryPrecommit {
-			if err := p.buffer.Append(event, transition.SemanticOutput()); err != nil {
+			checkpoint := p.buffer.checkpoint()
+			if err := p.buffer.Append(event, isCompletedImageEvent(event)); err != nil {
+				return p.result(TerminalNone, nil, nil, nil, rephase(err, DeliveryPrecommit))
+			}
+			transition, err = p.machine.Accept(event)
+			if err != nil {
+				p.buffer.restore(checkpoint)
 				return p.result(TerminalNone, nil, nil, nil, rephase(err, DeliveryPrecommit))
 			}
 			if transition.JustCommitted() {
@@ -95,6 +97,10 @@ func (p *Pump) run(ctx context.Context) Result {
 				continue
 			}
 		} else {
+			transition, err = p.machine.Accept(event)
+			if err != nil {
+				return p.result(TerminalNone, nil, nil, nil, rephase(err, DeliveryPostcommit))
+			}
 			if err := p.send(ctx, event); err != nil {
 				return p.failureResultForSend(ctx, err)
 			}

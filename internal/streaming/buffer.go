@@ -7,6 +7,14 @@ type bufferedEvent struct {
 	bytes int
 }
 
+type bufferCheckpoint struct {
+	count         int
+	bytes         int
+	peakEvents    int
+	peakBytes     int
+	oversizedUsed bool
+}
+
 type precommitBuffer struct {
 	options       PumpOptions
 	events        []bufferedEvent
@@ -52,6 +60,27 @@ func (b *precommitBuffer) Append(event canonical.Event, semantic bool) error {
 		b.peakBytes = b.bytes
 	}
 	return nil
+}
+
+func (b *precommitBuffer) checkpoint() bufferCheckpoint {
+	if b == nil {
+		return bufferCheckpoint{}
+	}
+	return bufferCheckpoint{count: len(b.events), bytes: b.bytes, peakEvents: b.peakEvents, peakBytes: b.peakBytes, oversizedUsed: b.oversizedUsed}
+}
+
+func (b *precommitBuffer) restore(checkpoint bufferCheckpoint) {
+	if b == nil || checkpoint.count < 0 || checkpoint.count > len(b.events) {
+		return
+	}
+	for index := checkpoint.count; index < len(b.events); index++ {
+		b.events[index] = bufferedEvent{}
+	}
+	b.events = b.events[:checkpoint.count]
+	b.bytes = checkpoint.bytes
+	b.peakEvents = checkpoint.peakEvents
+	b.peakBytes = checkpoint.peakBytes
+	b.oversizedUsed = checkpoint.oversizedUsed
 }
 
 func (b *precommitBuffer) Drain() []canonical.Event {
