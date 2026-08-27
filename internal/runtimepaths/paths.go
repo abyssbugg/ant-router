@@ -25,12 +25,13 @@ type Options struct {
 // Paths contains resolved persistent and local-runtime locations.
 // RuntimeRoot is intentionally empty on Windows, where named pipes do not use it.
 type Paths struct {
-	Instance    controltransport.InstanceName
-	StateRoot   string
-	RuntimeRoot string
-	InstanceDir string
-	TokenPath   string
-	ConfigRoot  string
+	Instance           controltransport.InstanceName
+	StateRoot          string
+	RuntimeRoot        string
+	InstanceDir        string
+	TokenPath          string
+	InferenceTokenPath string
+	ConfigRoot         string
 }
 
 func Resolve(options Options) (Paths, error) {
@@ -73,12 +74,13 @@ func Resolve(options Options) (Paths, error) {
 		return Paths{}, err
 	}
 	return Paths{
-		Instance:    instance,
-		StateRoot:   stateRoot,
-		RuntimeRoot: runtimeRoot,
-		InstanceDir: instancePaths.StateDir,
-		TokenPath:   instancePaths.TokenPath,
-		ConfigRoot:  filepath.Join(instancePaths.StateDir, "config"),
+		Instance:           instance,
+		StateRoot:          stateRoot,
+		RuntimeRoot:        runtimeRoot,
+		InstanceDir:        instancePaths.StateDir,
+		TokenPath:          instancePaths.TokenPath,
+		InferenceTokenPath: filepath.Join(instancePaths.StateDir, "inference.token"),
+		ConfigRoot:         filepath.Join(instancePaths.StateDir, "config"),
 	}, nil
 }
 
