@@ -5,15 +5,16 @@ import (
 )
 
 type requestDTO struct {
-	Version      string            `json:"version"`
-	ID           string            `json:"id"`
-	Model        string            `json:"model"`
-	Input        []json.RawMessage `json:"input"`
-	Tools        []toolDTO         `json:"tools"`
-	ToolChoice   toolChoiceDTO     `json:"tool_choice"`
-	Output       outputDTO         `json:"output"`
-	Sampling     samplingDTO       `json:"sampling"`
-	Continuation *continuationDTO  `json:"continuation,omitempty"`
+	Version          string            `json:"version"`
+	ID               string            `json:"id"`
+	Model            string            `json:"model"`
+	Input            []json.RawMessage `json:"input"`
+	Tools            []toolDTO         `json:"tools"`
+	ToolChoice       toolChoiceDTO     `json:"tool_choice"`
+	Output           outputDTO         `json:"output"`
+	Sampling         samplingDTO       `json:"sampling"`
+	ReasoningSummary string            `json:"reasoning_summary"`
+	Continuation     *continuationDTO  `json:"continuation,omitempty"`
 }
 
 type toolDTO struct {

@@ -12,12 +12,20 @@ type OutputFormat string
 // SchemaEnforcement identifies how strictly a provider must enforce a JSON schema.
 type SchemaEnforcement string
 
+// ReasoningSummaryMode identifies the requested reasoning-summary detail.
+type ReasoningSummaryMode string
+
 // ImageDetail is a provider-neutral image quality hint.
 type ImageDetail string
 
 const (
 	SchemaEnforcementBestEffort SchemaEnforcement = "best_effort"
 	SchemaEnforcementStrict     SchemaEnforcement = "strict"
+
+	ReasoningSummaryNone     ReasoningSummaryMode = "none"
+	ReasoningSummaryAuto     ReasoningSummaryMode = "auto"
+	ReasoningSummaryConcise  ReasoningSummaryMode = "concise"
+	ReasoningSummaryDetailed ReasoningSummaryMode = "detailed"
 
 	ImageDetailAuto ImageDetail = "auto"
 	ImageDetailLow  ImageDetail = "low"
@@ -50,6 +58,11 @@ func (v OutputFormat) Valid() bool { return oneOf(string(v), "text", "json_objec
 
 // Valid reports whether the schema enforcement mode is supported.
 func (v SchemaEnforcement) Valid() bool { return oneOf(string(v), "best_effort", "strict") }
+
+// Valid reports whether the reasoning summary mode is supported.
+func (v ReasoningSummaryMode) Valid() bool {
+	return oneOf(string(v), "none", "auto", "concise", "detailed")
+}
 
 // Valid reports whether the image detail hint is supported.
 func (v ImageDetail) Valid() bool { return oneOf(string(v), "auto", "low", "high") }

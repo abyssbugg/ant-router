@@ -32,14 +32,15 @@ func encodeRequest(request Request, includeContinuation bool) ([]byte, error) {
 		tools = append(tools, encodeTool(tool))
 	}
 	dto := requestDTO{
-		Version:    ProtocolVersion,
-		ID:         request.ID().String(),
-		Model:      request.Model(),
-		Input:      input,
-		Tools:      tools,
-		ToolChoice: encodeToolChoice(request.ToolChoice()),
-		Output:     encodeOutput(request.Output()),
-		Sampling:   encodeSampling(request.Sampling()),
+		Version:          ProtocolVersion,
+		ID:               request.ID().String(),
+		Model:            request.Model(),
+		Input:            input,
+		Tools:            tools,
+		ToolChoice:       encodeToolChoice(request.ToolChoice()),
+		Output:           encodeOutput(request.Output()),
+		Sampling:         encodeSampling(request.Sampling()),
+		ReasoningSummary: string(request.ReasoningSummary()),
 	}
 	if includeContinuation {
 		dto.Continuation = encodeContinuation(request.Continuation())
@@ -96,7 +97,7 @@ func DecodeRequest(data []byte) (Request, error) {
 	if err != nil {
 		return Request{}, err
 	}
-	return NewRequest(RequestParams{ID: id, Model: dto.Model, Input: input, Tools: tools, ToolChoice: choice, Output: output, Sampling: sampling, Continuation: continuation})
+	return NewRequest(RequestParams{ID: id, Model: dto.Model, Input: input, Tools: tools, ToolChoice: choice, Output: output, Sampling: sampling, Continuation: continuation, ReasoningSummary: ReasoningSummaryMode(dto.ReasoningSummary)})
 }
 
 // FullDigest hashes the full deterministic request encoding.
