@@ -15,15 +15,30 @@ const MaxSourceBytes = 1 << 20 // 1 MiB
 
 // wireConfig is a private type for TOML decoding with optional/pointer fields
 type wireConfig struct {
-	SchemaVersion *int        `toml:"schema_version"`
-	Daemon        *wireDaemon `toml:"daemon"`
-	_             struct{}    `toml:"" json:"-"` // Catch unknown fields at root
+	SchemaVersion *int              `toml:"schema_version"`
+	Daemon        *wireDaemon       `toml:"daemon"`
+	DataPlane     *wireDataPlane    `toml:"data_plane"`
+	MockProvider  *wireMockProvider `toml:"mock_provider"`
+	_             struct{}          `toml:"" json:"-"` // Catch unknown fields at root
 }
 
 // wireDaemon is a private type for daemon config decoding
 type wireDaemon struct {
 	ShutdownTimeout *string  `toml:"shutdown_timeout"`
 	_               struct{} `toml:"" json:"-"` // Catch unknown fields
+}
+
+type wireDataPlane struct {
+	Enabled               *bool    `toml:"enabled"`
+	Listen                *string  `toml:"listen"`
+	MaxConcurrentRequests *int     `toml:"max_concurrent_requests"`
+	ShutdownTimeout       *string  `toml:"shutdown_timeout"`
+	_                     struct{} `toml:"" json:"-"`
+}
+
+type wireMockProvider struct {
+	Enabled *bool    `toml:"enabled"`
+	_       struct{} `toml:"" json:"-"`
 }
 
 // Decode decodes a Config from a TOML reader with strict validation.
@@ -97,8 +112,19 @@ func Decode(r io.Reader) (Config, error) {
 		}
 	}
 
-	// Overlay schema_version
-	cfg.SchemaVersion = *wire.SchemaVersion
+	// Accept legacy v1 only as input and normalize every in-memory config to v2.
+	switch *wire.SchemaVersion {
+	case LegacySchemaVersion:
+		if wire.DataPlane != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "data_plane", Err: fmt.Errorf("field is unavailable in schema version 1")}
+		}
+		if wire.MockProvider != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 1")}
+		}
+	case SchemaVersion:
+	default:
+		return Config{}, &Error{Code: CodeUnsupportedSchema, Path: "schema_version", Err: fmt.Errorf("unsupported schema version %d", *wire.SchemaVersion)}
+	}
 
 	// Overlay daemon config if present
 	if wire.Daemon != nil {
@@ -122,7 +148,29 @@ func Decode(r io.Reader) (Config, error) {
 		}
 	}
 
-	// Validate the final configuration
+	if wire.DataPlane != nil {
+		if wire.DataPlane.Enabled != nil {
+			cfg.DataPlane.Enabled = *wire.DataPlane.Enabled
+		}
+		if wire.DataPlane.Listen != nil {
+			cfg.DataPlane.Listen = *wire.DataPlane.Listen
+		}
+		if wire.DataPlane.MaxConcurrentRequests != nil {
+			cfg.DataPlane.MaxConcurrentRequests = *wire.DataPlane.MaxConcurrentRequests
+		}
+		if wire.DataPlane.ShutdownTimeout != nil {
+			parsed, parseErr := ParseDuration(*wire.DataPlane.ShutdownTimeout)
+			if parseErr != nil {
+				return Config{}, &Error{Code: CodeDecodeFailed, Path: "data_plane.shutdown_timeout", Err: fmt.Errorf("invalid duration format")}
+			}
+			cfg.DataPlane.ShutdownTimeout = parsed
+		}
+	}
+	if wire.MockProvider != nil && wire.MockProvider.Enabled != nil {
+		cfg.MockProvider.Enabled = *wire.MockProvider.Enabled
+	}
+
+	// Validate the final normalized configuration.
 	if valErr := cfg.Validate(); valErr != nil {
 		return Config{}, valErr
 	}

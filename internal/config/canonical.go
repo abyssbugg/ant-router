@@ -24,6 +24,7 @@ type RevisionID = revision.ID
 //
 // Returns an error if the config is invalid.
 func Canonical(cfg Config) ([]byte, error) {
+	cfg = cfg.normalized()
 	// Validate the config first
 	if err := cfg.Validate(); err != nil {
 		return nil, err

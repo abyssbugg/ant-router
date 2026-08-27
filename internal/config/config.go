@@ -3,15 +3,18 @@ package config
 import "time"
 
 const (
-	SchemaVersion          = 1
+	LegacySchemaVersion    = 1
+	SchemaVersion          = 2
 	DefaultShutdownTimeout = 30 * time.Second
 )
 
 // Config represents the root configuration structure.
 // Direct construction with invalid values is defended by Validate().
 type Config struct {
-	SchemaVersion int          `toml:"schema_version"`
-	Daemon        DaemonConfig `toml:"daemon"`
+	SchemaVersion int                `toml:"schema_version"`
+	Daemon        DaemonConfig       `toml:"daemon"`
+	DataPlane     DataPlaneConfig    `toml:"data_plane"`
+	MockProvider  MockProviderConfig `toml:"mock_provider"`
 }
 
 // DaemonConfig contains daemon-specific configuration
@@ -26,5 +29,6 @@ func Default() Config {
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{DefaultShutdownTimeout},
 		},
+		DataPlane: defaultDataPlaneConfig(),
 	}
 }
