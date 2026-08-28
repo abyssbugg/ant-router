@@ -121,7 +121,12 @@ func decodeMessage(fields map[string]json.RawMessage, ids IDGenerator, path stri
 				return canonical.Item{}, err
 			}
 			if kind == "input_image" {
-				return canonical.Item{}, newError(CodeUnsupportedField, blockPath+".type", errors.New("image input is deferred"))
+				block, err := decodeImageBlock(blockFields, blockPath)
+				if err != nil {
+					return canonical.Item{}, err
+				}
+				blocks = append(blocks, block)
+				continue
 			}
 			if kind != "input_text" && kind != "output_text" {
 				return canonical.Item{}, newError(CodeUnsupportedField, blockPath+".type", errors.New("content type is unsupported"))

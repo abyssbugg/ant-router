@@ -94,7 +94,7 @@ func TestDecodeRejectsRecursiveUnknownAndInvalidReferences(t *testing.T) {
 		name, body, code, path string
 	}{
 		{"unknown content field", `{"model":"mock/text","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"x","secret":"ultra-private-request-value"}]}]}`, "unknown_field", "input[0].content[0].secret"},
-		{"unsupported image", `{"model":"mock/text","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://example.com/a.png"}]}]}`, "unsupported_field", "input[0].content[0].type"},
+		{"invalid image URL", `{"model":"mock/text","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"http://example.com/a.png"}]}]}`, "invalid_field", "input[0].content[0].image_url"},
 		{"forward result", `{"model":"mock/tool","input":[{"type":"function_call_output","call_id":"missing","output":"x"}]}`, "invalid_field", "input[0].call_id"},
 		{"duplicate external call", `{"model":"mock/tool","input":[{"type":"function_call","call_id":"same","name":"Search","arguments":"{}"},{"type":"function_call","call_id":"same","name":"Search","arguments":"{}"}],"tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}]}`, "invalid_field", "input[1].call_id"},
 		{"unsupported tool type", `{"model":"mock/text","input":"x","tools":[{"type":"web_search"}]}`, "unsupported_field", "tools[0].type"},
