@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/abyssbugg/ant-router/internal/control"
+	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
 const cliSchemaVersion = 1
@@ -22,6 +23,25 @@ func writeStatus(writer io.Writer, options cliOptions, status control.StatusResp
 		return writeJSONOutput(writer, map[string]any{"schema_version": cliSchemaVersion, "instance": status.Instance, "daemon_state": status.DaemonState, "started_at": status.StartedAt, "uptime_seconds": status.UptimeSeconds, "config": status.Config})
 	}
 	_, err := fmt.Fprintf(writer, "Instance: %s\nState: %s\nUptime: %s\n", status.Instance, status.DaemonState, (time.Duration(status.UptimeSeconds) * time.Second).String())
+	return err
+}
+
+func writeDataPlaneEnv(writer io.Writer, options cliOptions, baseURL string, token *inferencetoken.Token) error {
+	if options.JSON {
+		output := map[string]any{"schema_version": cliSchemaVersion, "base_url": baseURL, "token_included": token != nil}
+		if token != nil {
+			output["api_key"] = token.String()
+		}
+		return writeJSONOutput(writer, output)
+	}
+	if _, err := fmt.Fprintf(writer, "export OPENAI_BASE_URL='%s'\n", baseURL); err != nil {
+		return err
+	}
+	if token == nil {
+		_, err := fmt.Fprintln(writer, "# OPENAI_API_KEY hidden; rerun with --show-token")
+		return err
+	}
+	_, err := fmt.Fprintf(writer, "export OPENAI_API_KEY='%s'\n", token.String())
 	return err
 }
 

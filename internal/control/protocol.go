@@ -25,10 +25,16 @@ type ConfigSummary struct {
 	Status     string `json:"status"`
 }
 
+type DataPlaneSummary struct {
+	Enabled bool   `json:"enabled"`
+	BaseURL string `json:"base_url"`
+}
+
 type StatusResponse struct {
-	Instance      string         `json:"instance"`
-	DaemonState   string         `json:"daemon_state"`
-	StartedAt     time.Time      `json:"started_at"`
-	UptimeSeconds int64          `json:"uptime_seconds"`
-	Config        *ConfigSummary `json:"config,omitempty"`
+	Instance      string            `json:"instance"`
+	DaemonState   string            `json:"daemon_state"`
+	StartedAt     time.Time         `json:"started_at"`
+	UptimeSeconds int64             `json:"uptime_seconds"`
+	Config        *ConfigSummary    `json:"config,omitempty"`
+	DataPlane     *DataPlaneSummary `json:"data_plane,omitempty"`
 }

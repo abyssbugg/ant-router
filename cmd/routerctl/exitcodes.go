@@ -5,9 +5,13 @@ import (
 
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
+	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
-var errConnection = errors.New("daemon connection failed")
+var (
+	errConnection           = errors.New("daemon connection failed")
+	errDataPlaneUnavailable = errors.New("data plane is unavailable")
+)
 
 const (
 	ExitSuccess        = 0
@@ -29,6 +33,19 @@ func exitCode(err error) int {
 	}
 	if errors.Is(err, errConnection) {
 		return ExitConnection
+	}
+	if errors.Is(err, errDataPlaneUnavailable) {
+		return ExitUnavailable
+	}
+	if code, ok := inferencetoken.CodeOf(err); ok {
+		switch code {
+		case inferencetoken.CodeTokenNotFound, inferencetoken.CodeInvalidToken, inferencetoken.CodeTokenCorrupt:
+			return ExitAuthentication
+		case inferencetoken.CodePermissionDenied, inferencetoken.CodeStoreUnavailable:
+			return ExitConnection
+		case inferencetoken.CodeDurabilityUncertain:
+			return ExitInternal
+		}
 	}
 	if errors.Is(err, errConfigurationTooLarge) || errors.Is(err, errConfigurationRead) {
 		return ExitValidation

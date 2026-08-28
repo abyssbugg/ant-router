@@ -12,6 +12,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
 	"github.com/abyssbugg/ant-router/internal/controltransport"
+	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 	"github.com/abyssbugg/ant-router/internal/runtimepaths"
 )
 
@@ -20,6 +21,19 @@ type clientFactory func(cliOptions) (controlClient, error)
 type staticTokenSource struct{ token controltoken.Token }
 
 func (s staticTokenSource) Token(context.Context) (controltoken.Token, error) { return s.token, nil }
+
+type localControlClient struct {
+	*control.Client
+	inferenceStore *inferencetoken.Store
+	instance       controltransport.InstanceName
+}
+
+func (c *localControlClient) InferenceToken(ctx context.Context) (inferencetoken.Token, error) {
+	if err := ctx.Err(); err != nil {
+		return inferencetoken.Token{}, err
+	}
+	return c.inferenceStore.Load(c.instance)
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -74,5 +88,13 @@ func newControlClient(options cliOptions) (controlClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return control.NewClient(controltransport.LocalDialer{Endpoint: endpoint}, staticTokenSource{token: token}, control.DefaultClientOptions())
+	client, err := control.NewClient(controltransport.LocalDialer{Endpoint: endpoint}, staticTokenSource{token: token}, control.DefaultClientOptions())
+	if err != nil {
+		return nil, err
+	}
+	inferenceStore, err := inferencetoken.NewStore(paths.StateRoot)
+	if err != nil {
+		return nil, err
+	}
+	return &localControlClient{Client: client, inferenceStore: inferenceStore, instance: paths.Instance}, nil
 }

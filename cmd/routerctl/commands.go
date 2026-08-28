@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/abyssbugg/ant-router/internal/buildinfo"
 	"github.com/abyssbugg/ant-router/internal/control"
+	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
 type controlClient interface {
@@ -15,6 +17,7 @@ type controlClient interface {
 	ValidateConfig(context.Context, []byte) (control.ConfigValidateResponse, error)
 	ApplyConfig(context.Context, []byte, control.ConfigValidateResponse) (control.ConfigMutationResponse, error)
 	RollbackConfig(context.Context) (control.ConfigMutationResponse, error)
+	InferenceToken(context.Context) (inferencetoken.Token, error)
 	CloseIdleConnections()
 }
 
@@ -26,6 +29,24 @@ func execute(ctx context.Context, options cliOptions, command cliCommand, stdin 
 		result, err = client.Status(ctx)
 		if err == nil {
 			err = writeStatus(stdout, options, result)
+		}
+	case "data-plane":
+		var status control.StatusResponse
+		status, err = client.Status(ctx)
+		if err == nil {
+			if status.DataPlane == nil || !status.DataPlane.Enabled {
+				err = errDataPlaneUnavailable
+			} else {
+				var token *inferencetoken.Token
+				if command.ShowToken {
+					var value inferencetoken.Token
+					value, err = client.InferenceToken(ctx)
+					token = &value
+				}
+				if err == nil {
+					err = writeDataPlaneEnv(stdout, options, status.DataPlane.BaseURL, token)
+				}
+			}
 		}
 	case "config":
 		switch command.Action {
@@ -120,6 +141,9 @@ func describeCLIError(err error) cliErrorDetail {
 		code, message = "conflict", "configuration changed; validate again"
 	case ExitUnavailable:
 		code, message = "unavailable", "configuration unavailable"
+		if errors.Is(err, errDataPlaneUnavailable) {
+			message = "data plane is unavailable"
+		}
 	}
 	return cliErrorDetail{ExitCode: exit, Code: code, Message: message}
 }
