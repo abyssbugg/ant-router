@@ -26,6 +26,8 @@ type ImageContent struct {
 }
 
 // NewRemoteImage constructs an HTTPS-backed image.
+// MIME may be empty when the remote media type is unknown; ant-router does not
+// fetch the URL, and provider adaptation handles the opaque reference.
 func NewRemoteImage(rawURL, mime string, detail ImageDetail, width, height int) (ImageContent, error) {
 	if !utf8.ValidString(rawURL) {
 		return ImageContent{}, contentError(CodeInvalidURL, "content.image.url")
@@ -73,7 +75,7 @@ func (i ImageContent) Bytes() ([]byte, bool) {
 	return append([]byte(nil), i.data...), true
 }
 
-// MIME returns the validated image MIME type.
+// MIME returns the validated inline MIME type or the optional remote MIME hint.
 func (i ImageContent) MIME() string { return i.mime }
 
 // Detail returns the provider-neutral image detail hint.
@@ -98,7 +100,10 @@ func (i ImageContent) validate() error {
 	if i.source == ImageSourceInline && (len(i.data) == 0 || i.url != "") {
 		return contentError(CodeInvalidInvariant, "content.image.source")
 	}
-	if !supportedImageMIME(i.mime) {
+	if i.source == ImageSourceInline && !supportedImageMIME(i.mime) {
+		return contentError(CodeUnsupportedMediaType, "content.image.mime")
+	}
+	if i.source == ImageSourceURL && i.mime != "" && !supportedImageMIME(i.mime) {
 		return contentError(CodeUnsupportedMediaType, "content.image.mime")
 	}
 	if !i.detail.Valid() {
