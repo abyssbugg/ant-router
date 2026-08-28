@@ -8,8 +8,8 @@ import (
 )
 
 func TestSchemaVersionConstant(t *testing.T) {
-	if SchemaVersion != 1 {
-		t.Errorf("SchemaVersion = %d, want 1", SchemaVersion)
+	if SchemaVersion != 2 {
+		t.Errorf("SchemaVersion = %d, want 2", SchemaVersion)
 	}
 }
 
@@ -21,14 +21,14 @@ func TestDefaultShutdownTimeout(t *testing.T) {
 
 func TestConfigType(t *testing.T) {
 	cfg := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
 	}
 
-	if cfg.SchemaVersion != 1 {
-		t.Errorf("Config.SchemaVersion = %d, want 1", cfg.SchemaVersion)
+	if cfg.SchemaVersion != SchemaVersion {
+		t.Errorf("Config.SchemaVersion = %d, want 2", cfg.SchemaVersion)
 	}
 }
 
@@ -45,8 +45,8 @@ func TestDaemonConfigType(t *testing.T) {
 func TestDefaultConfig(t *testing.T) {
 	cfg := Default()
 
-	if cfg.SchemaVersion != 1 {
-		t.Errorf("Default().SchemaVersion = %d, want 1", cfg.SchemaVersion)
+	if cfg.SchemaVersion != SchemaVersion {
+		t.Errorf("Default().SchemaVersion = %d, want 2", cfg.SchemaVersion)
 	}
 
 	if cfg.Daemon.ShutdownTimeout != (Duration{30 * time.Second}) {
@@ -65,7 +65,7 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "valid default config",
 			config: Config{
-				SchemaVersion: 1,
+				SchemaVersion: SchemaVersion,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{30 * time.Second},
 				},
@@ -75,7 +75,7 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "valid minimum timeout",
 			config: Config{
-				SchemaVersion: 1,
+				SchemaVersion: SchemaVersion,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{1 * time.Second},
 				},
@@ -85,7 +85,7 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "valid maximum timeout",
 			config: Config{
-				SchemaVersion: 1,
+				SchemaVersion: SchemaVersion,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{10 * time.Minute},
 				},
@@ -105,9 +105,9 @@ func TestConfigValidate(t *testing.T) {
 			errPath: "schema_version",
 		},
 		{
-			name: "unsupported schema version 2",
+			name: "unsupported schema version 3",
 			config: Config{
-				SchemaVersion: 2,
+				SchemaVersion: 3,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{30 * time.Second},
 				},
@@ -119,7 +119,7 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "timeout below minimum",
 			config: Config{
-				SchemaVersion: 1,
+				SchemaVersion: SchemaVersion,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{500 * time.Millisecond},
 				},
@@ -131,7 +131,7 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "timeout above maximum",
 			config: Config{
-				SchemaVersion: 1,
+				SchemaVersion: SchemaVersion,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{11 * time.Minute},
 				},
@@ -171,7 +171,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestConfigValidateErrorMessage(t *testing.T) {
 	cfg := Config{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
@@ -188,7 +188,7 @@ func TestConfigValidateErrorMessage(t *testing.T) {
 		t.Error("Error message is empty")
 	}
 	// Verify it doesn't expose internal values
-	if strings.Contains(errMsg, "SchemaVersion: 2") {
+	if strings.Contains(errMsg, "SchemaVersion: 3") {
 		t.Error("Error message should not contain config source content")
 	}
 }
@@ -226,7 +226,7 @@ func TestConfigValidateErrorsIs(t *testing.T) {
 func TestDirectInvalidStructLiteralRejected(t *testing.T) {
 	// A direct invalid struct literal should be rejected by Config.Validate
 	cfg := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{500 * time.Millisecond},
 		},

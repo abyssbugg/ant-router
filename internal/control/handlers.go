@@ -56,11 +56,17 @@ func buildStatusResponse(status RuntimeStatus, now time.Time) StatusResponse {
 		copyValue := *status.Config
 		configCopy = &copyValue
 	}
+	var dataPlaneCopy *DataPlaneSummary
+	if status.DataPlane != nil {
+		copyValue := *status.DataPlane
+		dataPlaneCopy = &copyValue
+	}
 	return StatusResponse{
 		Instance:      status.Instance,
 		DaemonState:   status.DaemonState,
 		StartedAt:     status.StartedAt,
 		UptimeSeconds: int64(uptime.Seconds()),
 		Config:        configCopy,
+		DataPlane:     dataPlaneCopy,
 	}
 }

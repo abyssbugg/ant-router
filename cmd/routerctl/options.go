@@ -21,9 +21,10 @@ type cliOptions struct {
 }
 
 type cliCommand struct {
-	Name   string
-	Action string
-	Input  string
+	Name      string
+	Action    string
+	Input     string
+	ShowToken bool
 }
 
 func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
@@ -57,6 +58,17 @@ func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
 	case "version", "status":
 		if len(remaining) != 1 {
 			return options, cliCommand{}, errUsage
+		}
+	case "data-plane":
+		if len(remaining) < 2 || remaining[1] != "env" || len(remaining) > 3 {
+			return options, cliCommand{}, errUsage
+		}
+		command.Action = "env"
+		if len(remaining) == 3 {
+			if remaining[2] != "--show-token" {
+				return options, cliCommand{}, errUsage
+			}
+			command.ShowToken = true
 		}
 	case "config":
 		if len(remaining) < 2 {

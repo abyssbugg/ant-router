@@ -7,27 +7,29 @@ import (
 )
 
 type RequestParams struct {
-	ID           RequestID
-	Model        string
-	Input        []Item
-	Tools        []ToolDefinition
-	ToolChoice   ToolChoice
-	Output       OutputConstraints
-	Sampling     Sampling
-	Continuation *Continuation
+	ID               RequestID
+	Model            string
+	Input            []Item
+	Tools            []ToolDefinition
+	ToolChoice       ToolChoice
+	Output           OutputConstraints
+	Sampling         Sampling
+	Continuation     *Continuation
+	ReasoningSummary ReasoningSummaryMode
 }
 
 // Request is an immutable provider-neutral canonical request.
 type Request struct {
-	id           RequestID
-	model        string
-	input        []Item
-	tools        []ToolDefinition
-	toolChoice   ToolChoice
-	output       OutputConstraints
-	sampling     Sampling
-	continuation *Continuation
-	capabilities CapabilitySet
+	id               RequestID
+	model            string
+	input            []Item
+	tools            []ToolDefinition
+	toolChoice       ToolChoice
+	output           OutputConstraints
+	sampling         Sampling
+	continuation     *Continuation
+	reasoningSummary ReasoningSummaryMode
+	capabilities     CapabilitySet
 }
 
 // NewRequest validates and defensively copies a canonical request.
@@ -67,6 +69,13 @@ func NewRequest(params RequestParams) (Request, error) {
 	if !output.Valid() || !params.Sampling.Valid() {
 		return Request{}, requestError(CodeInvalidInvariant, "request.options")
 	}
+	reasoningSummary := params.ReasoningSummary
+	if reasoningSummary == "" {
+		reasoningSummary = ReasoningSummaryNone
+	}
+	if !reasoningSummary.Valid() {
+		return Request{}, requestError(CodeInvalidInvariant, "request.reasoning_summary")
+	}
 	if params.Continuation != nil && (!params.Continuation.Valid() || params.Continuation.Model() != params.Model) {
 		return Request{}, requestError(CodeContinuationAffinityRequired, "request.continuation")
 	}
@@ -74,19 +83,20 @@ func NewRequest(params RequestParams) (Request, error) {
 		return Request{}, err
 	}
 	request := Request{
-		id:         params.ID,
-		model:      params.Model,
-		input:      append([]Item(nil), params.Input...),
-		tools:      append([]ToolDefinition(nil), params.Tools...),
-		toolChoice: choice,
-		output:     output,
-		sampling:   params.Sampling,
+		id:               params.ID,
+		model:            params.Model,
+		input:            append([]Item(nil), params.Input...),
+		tools:            append([]ToolDefinition(nil), params.Tools...),
+		toolChoice:       choice,
+		output:           output,
+		sampling:         params.Sampling,
+		reasoningSummary: reasoningSummary,
 	}
 	if params.Continuation != nil {
 		copyValue, _ := NewContinuation(params.Continuation.Provider(), params.Continuation.Model(), params.Continuation.Bytes())
 		request.continuation = &copyValue
 	}
-	request.capabilities, _ = computeCapabilities(request.input, request.tools, request.output, request.continuation)
+	request.capabilities, _ = computeCapabilities(request.input, request.tools, request.output, request.continuation, request.reasoningSummary)
 	return request, nil
 }
 
@@ -139,7 +149,7 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 	return nil
 }
 
-func computeCapabilities(input []Item, tools []ToolDefinition, output OutputConstraints, continuation *Continuation) (CapabilitySet, error) {
+func computeCapabilities(input []Item, tools []ToolDefinition, output OutputConstraints, continuation *Continuation, reasoningSummary ReasoningSummaryMode) (CapabilitySet, error) {
 	var values []Capability
 	for _, item := range input {
 		switch item.Type() {
@@ -180,6 +190,9 @@ func computeCapabilities(input []Item, tools []ToolDefinition, output OutputCons
 	if continuation != nil {
 		values = append(values, CapabilityContinuation)
 	}
+	if reasoningSummary != ReasoningSummaryNone {
+		values = append(values, CapabilityReasoningSummary)
+	}
 	return NewCapabilitySet(values...)
 }
 
@@ -204,6 +217,9 @@ func (r Request) Output() OutputConstraints { return r.output }
 // Sampling returns immutable sampling controls.
 func (r Request) Sampling() Sampling { return r.sampling }
 
+// ReasoningSummary returns the requested reasoning-summary detail.
+func (r Request) ReasoningSummary() ReasoningSummaryMode { return r.reasoningSummary }
+
 // Capabilities returns the computed immutable capability set.
 func (r Request) Capabilities() CapabilitySet { return r.capabilities }
 
@@ -220,13 +236,13 @@ func (r Request) Continuation() *Continuation {
 func (r Request) WithoutContinuation() Request {
 	copyValue := r
 	copyValue.continuation = nil
-	copyValue.capabilities, _ = computeCapabilities(copyValue.input, copyValue.tools, copyValue.output, nil)
+	copyValue.capabilities, _ = computeCapabilities(copyValue.input, copyValue.tools, copyValue.output, nil, copyValue.reasoningSummary)
 	return copyValue
 }
 
 // Valid reports whether the request satisfies all local and cross-value invariants.
 func (r Request) Valid() bool {
-	_, err := NewRequest(RequestParams{ID: r.id, Model: r.model, Input: r.input, Tools: r.tools, ToolChoice: r.toolChoice, Output: r.output, Sampling: r.sampling, Continuation: r.continuation})
+	_, err := NewRequest(RequestParams{ID: r.id, Model: r.model, Input: r.input, Tools: r.tools, ToolChoice: r.toolChoice, Output: r.output, Sampling: r.sampling, Continuation: r.continuation, ReasoningSummary: r.reasoningSummary})
 	return err == nil
 }
 

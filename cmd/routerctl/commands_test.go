@@ -9,18 +9,22 @@ import (
 	"time"
 
 	"github.com/abyssbugg/ant-router/internal/control"
+	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
 type fakeControlClient struct {
-	status     control.StatusResponse
-	current    control.ConfigCurrentResponse
-	validation control.ConfigValidateResponse
-	mutation   control.ConfigMutationResponse
-	err        error
-	validated  []byte
-	applied    []byte
-	proof      control.ConfigValidateResponse
-	closed     bool
+	status          control.StatusResponse
+	current         control.ConfigCurrentResponse
+	validation      control.ConfigValidateResponse
+	mutation        control.ConfigMutationResponse
+	err             error
+	validated       []byte
+	applied         []byte
+	proof           control.ConfigValidateResponse
+	closed          bool
+	inferenceToken  inferencetoken.Token
+	inferenceErr    error
+	inferenceLoaded bool
 }
 
 func (f *fakeControlClient) Status(context.Context) (control.StatusResponse, error) {
@@ -40,6 +44,10 @@ func (f *fakeControlClient) ApplyConfig(_ context.Context, data []byte, proof co
 }
 func (f *fakeControlClient) RollbackConfig(context.Context) (control.ConfigMutationResponse, error) {
 	return f.mutation, f.err
+}
+func (f *fakeControlClient) InferenceToken(context.Context) (inferencetoken.Token, error) {
+	f.inferenceLoaded = true
+	return f.inferenceToken, f.inferenceErr
 }
 func (f *fakeControlClient) CloseIdleConnections() { f.closed = true }
 

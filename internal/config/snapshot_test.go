@@ -9,7 +9,7 @@ import (
 // and that accessing values returns copies, not references to internal state.
 func TestSnapshotAccessors(t *testing.T) {
 	cfg := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
@@ -65,7 +65,7 @@ func TestSnapshotAccessors(t *testing.T) {
 // not a reference to the internal state.
 func TestSnapshotValueCopyBehavior(t *testing.T) {
 	originalCfg := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
@@ -85,7 +85,7 @@ func TestSnapshotValueCopyBehavior(t *testing.T) {
 	cfg.SchemaVersion = 999
 
 	// Original should be unchanged
-	if snap.Config().SchemaVersion != 1 {
+	if snap.Config().SchemaVersion != SchemaVersion {
 		t.Errorf("original Config was modified through returned copy")
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
+	openairesponses "github.com/openai/openai-go/v3/responses"
 )
 
 type binaries struct {
@@ -121,6 +128,99 @@ func decodeJSON(t *testing.T, data []byte) map[string]any {
 		t.Fatalf("json.Unmarshal(%q) failed: %v", data, err)
 	}
 	return value
+}
+
+func TestMockResponsesSubprocessWorkflow(t *testing.T) {
+	binaries := buildBinaries(t)
+	stateRoot := t.TempDir()
+	runtimeRoot := ""
+	if runtime.GOOS != "windows" {
+		var err error
+		runtimeRoot, err = os.MkdirTemp(os.TempDir(), "ar-sdk-e2e-")
+		if err != nil {
+			t.Fatalf("os.MkdirTemp() failed: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(runtimeRoot) })
+	}
+	instance := "sdk-e2e"
+	address := availableLoopbackAddress(t)
+	configuration := filepath.Join(t.TempDir(), "inference.toml")
+	tomlBytes := []byte("schema_version = 2\n[data_plane]\nenabled = true\nlisten = \"" + address + "\"\nmax_concurrent_requests = 4\nshutdown_timeout = \"2s\"\n[mock_provider]\nenabled = true\n")
+	if err := os.WriteFile(configuration, tomlBytes, 0o600); err != nil {
+		t.Fatalf("write inference config: %v", err)
+	}
+
+	first := startDaemon(t, binaries, stateRoot, runtimeRoot, instance)
+	waitForDaemon(t, binaries, stateRoot, runtimeRoot, instance)
+	if _, _, code := routerctl(t, binaries, stateRoot, runtimeRoot, instance, "config", "apply", configuration); code != 0 {
+		t.Fatalf("config apply exit = %d", code)
+	}
+	if _, _, code := routerctl(t, binaries, stateRoot, runtimeRoot, instance, "data-plane", "env", "--show-token"); code != 7 {
+		t.Fatalf("pre-restart data-plane env exit = %d", code)
+	}
+	first.stop()
+
+	second := startDaemon(t, binaries, stateRoot, runtimeRoot, instance)
+	waitForDaemon(t, binaries, stateRoot, runtimeRoot, instance)
+	defer second.stop()
+	envOutput, envError, code := routerctl(t, binaries, stateRoot, runtimeRoot, instance, "data-plane", "env", "--show-token")
+	if code != 0 || len(envError) != 0 {
+		t.Fatalf("data-plane env = code %d stdout %q stderr %q", code, envOutput, envError)
+	}
+	environment := decodeJSON(t, envOutput)
+	baseURL, baseOK := environment["base_url"].(string)
+	apiKey, keyOK := environment["api_key"].(string)
+	if !baseOK || !keyOK || baseURL != "http://"+address+"/v1" || apiKey == "" || environment["token_included"] != true {
+		t.Fatalf("data-plane environment = %#v", environment)
+	}
+	controlToken, err := os.ReadFile(filepath.Join(stateRoot, "instances", instance, "control.token"))
+	if err != nil {
+		t.Fatalf("read control token: %v", err)
+	}
+	if bytes.Contains(controlToken, []byte(apiKey)) {
+		t.Fatal("control and inference tokens are not separated")
+	}
+
+	client := openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL))
+	response, err := client.Responses.New(context.Background(), openairesponses.ResponseNewParams{
+		Model: "mock/text",
+		Input: openairesponses.ResponseNewParamsInputUnion{OfString: param.NewOpt("hello")},
+	})
+	if err != nil {
+		t.Fatalf("official SDK response failed: %v", err)
+	}
+	if response == nil {
+		t.Fatal("official SDK returned a nil response without an error")
+	}
+	if response.OutputText() != "mock response" {
+		t.Fatalf("official SDK response text = %q", response.OutputText())
+	}
+
+	request, err := http.NewRequest(http.MethodGet, baseURL+"/models", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() failed: %v", err)
+	}
+	unauthorized, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("unauthorized request failed: %v", err)
+	}
+	defer unauthorized.Body.Close()
+	if unauthorized.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.StatusCode)
+	}
+}
+
+func availableLoopbackAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() failed: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("Close() failed: %v", err)
+	}
+	return address
 }
 
 func TestConfigurationWorkflow(t *testing.T) {

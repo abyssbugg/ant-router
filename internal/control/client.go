@@ -95,8 +95,13 @@ func (c *Client) Version(ctx context.Context) (VersionResponse, error) {
 
 func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
 	var response StatusResponse
-	err := c.request(ctx, http.MethodGet, "/v1/status", nil, &response)
-	return response, err
+	if err := c.request(ctx, http.MethodGet, "/v1/status", nil, &response); err != nil {
+		return StatusResponse{}, err
+	}
+	if err := validateStatusResponse(response); err != nil {
+		return StatusResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
+	}
+	return response, nil
 }
 
 func (c *Client) CurrentConfig(ctx context.Context) (ConfigCurrentResponse, error) {
@@ -261,6 +266,13 @@ func validateConfigCurrent(response ConfigCurrentResponse) error {
 func validateConfigMutation(response ConfigMutationResponse) error {
 	if response.State != "running" || !config.RevisionID(response.Revision).Valid() || response.Generation == 0 || response.Status == "" || response.ActivatedAt.IsZero() {
 		return errors.New("configuration mutation response is invalid")
+	}
+	return nil
+}
+
+func validateStatusResponse(response StatusResponse) error {
+	if response.DataPlane != nil && !validDataPlaneSummary(*response.DataPlane) {
+		return errors.New("status response is invalid")
 	}
 	return nil
 }

@@ -194,8 +194,8 @@ shutdown_timeout = "30s"
 
 	// Verify config is loaded correctly
 	cfg := cand.Config()
-	if cfg.SchemaVersion != 1 {
-		t.Errorf("SchemaVersion = %d, want 1", cfg.SchemaVersion)
+	if cfg.SchemaVersion != SchemaVersion {
+		t.Errorf("SchemaVersion = %d, want 2", cfg.SchemaVersion)
 	}
 }
 
@@ -285,7 +285,7 @@ shutdown_timeout = "30s"
 
 func TestCandidateAccessors(t *testing.T) {
 	cfg := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{45 * time.Second},
 		},
@@ -328,14 +328,14 @@ func TestCandidateAccessors(t *testing.T) {
 
 func TestCandidateDifferentConfigsDifferentRevisions(t *testing.T) {
 	cfg1 := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
 	}
 
 	cfg2 := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{60 * time.Second},
 		},

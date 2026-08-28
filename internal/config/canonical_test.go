@@ -223,14 +223,14 @@ shutdown_timeout="30s"
 
 func TestCanonicalChangedTimeoutChangesRevision(t *testing.T) {
 	cfg1 := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
 	}
 
 	cfg2 := Config{
-		SchemaVersion: 1,
+		SchemaVersion: SchemaVersion,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{60 * time.Second},
 		},

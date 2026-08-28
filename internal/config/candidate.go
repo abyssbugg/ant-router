@@ -15,6 +15,7 @@ type Candidate struct {
 // The sourcePath is converted to an absolute, cleaned path if nonblank.
 // Returns an error if the config is invalid or source path cannot be resolved.
 func NewCandidate(cfg Config, sourcePath string, baseGeneration uint64) (Candidate, error) {
+	cfg = cfg.normalized()
 	// Call Canonical exactly once (which validates the config)
 	canonical, err := Canonical(cfg)
 	if err != nil {

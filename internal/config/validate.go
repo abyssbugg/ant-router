@@ -6,6 +6,7 @@ import "fmt"
 // This defends against direct construction with invalid values,
 // ensuring that both programmatic and deserialized configs are validated.
 func (c Config) Validate() error {
+	c = c.normalized()
 	if c.SchemaVersion != SchemaVersion {
 		return &Error{
 			Code: CodeUnsupportedSchema,
@@ -16,6 +17,9 @@ func (c Config) Validate() error {
 
 	// Validate ShutdownTimeout using centralized bounds checking
 	if valErr := validateDurationBounds(c.Daemon.ShutdownTimeout.Duration, "daemon.shutdown_timeout"); valErr != nil {
+		return valErr
+	}
+	if valErr := validateDataPlane(c); valErr != nil {
 		return valErr
 	}
 

@@ -3,6 +3,8 @@ package control
 import (
 	"context"
 	"errors"
+	"net/netip"
+	"net/url"
 	"time"
 
 	"github.com/abyssbugg/ant-router/internal/controltransport"
@@ -15,6 +17,7 @@ type RuntimeStatus struct {
 	DaemonState string
 	StartedAt   time.Time
 	Config      *ConfigSummary
+	DataPlane   *DataPlaneSummary
 }
 
 func (s RuntimeStatus) Validate() error {
@@ -39,7 +42,22 @@ func (s RuntimeStatus) Validate() error {
 			return errors.New("runtime status is invalid")
 		}
 	}
+	if s.DataPlane != nil && !validDataPlaneSummary(*s.DataPlane) {
+		return errors.New("runtime status is invalid")
+	}
 	return nil
+}
+
+func validDataPlaneSummary(summary DataPlaneSummary) bool {
+	if !summary.Enabled {
+		return false
+	}
+	parsed, err := url.Parse(summary.BaseURL)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.Path != "/v1" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	address, err := netip.ParseAddrPort(parsed.Host)
+	return err == nil && address.Addr().Is4() && address.Addr().IsLoopback() && address.Port() != 0
 }
 
 // StatusProvider returns an immutable runtime status and must honor cancellation.
