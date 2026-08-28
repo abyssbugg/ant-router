@@ -133,7 +133,7 @@ func TestResponsesReturnsSafeStrictErrors(t *testing.T) {
 	}
 }
 
-func testHandler(t *testing.T) (http.Handler, inferencetoken.Token) {
+func testHandler(t testing.TB) (http.Handler, inferencetoken.Token) {
 	t.Helper()
 	token := inferencetoken.Token{}
 	for index := range token {

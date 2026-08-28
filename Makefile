@@ -6,11 +6,12 @@ CONTROL_PACKAGES := ./internal/control ./internal/controltransport ./internal/co
 PHASE1C_PACKAGES := ./internal/configservice ./internal/runtimepaths ./cmd/routerd ./cmd/routerctl
 CANONICAL_PACKAGES := ./internal/canonical ./internal/canonicaljson
 STREAMING_PACKAGES := ./internal/streaming
+PHASE3A_PACKAGES := ./internal/openai/responses ./internal/provider/mock ./internal/dataplane ./internal/daemon ./cmd/routerctl
 TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 FUZZ_TIME ?= 10s
 export GOTOOLCHAIN ?= local
 
-.PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz phase2a-ci streaming-test streaming-race streaming-golden streaming-stress streaming-fuzz phase2b-ci build cross-build verify ci clean
+.PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz phase2a-ci streaming-test streaming-race streaming-golden streaming-stress streaming-fuzz phase2b-ci phase3a-test phase3a-race phase3a-fault phase3a-sdk phase3a-stress phase3a-fuzz phase3a-ci build cross-build verify ci clean
 
 fmt-check:
 	@files="$$(gofmt -l cmd internal)"; \
@@ -133,6 +134,29 @@ streaming-fuzz:
 
 phase2b-ci: streaming-test streaming-race streaming-golden streaming-stress
 
+phase3a-test:
+	$(GO) test $(PHASE3A_PACKAGES) -count=100
+
+phase3a-race:
+	$(GO) test -race $(PHASE3A_PACKAGES)
+
+phase3a-fault:
+	$(GO) test ./internal/dataplane -run 'Test(DisconnectFailsBeforeAnySSECommit|HandlerContainsPanicsWithoutLeakingValues|HandlerRequiresInferenceTokenAndLoopbackHost)' -count=20
+
+phase3a-sdk:
+	$(GO) test ./internal/dataplane -run TestOfficialOpenAISDKModelsAndResponses -count=20
+	$(GO) test -tags=e2e ./test/e2e -run TestMockResponsesSubprocessWorkflow -count=3 -timeout=5m
+
+phase3a-stress:
+	$(GO) test -race -tags=phase3astress ./internal/dataplane -run TestConcurrentInferenceStress -count=3
+
+phase3a-fuzz:
+	$(GO) test ./internal/openai/responses -run=^$$ -fuzz='^FuzzDecodeRequest$$' -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/openai/responses -run=^$$ -fuzz='^FuzzDecodeRequestRedactsUnknownValues$$' -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/dataplane -run=^$$ -fuzz='^FuzzInferenceBoundary$$' -fuzztime=$(FUZZ_TIME)
+
+phase3a-ci: phase3a-test phase3a-race phase3a-fault phase3a-sdk phase3a-stress
+
 build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BIN_DIR)/routerd ./cmd/routerd
@@ -154,7 +178,7 @@ cross-build:
 
 verify: fmt-check vet test test-race build cross-build
 
-ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault canonical-test canonical-golden canonical-stress streaming-test streaming-golden streaming-stress
+ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault canonical-test canonical-golden canonical-stress streaming-test streaming-golden streaming-stress phase3a-test phase3a-fault phase3a-sdk phase3a-stress
 
 clean:
 	rm -rf $(BIN_DIR)
