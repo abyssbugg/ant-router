@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"net"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
 	"github.com/abyssbugg/ant-router/internal/controltransport"
+	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
 type staticTokenSource struct{ token controltoken.Token }
@@ -103,6 +106,85 @@ func TestDaemonBootstrapApplyAndRestart(t *testing.T) {
 	cancelSecond()
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second daemon Run() failed: %v", err)
+	}
+}
+
+func TestDaemonStartsConfiguredInferenceDataPlane(t *testing.T) {
+	stateRoot := t.TempDir()
+	runtimeRoot := shortRuntimeRoot(t)
+	options := daemonOptions(t, stateRoot, runtimeRoot)
+	dataListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dataListener.Close() })
+	address := dataListener.Addr().String()
+	listenerUsed := false
+	options.DataPlaneListen = func(requested string) (net.Listener, error) {
+		if requested != address || listenerUsed {
+			t.Fatalf("data-plane listen request = %q used %t", requested, listenerUsed)
+		}
+		listenerUsed = true
+		return dataListener, nil
+	}
+
+	first, cancelFirst, firstDone := startDaemon(t, options)
+	client := daemonClient(t, first)
+	tomlBytes := []byte("schema_version = 2\n[data_plane]\nenabled = true\nlisten = \"" + address + "\"\nmax_concurrent_requests = 4\nshutdown_timeout = \"2s\"\n[mock_provider]\nenabled = true\n")
+	proof, err := client.ValidateConfig(context.Background(), tomlBytes)
+	if err != nil {
+		t.Fatalf("ValidateConfig() failed: %v", err)
+	}
+	if _, err := client.ApplyConfig(context.Background(), tomlBytes, proof); err != nil {
+		t.Fatalf("ApplyConfig() failed: %v", err)
+	}
+	cancelFirst()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("bootstrap daemon failed: %v", err)
+	}
+
+	second, cancelSecond, secondDone := startDaemon(t, options)
+	status, err := daemonClient(t, second).Status(context.Background())
+	if err != nil || status.DataPlane == nil || status.DataPlane.BaseURL != "http://"+address+"/v1" {
+		t.Fatalf("Status() = %#v, %v", status, err)
+	}
+	store, err := inferencetoken.NewStore(stateRoot)
+	if err != nil {
+		t.Fatalf("NewStore() failed: %v", err)
+	}
+	token, err := store.Load(second.paths.Instance)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	request, err := http.NewRequest(http.MethodGet, status.DataPlane.BaseURL+"/models", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() failed: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token.String())
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("GET /models failed: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET /models status = %d", response.StatusCode)
+	}
+
+	cancelSecond()
+	if err := <-secondDone; err != nil {
+		t.Fatalf("configured daemon failed: %v", err)
+	}
+}
+
+func TestDaemonControlOnlyStatusOmitsDataPlane(t *testing.T) {
+	d, cancel, done := startDaemon(t, daemonOptions(t, t.TempDir(), shortRuntimeRoot(t)))
+	status, err := daemonClient(t, d).Status(context.Background())
+	if err != nil || status.DataPlane != nil {
+		t.Fatalf("Status() = %#v, %v", status, err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() failed: %v", err)
 	}
 }
 

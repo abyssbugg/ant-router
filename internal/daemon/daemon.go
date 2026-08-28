@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"net"
 	"time"
 
 	"github.com/abyssbugg/ant-router/internal/app"
@@ -13,6 +14,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
 	"github.com/abyssbugg/ant-router/internal/controltransport"
+	"github.com/abyssbugg/ant-router/internal/dataplane"
 	"github.com/abyssbugg/ant-router/internal/runtimepaths"
 )
 
@@ -22,6 +24,7 @@ type Options struct {
 	RuntimeRoot     string
 	Build           buildinfo.Info
 	ShutdownTimeout time.Duration
+	DataPlaneListen func(string) (net.Listener, error)
 }
 
 type Daemon struct {
@@ -31,8 +34,10 @@ type Daemon struct {
 	lifecycle       *app.Lifecycle
 	configService   *configservice.Service
 	server          *control.Server
+	dataPlane       *activeDataPlane
 	startedAt       time.Time
 	shutdownTimeout time.Duration
+	ready           chan struct{}
 }
 
 func New(options Options) (*Daemon, error) {
@@ -72,9 +77,21 @@ func New(options Options) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	dataPlaneListen := options.DataPlaneListen
+	if dataPlaneListen == nil {
+		dataPlaneListen = dataplane.ListenLoopback
+	}
+	dataPlane, err := buildDataPlane(paths, manager, dataPlaneListen)
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
 	shutdownTimeout := options.ShutdownTimeout
 	if shutdownTimeout <= 0 {
 		shutdownTimeout = 5 * time.Second
+	}
+	if dataPlane != nil && dataPlane.shutdownTimeout > shutdownTimeout {
+		shutdownTimeout = dataPlane.shutdownTimeout
 	}
 	daemon := &Daemon{
 		paths:           paths,
@@ -82,8 +99,10 @@ func New(options Options) (*Daemon, error) {
 		token:           token,
 		lifecycle:       app.NewLifecycle(),
 		configService:   service,
+		dataPlane:       dataPlane,
 		startedAt:       time.Now().UTC(),
 		shutdownTimeout: shutdownTimeout,
+		ready:           make(chan struct{}),
 	}
 	serverOptions := control.DefaultServerOptions()
 	serverOptions.Build = options.Build
@@ -92,34 +111,71 @@ func New(options Options) (*Daemon, error) {
 	server, err := control.NewServer(listener, token, daemon, serverOptions)
 	if err != nil {
 		_ = listener.Close()
+		dataPlane.closeBeforeStart()
 		return nil, err
 	}
 	daemon.server = server
 	return daemon, nil
 }
 
-func (d *Daemon) Ready() <-chan struct{} { return d.server.Ready() }
+func (d *Daemon) Ready() <-chan struct{} { return d.ready }
 
 func (d *Daemon) Run(ctx context.Context) error {
-	if err := d.server.Start(); err != nil {
-		d.lifecycle.Stop()
-		return err
+	serverCount := 1
+	if d.dataPlane != nil {
+		if err := d.dataPlane.server.Start(); err != nil {
+			d.lifecycle.Stop()
+			return err
+		}
+		serverCount++
 	}
-	serveResult := make(chan error, 1)
-	go func() { serveResult <- d.server.Wait() }()
-	select {
-	case err := <-serveResult:
-		d.lifecycle.Stop()
-		return err
-	case <-ctx.Done():
+	if err := d.server.Start(); err != nil {
 		d.lifecycle.BeginDrain()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), d.shutdownTimeout)
-		shutdownErr := d.server.Shutdown(shutdownContext)
+		shutdownErr := d.shutdownDataPlane(shutdownContext)
 		cancel()
-		serveErr := <-serveResult
 		d.lifecycle.Stop()
-		return errors.Join(shutdownErr, serveErr)
+		return errors.Join(err, shutdownErr)
 	}
+
+	if d.dataPlane != nil {
+		<-d.dataPlane.server.Ready()
+	}
+	<-d.server.Ready()
+	close(d.ready)
+
+	serveResults := make(chan error, serverCount)
+	go func() { serveResults <- d.server.Wait() }()
+	if d.dataPlane != nil {
+		go func() { serveResults <- d.dataPlane.server.Wait() }()
+	}
+
+	var trigger error
+	select {
+	case trigger = <-serveResults:
+		if trigger == nil {
+			trigger = errors.New("daemon server stopped unexpectedly")
+		}
+		serverCount--
+	case <-ctx.Done():
+	}
+
+	d.lifecycle.BeginDrain()
+	shutdownContext, cancel := context.WithTimeout(context.Background(), d.shutdownTimeout)
+	shutdownErr := errors.Join(d.shutdownDataPlane(shutdownContext), d.server.Shutdown(shutdownContext))
+	cancel()
+	for range serverCount {
+		shutdownErr = errors.Join(shutdownErr, <-serveResults)
+	}
+	d.lifecycle.Stop()
+	return errors.Join(trigger, shutdownErr)
+}
+
+func (d *Daemon) shutdownDataPlane(ctx context.Context) error {
+	if d.dataPlane == nil {
+		return nil
+	}
+	return d.dataPlane.server.Shutdown(ctx)
 }
 
 func (d *Daemon) Status(ctx context.Context) (control.RuntimeStatus, error) {
@@ -138,5 +194,10 @@ func (d *Daemon) Status(ctx context.Context) (control.RuntimeStatus, error) {
 	if current.State == configservice.StateRunning {
 		summary = &control.ConfigSummary{Revision: current.Revision.String(), Generation: current.Generation, Status: string(current.Status)}
 	}
-	return control.RuntimeStatus{Instance: d.paths.Instance.String(), DaemonState: state, StartedAt: d.startedAt, Config: summary}, nil
+	var dataPlane *control.DataPlaneSummary
+	if d.dataPlane != nil {
+		copyValue := d.dataPlane.status
+		dataPlane = &copyValue
+	}
+	return control.RuntimeStatus{Instance: d.paths.Instance.String(), DaemonState: state, StartedAt: d.startedAt, Config: summary, DataPlane: dataPlane}, nil
 }
