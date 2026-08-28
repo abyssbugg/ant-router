@@ -1,7 +1,11 @@
 package mock
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
@@ -10,6 +14,7 @@ import (
 
 const mockText = "mock response"
 const mockReasoning = "mock reasoning summary"
+const visionDigestHexLength = 12
 
 func buildScript(ids IDGenerator, request canonical.Request) ([]canonical.Event, error, error) {
 	responseID, err := ids.ResponseID()
@@ -38,6 +43,8 @@ func buildScript(ids IDGenerator, request canonical.Request) ([]canonical.Event,
 			return nil, nil, errors.New("tool scenario requires a tool")
 		}
 		err = builder.addTool(request.Tools()[0].Name(), `{}`)
+	case "mock/vision":
+		err = builder.addText(visionSummary(request))
 	default:
 		return nil, nil, errors.New("unknown mock scenario")
 	}
@@ -45,6 +52,57 @@ func buildScript(ids IDGenerator, request canonical.Request) ([]canonical.Event,
 		return nil, nil, err
 	}
 	return builder.events, nil, nil
+}
+
+func requestImageCount(request canonical.Request) int {
+	count := 0
+	for _, item := range request.Input() {
+		message, ok := item.Message()
+		if !ok {
+			continue
+		}
+		for _, block := range message.Content() {
+			if _, ok := block.Image(); ok {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func visionSummary(request canonical.Request) string {
+	lines := []string{fmt.Sprintf("images=%d", requestImageCount(request))}
+	index := 0
+	for _, item := range request.Input() {
+		message, ok := item.Message()
+		if !ok {
+			continue
+		}
+		for _, block := range message.Content() {
+			image, ok := block.Image()
+			if !ok {
+				continue
+			}
+			source := "remote"
+			mime := image.MIME()
+			dimensions := "unknown"
+			digest := ""
+			if mime == "" {
+				mime = "unknown"
+			}
+			if image.Width() > 0 && image.Height() > 0 {
+				dimensions = fmt.Sprintf("%dx%d", image.Width(), image.Height())
+			}
+			if data, inline := image.Bytes(); inline {
+				source = "inline"
+				sum := sha256.Sum256(data)
+				digest = " sha256=" + hex.EncodeToString(sum[:])[:visionDigestHexLength]
+			}
+			lines = append(lines, fmt.Sprintf("image[%d]: source=%s mime=%s detail=%s dimensions=%s%s", index, source, mime, image.Detail(), dimensions, digest))
+			index++
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 type scriptBuilder struct {
