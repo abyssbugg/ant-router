@@ -113,7 +113,8 @@ func TestDaemonStartsConfiguredInferenceDataPlane(t *testing.T) {
 	stateRoot := t.TempDir()
 	runtimeRoot := shortRuntimeRoot(t)
 	options := daemonOptions(t, stateRoot, runtimeRoot)
-	dataListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listenConfig := net.ListenConfig{}
+	dataListener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Listen() failed: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestDaemonStartsConfiguredInferenceDataPlane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)
 	}
-	request, err := http.NewRequest(http.MethodGet, status.DataPlane.BaseURL+"/models", nil)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, status.DataPlane.BaseURL+"/models", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() failed: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestDaemonStartsConfiguredInferenceDataPlane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /models failed: %v", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("GET /models status = %d", response.StatusCode)
 	}

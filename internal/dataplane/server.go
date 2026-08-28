@@ -37,7 +37,8 @@ func ListenLoopback(address string) (net.Listener, error) {
 	if err != nil || !endpoint.Addr().Is4() || !endpoint.Addr().IsLoopback() {
 		return nil, errors.New("data-plane address must be literal IPv4 loopback")
 	}
-	listener, err := net.Listen("tcp4", address)
+	listenConfig := net.ListenConfig{}
+	listener, err := listenConfig.Listen(context.Background(), "tcp4", address)
 	if err != nil {
 		return nil, errors.New("data-plane listen failed")
 	}
@@ -66,6 +67,10 @@ func NewServer(listener net.Listener, handler http.Handler, options ServerOption
 	}
 	if options.ReadHeaderTimeout <= 0 || options.ReadTimeout <= 0 || options.IdleTimeout <= 0 || options.ShutdownTimeout <= 0 || options.MaxHeaderBytes <= 0 {
 		return nil, errors.New("data-plane server options are invalid")
+	}
+	address, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || address.IP.To4() == nil || !address.IP.IsLoopback() {
+		return nil, errors.New("data-plane listener must be IPv4 loopback")
 	}
 	return &Server{
 		listener:   listener,
@@ -121,7 +126,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if !started {
 		return nil
 	}
-	s.shutdownOnce.Do(func() { go s.runShutdown(ctx) })
+	s.shutdownOnce.Do(func() { go s.runShutdown() })
 	select {
 	case <-s.shutdownDone:
 		s.mu.Lock()
@@ -132,8 +137,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (s *Server) runShutdown(parent context.Context) {
-	ctx, cancel := context.WithTimeout(parent, s.shutdownTimeout)
+func (s *Server) runShutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 	defer cancel()
 	err := s.httpServer.Shutdown(ctx)
 	if err != nil {

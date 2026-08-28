@@ -91,13 +91,20 @@ func Decode(reader io.Reader, ids IDGenerator) (ParsedRequest, error) {
 	if err := json.Unmarshal(canonicalBytes, &wire); err != nil {
 		return ParsedRequest{}, newError(CodeInvalidField, "request", errors.New("field type is invalid"))
 	}
-	for path, raw := range map[string]json.RawMessage{
-		"previous_response_id": wire.PreviousResponseID, "background": wire.Background,
-		"store": wire.Store, "include": wire.Include, "service_tier": wire.ServiceTier,
-		"metadata": wire.Metadata,
-	} {
-		if len(raw) != 0 {
-			return ParsedRequest{}, newError(CodeUnsupportedField, path, errors.New("field is unsupported"))
+	unsupported := []struct {
+		path string
+		raw  json.RawMessage
+	}{
+		{path: "background", raw: wire.Background},
+		{path: "include", raw: wire.Include},
+		{path: "metadata", raw: wire.Metadata},
+		{path: "previous_response_id", raw: wire.PreviousResponseID},
+		{path: "service_tier", raw: wire.ServiceTier},
+		{path: "store", raw: wire.Store},
+	}
+	for _, field := range unsupported {
+		if len(field.raw) != 0 {
+			return ParsedRequest{}, newError(CodeUnsupportedField, field.path, errors.New("field is unsupported"))
 		}
 	}
 	if wire.Model == "" || strings.TrimSpace(wire.Model) != wire.Model {

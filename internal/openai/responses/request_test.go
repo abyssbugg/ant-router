@@ -115,6 +115,16 @@ func TestDecodeRejectsStrictTopLevelViolations(t *testing.T) {
 	}
 }
 
+func TestDecodeReportsUnsupportedFieldsDeterministically(t *testing.T) {
+	body := `{"model":"mock/text","input":"hi","store":true,"previous_response_id":"id","background":true}`
+	for range 100 {
+		_, err := Decode(strings.NewReader(body), &sequenceIDs{})
+		if CodeOf(err) != CodeUnsupportedField || PathOf(err) != "background" {
+			t.Fatalf("Decode() = code:%q path:%q", CodeOf(err), PathOf(err))
+		}
+	}
+}
+
 func TestDecodeRejectsOversizedBodyBeforeParsing(t *testing.T) {
 	body := strings.Repeat("x", MaxRequestBodyBytes+1)
 	_, err := Decode(strings.NewReader(body), &sequenceIDs{})

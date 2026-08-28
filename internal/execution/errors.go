@@ -48,16 +48,10 @@ func (e *Error) Error() string {
 	if e == nil {
 		return ""
 	}
-	switch {
-	case e.Path != "" && e.Err != nil:
-		return fmt.Sprintf("%s at %s: %v", e.Code, e.Path, e.Err)
-	case e.Path != "":
+	if e.Path != "" {
 		return fmt.Sprintf("%s at %s", e.Code, e.Path)
-	case e.Err != nil:
-		return fmt.Sprintf("%s: %v", e.Code, e.Err)
-	default:
-		return string(e.Code)
 	}
+	return string(e.Code)
 }
 
 // Unwrap returns the safe underlying cause.

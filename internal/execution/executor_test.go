@@ -2,7 +2,6 @@ package execution
 
 import (
 	"context"
-	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/streaming"
@@ -14,9 +13,4 @@ func (testExecutor) Execute(context.Context, canonical.Request) (streaming.Event
 	return nil, nil
 }
 
-func TestExecutorContractAcceptsCanonicalRequests(t *testing.T) {
-	var executor Executor = testExecutor{}
-	if executor == nil {
-		t.Fatal("executor interface is nil")
-	}
-}
+var _ Executor = testExecutor{}

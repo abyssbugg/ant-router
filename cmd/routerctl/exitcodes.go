@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 
 	"github.com/abyssbugg/ant-router/internal/control"
@@ -31,7 +32,7 @@ func exitCode(err error) int {
 	if errors.Is(err, errUsage) {
 		return ExitUsage
 	}
-	if errors.Is(err, errConnection) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errConnection) {
 		return ExitConnection
 	}
 	if errors.Is(err, errDataPlaneUnavailable) {

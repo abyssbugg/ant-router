@@ -30,10 +30,7 @@ func TestModelIsValidatedAndImmutable(t *testing.T) {
 	if model.Capabilities().Has(canonical.CapabilityImageInput) {
 		t.Fatal("model capabilities changed through returned slice")
 	}
-	var catalog ModelCatalog = testCatalog{models: []Model{model}}
-	if catalog == nil {
-		t.Fatal("model catalog interface is nil")
-	}
+	var _ ModelCatalog = testCatalog{}
 }
 
 func TestNewModelRejectsUnsafeIdentity(t *testing.T) {

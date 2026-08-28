@@ -76,6 +76,20 @@ func TestExecuteDataPlaneEnvJSONAndUnavailable(t *testing.T) {
 	}
 }
 
+func TestExecuteDataPlaneEnvClassifiesCancelledTokenLoad(t *testing.T) {
+	for _, tokenErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		client := &fakeControlClient{
+			status:       control.StatusResponse{Instance: "default", DaemonState: "running", DataPlane: &control.DataPlaneSummary{Enabled: true, BaseURL: "http://127.0.0.1:8787/v1"}},
+			inferenceErr: tokenErr,
+		}
+		var stdout, stderr bytes.Buffer
+		code := execute(context.Background(), cliOptions{}, cliCommand{Name: "data-plane", Action: "env", ShowToken: true}, bytes.NewReader(nil), &stdout, &stderr, client)
+		if code != ExitConnection || stdout.Len() != 0 {
+			t.Fatalf("error %v = code %d stdout %q stderr %q", tokenErr, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
 func inferenceToken(t *testing.T) inferencetoken.Token {
 	t.Helper()
 	token, err := inferencetoken.Parse(strings.Repeat("AQ", 21) + "E")

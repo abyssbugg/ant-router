@@ -47,7 +47,11 @@ func TestOfficialOpenAISDKModelsAndResponses(t *testing.T) {
 	}
 
 	stream := client.Responses.NewStreaming(context.Background(), params)
-	defer stream.Close()
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			t.Errorf("stream Close() failed: %v", closeErr)
+		}
+	}()
 	var delta strings.Builder
 	seenCreated := false
 	seenCompleted := false
@@ -80,7 +84,8 @@ func startSDKServer(t *testing.T) (string, inferencetoken.Token, func()) {
 	if err != nil {
 		t.Fatalf("NewRandom() failed: %v", err)
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listenConfig := net.ListenConfig{}
+	listener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Listen() failed: %v", err)
 	}

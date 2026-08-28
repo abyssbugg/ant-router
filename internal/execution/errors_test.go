@@ -40,8 +40,12 @@ func TestExecutionErrorIsNilSafeAndDoesNotRequireSensitiveValues(t *testing.T) {
 		t.Fatal("typed nil error helpers are not safe")
 	}
 	secret := "never-echo-provider-secret"
-	err := NewError(CodeInternal, "executor", 0, errors.New("safe cause"))
-	if strings.Contains(fmt.Sprint(err), secret) {
-		t.Fatal("execution error exposed unrelated secret")
+	cause := errors.New(secret)
+	err := NewError(CodeInternal, "executor", 0, cause)
+	if strings.Contains(fmt.Sprint(err), secret) || err.Error() != "internal at executor" {
+		t.Fatal("execution error exposed its cause")
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("execution error did not preserve cause identity")
 	}
 }

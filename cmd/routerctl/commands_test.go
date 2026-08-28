@@ -23,6 +23,7 @@ type fakeControlClient struct {
 	proof           control.ConfigValidateResponse
 	closed          bool
 	inferenceToken  inferencetoken.Token
+	inferenceErr    error
 	inferenceLoaded bool
 }
 
@@ -46,7 +47,7 @@ func (f *fakeControlClient) RollbackConfig(context.Context) (control.ConfigMutat
 }
 func (f *fakeControlClient) InferenceToken(context.Context) (inferencetoken.Token, error) {
 	f.inferenceLoaded = true
-	return f.inferenceToken, f.err
+	return f.inferenceToken, f.inferenceErr
 }
 func (f *fakeControlClient) CloseIdleConnections() { f.closed = true }
 
