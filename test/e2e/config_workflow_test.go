@@ -196,6 +196,36 @@ func TestMockResponsesSubprocessWorkflow(t *testing.T) {
 		t.Fatalf("official SDK response text = %q", response.OutputText())
 	}
 
+	image := openairesponses.ResponseInputContentParamOfInputImage(openairesponses.ResponseInputImageDetail("high"))
+	image.OfInputImage.ImageURL = param.NewOpt("https://secret.example/private/image?token=private")
+	visionContext, cancelVision := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelVision()
+	vision, err := client.Responses.New(visionContext, openairesponses.ResponseNewParams{
+		Model: "mock/vision",
+		Input: openairesponses.ResponseNewParamsInputUnion{OfInputItemList: openairesponses.ResponseInputParam{
+			openairesponses.ResponseInputItemParamOfMessage(
+				openairesponses.ResponseInputMessageContentListParam{
+					openairesponses.ResponseInputContentParamOfInputText("inspect"),
+					image,
+				},
+				openairesponses.EasyInputMessageRole("user"),
+			),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("official SDK vision response failed: %v", err)
+	}
+	if vision == nil {
+		t.Fatal("official SDK returned a nil vision response without an error")
+	}
+	wantVision := "images=1\nimage[0]: source=remote mime=unknown detail=high dimensions=unknown"
+	if vision.Model != "mock/vision" || vision.OutputText() != wantVision {
+		t.Fatalf("official SDK vision response = model %q text %q", vision.Model, vision.OutputText())
+	}
+	if bytes.Contains([]byte(vision.OutputText()), []byte("secret.example")) || bytes.Contains([]byte(vision.OutputText()), []byte("token=private")) {
+		t.Fatalf("official SDK vision response leaked image URL: %q", vision.OutputText())
+	}
+
 	request, err := http.NewRequest(http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() failed: %v", err)
