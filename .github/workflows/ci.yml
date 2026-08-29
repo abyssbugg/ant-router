@@ -47,6 +47,7 @@ jobs:
       - run: make streaming-golden
       - run: make streaming-stress
       - run: make phase3a-ci
+      - run: make phase3b-ci
 
   platform-tests:
     name: Tests (${{ matrix.os }})
@@ -75,6 +76,7 @@ jobs:
       - run: go test ./internal/streaming -count=20
       - run: go test ./internal/dataplane -run TestOfficialOpenAISDKModelsAndResponses -count=20
       - run: go test -tags=e2e ./test/e2e -run TestMockResponsesSubprocessWorkflow -count=3 -timeout=5m
+      - run: make phase3b-sdk
 
   fuzz-smoke:
     name: Fuzz smoke
@@ -94,3 +96,4 @@ jobs:
       - run: make canonical-fuzz FUZZ_TIME=10s
       - run: make streaming-fuzz FUZZ_TIME=10s
       - run: make phase3a-fuzz FUZZ_TIME=10s
+      - run: make phase3b-fuzz FUZZ_TIME=10s
