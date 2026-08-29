@@ -20,6 +20,46 @@ func TestRemoteImage(t *testing.T) {
 	}
 }
 
+func TestRemoteImageAllowsUnknownMIME(t *testing.T) {
+	image, err := NewRemoteImage("https://example.com/signed-image?token=redacted", "", ImageDetailAuto, 0, 0)
+	if err != nil {
+		t.Fatalf("NewRemoteImage() failed: %v", err)
+	}
+	if image.MIME() != "" || !image.Valid() {
+		t.Fatalf("remote image MIME=%q valid=%v", image.MIME(), image.Valid())
+	}
+	block, err := NewImageBlock(image)
+	if err != nil {
+		t.Fatalf("NewImageBlock() failed: %v", err)
+	}
+	encoded, err := encodeContent(block)
+	if err != nil {
+		t.Fatalf("encodeContent() failed: %v", err)
+	}
+	decoded, err := decodeContent(encoded)
+	if err != nil {
+		t.Fatalf("decodeContent() failed: %v", err)
+	}
+	reencoded, err := encodeContent(decoded)
+	if err != nil {
+		t.Fatalf("re-encode failed: %v", err)
+	}
+	if !bytes.Equal(encoded, reencoded) {
+		t.Fatalf("remote unknown MIME changed across round trip: %s != %s", encoded, reencoded)
+	}
+	decodedImage, ok := decoded.Image()
+	if !ok || decodedImage.MIME() != "" {
+		t.Fatalf("decoded image MIME=%q ok=%v", decodedImage.MIME(), ok)
+	}
+}
+
+func TestInlineImageRequiresMIME(t *testing.T) {
+	_, err := NewInlineImage([]byte{1, 2, 3}, "", ImageDetailAuto, 0, 0)
+	if codeOfCanonical(err) != CodeUnsupportedMediaType {
+		t.Fatalf("code=%q want=%q; error=%v", codeOfCanonical(err), CodeUnsupportedMediaType, err)
+	}
+}
+
 func TestInlineImageDefensiveCopies(t *testing.T) {
 	input := []byte{1, 2, 3, 4}
 	image, err := NewInlineImage(input, "image/jpeg", ImageDetailAuto, 0, 0)

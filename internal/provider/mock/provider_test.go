@@ -23,7 +23,7 @@ func TestCatalogIsExactSortedAndCapabilityAware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool"}
+	want := []string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
 	if len(models) != len(want) {
 		t.Fatalf("model count = %d", len(models))
 	}
@@ -32,7 +32,7 @@ func TestCatalogIsExactSortedAndCapabilityAware(t *testing.T) {
 			t.Fatalf("model[%d] = %q/%q", index, models[index].Provider(), models[index].ID())
 		}
 	}
-	if !models[1].Capabilities().Has(canonical.CapabilityStructuredOutput) || !models[2].Capabilities().Has(canonical.CapabilityReasoningSummary) || !models[5].Capabilities().Has(canonical.CapabilityTools) {
+	if !models[1].Capabilities().Has(canonical.CapabilityStructuredOutput) || !models[2].Capabilities().Has(canonical.CapabilityReasoningSummary) || !models[5].Capabilities().Has(canonical.CapabilityTools) || !models[6].Capabilities().Has(canonical.CapabilityImageInput) {
 		t.Fatal("scenario capabilities are incomplete")
 	}
 }

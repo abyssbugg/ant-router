@@ -27,7 +27,7 @@ func TestOfficialOpenAISDKModelsAndResponses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Models.List() failed: %v", err)
 	}
-	if len(models.Data) != 6 || models.Data[0].ID != "mock/disconnect" || models.Data[5].ID != "mock/tool" {
+	if len(models.Data) != 7 || models.Data[0].ID != "mock/disconnect" || models.Data[6].ID != "mock/vision" {
 		t.Fatalf("models = %#v", models.Data)
 	}
 

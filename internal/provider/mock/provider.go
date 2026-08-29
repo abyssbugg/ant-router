@@ -81,6 +81,9 @@ func (p *Provider) Execute(ctx context.Context, request canonical.Request) (stre
 	if !ok || !supports(model.Capabilities(), request.Capabilities()) {
 		return nil, execution.NewError(execution.CodeInvalidModel, "request.model", 0, errors.New("model is unavailable"))
 	}
+	if request.Model() == "mock/vision" && requestImageCount(request) == 0 {
+		return nil, execution.NewError(execution.CodeInvalidModel, "request.input", 0, errors.New("vision model requires an image input"))
+	}
 	p.idMu.Lock()
 	events, finalErr, err := buildScript(p.ids, request)
 	p.idMu.Unlock()
@@ -120,12 +123,16 @@ func modelCatalog() ([]execution.Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	vision, err := canonical.NewCapabilitySet(canonical.CapabilityText, canonical.CapabilityImageInput)
+	if err != nil {
+		return nil, err
+	}
 	specs := []struct {
 		id   string
 		caps canonical.CapabilitySet
 	}{
 		{"mock/disconnect", text}, {"mock/json", structured}, {"mock/reasoning", reasoning},
-		{"mock/slow", text}, {"mock/text", text}, {"mock/tool", tools},
+		{"mock/slow", text}, {"mock/text", text}, {"mock/tool", tools}, {"mock/vision", vision},
 	}
 	models := make([]execution.Model, 0, len(specs))
 	for _, spec := range specs {
