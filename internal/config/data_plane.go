@@ -39,7 +39,7 @@ func (c Config) normalized() Config {
 	if c.DataPlane == (DataPlaneConfig{}) {
 		c.DataPlane = defaultDataPlaneConfig()
 	}
-	return c
+	return normalizeProviders(c)
 }
 
 func validateDataPlane(c Config) error {
@@ -57,8 +57,14 @@ func validateDataPlane(c Config) error {
 	if c.DataPlane.ShutdownTimeout.Duration < time.Second || c.DataPlane.ShutdownTimeout.Duration > 5*time.Minute {
 		return &Error{Code: CodeValidationFailed, Path: "data_plane.shutdown_timeout", Err: fmt.Errorf("must be between 1s and 5m")}
 	}
-	if c.DataPlane.Enabled && !c.MockProvider.Enabled {
-		return &Error{Code: CodeValidationFailed, Path: "mock_provider.enabled", Err: fmt.Errorf("must be enabled for the configured data plane")}
+	if c.DataPlane.Enabled {
+		enabled := false
+		for _, provider := range c.Providers {
+			enabled = enabled || provider.Enabled
+		}
+		if !enabled {
+			return &Error{Code: CodeValidationFailed, Path: "providers", Err: fmt.Errorf("at least one provider must be enabled for the configured data plane")}
+		}
 	}
 	return nil
 }

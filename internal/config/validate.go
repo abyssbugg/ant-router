@@ -19,6 +19,9 @@ func (c Config) Validate() error {
 	if valErr := validateDurationBounds(c.Daemon.ShutdownTimeout.Duration, "daemon.shutdown_timeout"); valErr != nil {
 		return valErr
 	}
+	if valErr := validateProviders(c); valErr != nil {
+		return valErr
+	}
 	if valErr := validateDataPlane(c); valErr != nil {
 		return valErr
 	}

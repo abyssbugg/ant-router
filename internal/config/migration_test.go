@@ -2,13 +2,14 @@ package config
 
 import (
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestDecodeMigratesSchemaV1ToV2(t *testing.T) {
+func TestDecodeMigratesSchemaV1ToV3(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(`schema_version = 1
 [daemon]
 shutdown_timeout = "45s"
@@ -16,8 +17,8 @@ shutdown_timeout = "45s"
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if cfg.SchemaVersion != 2 {
-		t.Fatalf("schema version = %d, want 2", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 3 {
+		t.Fatalf("schema version = %d, want 3", cfg.SchemaVersion)
 	}
 	if cfg.Daemon.ShutdownTimeout.Duration != 45*time.Second {
 		t.Fatalf("daemon timeout = %v, want 45s", cfg.Daemon.ShutdownTimeout.Duration)
@@ -44,7 +45,7 @@ enabled = true
 	}
 }
 
-func TestMigratedCanonicalIsSchemaV2(t *testing.T) {
+func TestMigratedCanonicalIsSchemaV3(t *testing.T) {
 	cfg, err := Decode(strings.NewReader("schema_version = 1\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -53,20 +54,20 @@ func TestMigratedCanonicalIsSchemaV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(canonical), "schema_version = 2") {
+	if !strings.Contains(string(canonical), "schema_version = 3") {
 		t.Fatalf("canonical migrated config = %s", canonical)
 	}
 	roundTrip, err := Decode(strings.NewReader(string(canonical)))
 	if err != nil {
 		t.Fatalf("Decode(canonical) error = %v", err)
 	}
-	if roundTrip != cfg {
+	if !reflect.DeepEqual(roundTrip, cfg) {
 		t.Fatalf("round trip = %+v, want %+v", roundTrip, cfg)
 	}
 }
 
 func TestDecodeRejectsUnsupportedSchemaAfterMigrationWindow(t *testing.T) {
-	for _, version := range []int{0, 3, 99} {
+	for _, version := range []int{0, 4, 99} {
 		_, err := Decode(strings.NewReader("schema_version = " + strconv.Itoa(version) + "\n"))
 		var configErr *Error
 		if !errors.As(err, &configErr) || configErr.Code != CodeUnsupportedSchema {
