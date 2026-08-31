@@ -12,6 +12,7 @@ TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windo
 FUZZ_TIME ?= 10s
 export GOTOOLCHAIN ?= local
 
+.PHONY: phase4a-live-compile phase4a-live
 .PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz phase2a-ci streaming-test streaming-race streaming-golden streaming-stress streaming-fuzz phase2b-ci phase3a-test phase3a-race phase3a-fault phase3a-sdk phase3a-stress phase3a-fuzz phase3a-ci phase3b-test phase3b-race phase3b-sdk phase3b-e2e phase3b-stress phase3b-fuzz phase3b-ci build cross-build verify ci clean
 
 fmt-check:
@@ -180,6 +181,15 @@ phase3b-fuzz:
 	$(GO) test ./internal/openai/responses -run '^$$' -fuzz='^FuzzImageDimensions$$' -fuzztime=$(FUZZ_TIME)
 
 phase3b-ci: phase3b-test phase3b-race phase3b-sdk phase3b-e2e phase3b-stress
+
+phase4a-live-compile:
+	$(GO) test -tags=liveopenai ./internal/provider/openai -run '^$$' -count=1
+
+phase4a-live:
+	@test "$${ANT_ROUTER_LIVE_OPENAI:-}" = "1" || { echo "ANT_ROUTER_LIVE_OPENAI=1 is required" >&2; exit 2; }
+	@test -n "$${OPENAI_API_KEY:-}" || { echo "OPENAI_API_KEY is required" >&2; exit 2; }
+	@test -n "$${ANT_ROUTER_LIVE_OPENAI_MODEL:-}" || { echo "ANT_ROUTER_LIVE_OPENAI_MODEL is required" >&2; exit 2; }
+	$(GO) test -tags=liveopenai ./internal/provider/openai -run '^TestLiveOpenAICertification$$' -count=1
 
 build:
 	@mkdir -p $(BIN_DIR)
