@@ -20,7 +20,7 @@ func normalizeProviderError(err error) error {
 		return nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return execution.NewError(execution.CodeUnavailable, "provider.openai", 0, err)
+		return err
 	}
 
 	var apiError *sdk.Error

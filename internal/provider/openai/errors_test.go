@@ -78,7 +78,7 @@ func TestParseRetryAfterHTTPDate(t *testing.T) {
 func TestNormalizeProviderErrorContextAndNetworkFailures(t *testing.T) {
 	for _, contextErr := range []error{context.Canceled, context.DeadlineExceeded} {
 		normalized := normalizeProviderError(contextErr)
-		if !errors.Is(normalized, contextErr) || execution.CodeOf(normalized) != execution.CodeUnavailable {
+		if !errors.Is(normalized, contextErr) || execution.CodeOf(normalized) != "" || execution.Retryable(normalized) {
 			t.Fatalf("context normalization = %v (%q)", normalized, execution.CodeOf(normalized))
 		}
 	}
