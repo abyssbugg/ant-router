@@ -14,17 +14,19 @@ import (
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
 	"github.com/abyssbugg/ant-router/internal/controltransport"
+	"github.com/abyssbugg/ant-router/internal/credential"
 	"github.com/abyssbugg/ant-router/internal/dataplane"
 	"github.com/abyssbugg/ant-router/internal/runtimepaths"
 )
 
 type Options struct {
-	Instance        string
-	StateRoot       string
-	RuntimeRoot     string
-	Build           buildinfo.Info
-	ShutdownTimeout time.Duration
-	DataPlaneListen func(string) (net.Listener, error)
+	Instance         string
+	StateRoot        string
+	RuntimeRoot      string
+	Build            buildinfo.Info
+	ShutdownTimeout  time.Duration
+	DataPlaneListen  func(string) (net.Listener, error)
+	CredentialSource credential.Source
 }
 
 type Daemon struct {
@@ -35,6 +37,7 @@ type Daemon struct {
 	configService   *configservice.Service
 	server          *control.Server
 	dataPlane       *activeDataPlane
+	providers       *providerRuntime
 	startedAt       time.Time
 	shutdownTimeout time.Duration
 	ready           chan struct{}
@@ -77,11 +80,24 @@ func New(options Options) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	credentialSource := options.CredentialSource
+	if credentialSource == nil {
+		credentialSource = credential.NewEnvSource(nil)
+	}
+	configuration := config.Default()
+	if snapshot, ok := manager.Current(); ok {
+		configuration = snapshot.Config()
+	}
+	providers, err := buildProviderRuntime(configuration, credentialSource)
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
 	dataPlaneListen := options.DataPlaneListen
 	if dataPlaneListen == nil {
 		dataPlaneListen = dataplane.ListenLoopback
 	}
-	dataPlane, err := buildDataPlane(paths, manager, dataPlaneListen)
+	dataPlane, err := buildDataPlane(paths, manager, providers, dataPlaneListen)
 	if err != nil {
 		_ = listener.Close()
 		return nil, err
@@ -100,6 +116,7 @@ func New(options Options) (*Daemon, error) {
 		lifecycle:       app.NewLifecycle(),
 		configService:   service,
 		dataPlane:       dataPlane,
+		providers:       providers,
 		startedAt:       time.Now().UTC(),
 		shutdownTimeout: shutdownTimeout,
 		ready:           make(chan struct{}),
@@ -199,5 +216,9 @@ func (d *Daemon) Status(ctx context.Context) (control.RuntimeStatus, error) {
 		copyValue := d.dataPlane.status
 		dataPlane = &copyValue
 	}
-	return control.RuntimeStatus{Instance: d.paths.Instance.String(), DaemonState: state, StartedAt: d.startedAt, Config: summary, DataPlane: dataPlane}, nil
+	providers, err := d.providers.summaries(ctx)
+	if err != nil {
+		return control.RuntimeStatus{}, err
+	}
+	return control.RuntimeStatus{Instance: d.paths.Instance.String(), DaemonState: state, StartedAt: d.startedAt, Config: summary, DataPlane: dataPlane, Providers: providers}, nil
 }

@@ -274,6 +274,9 @@ func validateStatusResponse(response StatusResponse) error {
 	if response.DataPlane != nil && !validDataPlaneSummary(*response.DataPlane) {
 		return errors.New("status response is invalid")
 	}
+	if !validProviderSummaries(response.Providers) {
+		return errors.New("status response is invalid")
+	}
 	return nil
 }
 

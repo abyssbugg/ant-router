@@ -30,6 +30,15 @@ type DataPlaneSummary struct {
 	BaseURL string `json:"base_url"`
 }
 
+// ProviderSummary is safe provider availability metadata for control clients.
+type ProviderSummary struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Available bool   `json:"available"`
+	Code      string `json:"code,omitempty"`
+	Reference string `json:"reference,omitempty"`
+}
+
 type StatusResponse struct {
 	Instance      string            `json:"instance"`
 	DaemonState   string            `json:"daemon_state"`
@@ -37,4 +46,5 @@ type StatusResponse struct {
 	UptimeSeconds int64             `json:"uptime_seconds"`
 	Config        *ConfigSummary    `json:"config,omitempty"`
 	DataPlane     *DataPlaneSummary `json:"data_plane,omitempty"`
+	Providers     []ProviderSummary `json:"providers,omitempty"`
 }
