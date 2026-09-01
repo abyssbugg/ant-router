@@ -10,7 +10,7 @@ import (
 
 func TestExecutionErrorCodesAndRetryRules(t *testing.T) {
 	cause := errors.New("safe cause")
-	for _, code := range []ErrorCode{CodeInvalidModel, CodeUnavailable, CodeRateLimited, CodeInternal} {
+	for _, code := range []ErrorCode{CodeInvalidModel, CodeInvalidRequest, CodeAuthenticationFailed, CodePermissionDenied, CodeUnavailable, CodeRateLimited, CodeInternal} {
 		retry := time.Duration(0)
 		if code == CodeRateLimited {
 			retry = 2 * time.Second
@@ -21,6 +21,19 @@ func TestExecutionErrorCodesAndRetryRules(t *testing.T) {
 		}
 		if RetryAfter(err) != retry {
 			t.Fatalf("RetryAfter(%q) = %v, want %v", code, RetryAfter(err), retry)
+		}
+	}
+}
+
+func TestExecutionErrorRetryability(t *testing.T) {
+	for _, code := range []ErrorCode{CodeUnavailable, CodeRateLimited} {
+		if !Retryable(NewError(code, "provider", 0, nil)) {
+			t.Fatalf("%q must be retryable", code)
+		}
+	}
+	for _, code := range []ErrorCode{CodeInvalidModel, CodeInvalidRequest, CodeAuthenticationFailed, CodePermissionDenied, CodeInternal} {
+		if Retryable(NewError(code, "provider", 0, nil)) {
+			t.Fatalf("%q must not be retryable", code)
 		}
 	}
 }

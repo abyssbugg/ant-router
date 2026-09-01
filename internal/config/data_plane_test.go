@@ -9,11 +9,11 @@ import (
 
 func TestDefaultDataPlaneConfiguration(t *testing.T) {
 	cfg := Default()
-	if cfg.SchemaVersion != 2 {
-		t.Fatalf("schema version = %d, want 2", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 3 {
+		t.Fatalf("schema version = %d, want 3", cfg.SchemaVersion)
 	}
-	if cfg.DataPlane.Enabled || cfg.MockProvider.Enabled {
-		t.Fatal("data plane and mock provider must default to disabled")
+	if cfg.DataPlane.Enabled || cfg.MockProvider.Enabled || len(cfg.Providers) != 0 {
+		t.Fatal("data plane and providers must default to disabled")
 	}
 	if cfg.DataPlane.Listen != "127.0.0.1:8787" {
 		t.Fatalf("listen = %q, want loopback default", cfg.DataPlane.Listen)
@@ -39,8 +39,8 @@ enabled = true
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if !cfg.DataPlane.Enabled || !cfg.MockProvider.Enabled {
-		t.Fatal("enabled sections were not preserved")
+	if !cfg.DataPlane.Enabled || !cfg.MockProvider.Enabled || len(cfg.Providers) != 1 || cfg.Providers[0].Kind != ProviderKindMock {
+		t.Fatal("enabled schema v2 mock provider was not migrated")
 	}
 	if cfg.DataPlane.Listen != "127.0.0.1:9876" || cfg.DataPlane.MaxConcurrentRequests != 64 {
 		t.Fatalf("data plane = %+v", cfg.DataPlane)
@@ -53,7 +53,7 @@ enabled = true
 func TestDataPlaneValidation(t *testing.T) {
 	valid := Default()
 	valid.DataPlane.Enabled = true
-	valid.MockProvider.Enabled = true
+	valid.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 
 	tests := []struct {
 		name string
@@ -69,7 +69,7 @@ func TestDataPlaneValidation(t *testing.T) {
 		{"excess concurrency", func(c *Config) { c.DataPlane.MaxConcurrentRequests = 1025 }, "data_plane.max_concurrent_requests"},
 		{"short shutdown", func(c *Config) { c.DataPlane.ShutdownTimeout = Duration{500 * time.Millisecond} }, "data_plane.shutdown_timeout"},
 		{"long shutdown", func(c *Config) { c.DataPlane.ShutdownTimeout = Duration{6 * time.Minute} }, "data_plane.shutdown_timeout"},
-		{"mock disabled", func(c *Config) { c.MockProvider.Enabled = false }, "mock_provider.enabled"},
+		{"providers disabled", func(c *Config) { c.Providers[0].Enabled = false }, "providers"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestDataPlaneValidation(t *testing.T) {
 func TestValidateForInstanceRequiresDistinctNamedPort(t *testing.T) {
 	cfg := Default()
 	cfg.DataPlane.Enabled = true
-	cfg.MockProvider.Enabled = true
+	cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 	if err := cfg.ValidateForInstance("default"); err != nil {
 		t.Fatalf("default instance: %v", err)
 	}
@@ -117,9 +117,12 @@ func TestCanonicalIncludesDataPlaneSections(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(canonical)
-	for _, want := range []string{"schema_version = 2", "[data_plane]", "listen = '127.0.0.1:8787'", "[mock_provider]"} {
+	for _, want := range []string{"schema_version = 3", "[data_plane]", "listen = '127.0.0.1:8787'"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("canonical config missing %q: %s", want, text)
 		}
+	}
+	if strings.Contains(text, "mock_provider") {
+		t.Fatalf("canonical config contains legacy mock_provider: %s", text)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/dataplane"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
-	"github.com/abyssbugg/ant-router/internal/provider/mock"
 	"github.com/abyssbugg/ant-router/internal/runtimepaths"
 )
 
@@ -28,7 +27,7 @@ func (d *activeDataPlane) closeBeforeStart() {
 	}
 }
 
-func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, listen func(string) (net.Listener, error)) (*activeDataPlane, error) {
+func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, providers *providerRuntime, listen func(string) (net.Listener, error)) (*activeDataPlane, error) {
 	snapshot, ok := manager.Current()
 	if !ok {
 		return nil, nil
@@ -48,14 +47,13 @@ func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, listen fu
 	if err != nil {
 		return nil, err
 	}
-	provider, err := mock.NewRandom(0)
-	if err != nil {
-		return nil, err
+	if providers == nil || providers.registry == nil {
+		return nil, fmt.Errorf("provider registry is unavailable")
 	}
 	handler, err := dataplane.NewHandler(dataplane.HandlerOptions{
 		TokenSource:    dataplane.StaticTokenSource(token),
-		Executor:       provider,
-		Catalog:        provider,
+		Executor:       providers.registry,
+		Catalog:        providers.registry,
 		ListenAddress:  configuration.DataPlane.Listen,
 		MaxConcurrent:  configuration.DataPlane.MaxConcurrentRequests,
 		RequestTimeout: dataPlaneRequestTimeout,

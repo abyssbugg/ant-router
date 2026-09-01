@@ -61,6 +61,7 @@ func buildStatusResponse(status RuntimeStatus, now time.Time) StatusResponse {
 		copyValue := *status.DataPlane
 		dataPlaneCopy = &copyValue
 	}
+	providers := append([]ProviderSummary(nil), status.Providers...)
 	return StatusResponse{
 		Instance:      status.Instance,
 		DaemonState:   status.DaemonState,
@@ -68,5 +69,6 @@ func buildStatusResponse(status RuntimeStatus, now time.Time) StatusResponse {
 		UptimeSeconds: int64(uptime.Seconds()),
 		Config:        configCopy,
 		DataPlane:     dataPlaneCopy,
+		Providers:     providers,
 	}
 }

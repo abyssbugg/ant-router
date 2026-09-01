@@ -10,11 +10,14 @@ import (
 type ErrorCode string
 
 const (
-	CodeInvalidError ErrorCode = "invalid_error"
-	CodeInvalidModel ErrorCode = "invalid_model"
-	CodeUnavailable  ErrorCode = "unavailable"
-	CodeRateLimited  ErrorCode = "rate_limited"
-	CodeInternal     ErrorCode = "internal"
+	CodeInvalidError         ErrorCode = "invalid_error"
+	CodeInvalidModel         ErrorCode = "invalid_model"
+	CodeInvalidRequest       ErrorCode = "invalid_request"
+	CodeAuthenticationFailed ErrorCode = "authentication_failed"
+	CodePermissionDenied     ErrorCode = "permission_denied"
+	CodeUnavailable          ErrorCode = "unavailable"
+	CodeRateLimited          ErrorCode = "rate_limited"
+	CodeInternal             ErrorCode = "internal"
 )
 
 // Error carries a stable code, safe path, optional retry delay, and safe cause.
@@ -36,7 +39,7 @@ func NewError(code ErrorCode, path string, retryAfter time.Duration, cause error
 // Valid reports whether code is a supported execution category.
 func (code ErrorCode) Valid() bool {
 	switch code {
-	case CodeInvalidError, CodeInvalidModel, CodeUnavailable, CodeRateLimited, CodeInternal:
+	case CodeInvalidError, CodeInvalidModel, CodeInvalidRequest, CodeAuthenticationFailed, CodePermissionDenied, CodeUnavailable, CodeRateLimited, CodeInternal:
 		return true
 	default:
 		return false
@@ -69,6 +72,17 @@ func CodeOf(err error) ErrorCode {
 		return target.Code
 	}
 	return ""
+}
+
+// Retryable reports whether a future routing policy may retry before commitment.
+// Provider adapters and the registry never retry on their own.
+func Retryable(err error) bool {
+	switch CodeOf(err) {
+	case CodeUnavailable, CodeRateLimited:
+		return true
+	default:
+		return false
+	}
 }
 
 // RetryAfter extracts a validated retry delay through wrapped errors.

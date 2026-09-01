@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
 	"github.com/abyssbugg/ant-router/internal/controltransport"
+	"github.com/abyssbugg/ant-router/internal/credential"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
@@ -174,6 +176,96 @@ func TestDaemonStartsConfiguredInferenceDataPlane(t *testing.T) {
 	cancelSecond()
 	if err := <-secondDone; err != nil {
 		t.Fatalf("configured daemon failed: %v", err)
+	}
+}
+
+func TestDaemonReportsMissingOpenAICredentialAndOmitsItsModels(t *testing.T) {
+	stateRoot := t.TempDir()
+	runtimeRoot := shortRuntimeRoot(t)
+	options := daemonOptions(t, stateRoot, runtimeRoot)
+	options.CredentialSource = credential.NewEnvSource(func(string) (string, bool) { return "", false })
+	listenConfig := net.ListenConfig{}
+	dataListener, err := listenConfig.Listen(context.Background(), "tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dataListener.Close() })
+	address := dataListener.Addr().String()
+	listenerUsed := false
+	options.DataPlaneListen = func(requested string) (net.Listener, error) {
+		if requested != address || listenerUsed {
+			t.Fatalf("data-plane listen request = %q used %t", requested, listenerUsed)
+		}
+		listenerUsed = true
+		return dataListener, nil
+	}
+
+	first, cancelFirst, firstDone := startDaemon(t, options)
+	client := daemonClient(t, first)
+	tomlBytes := []byte("schema_version = 3\n[data_plane]\nenabled = true\nlisten = \"" + address + "\"\nmax_concurrent_requests = 4\nshutdown_timeout = \"2s\"\n[[providers]]\nid = \"mock\"\nkind = \"mock\"\nenabled = true\n[[providers]]\nid = \"openai-primary\"\nkind = \"openai\"\nenabled = true\n[providers.credential]\nsource = \"env\"\nname = \"OPENAI_API_KEY\"\n[[providers.models]]\nalias = \"openai/gpt-test\"\nupstream = \"gpt-test\"\ncapabilities = [\"text\"]\n")
+	proof, err := client.ValidateConfig(context.Background(), tomlBytes)
+	if err != nil {
+		t.Fatalf("ValidateConfig() failed: %v", err)
+	}
+	if _, err := client.ApplyConfig(context.Background(), tomlBytes, proof); err != nil {
+		t.Fatalf("ApplyConfig() failed: %v", err)
+	}
+	cancelFirst()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("bootstrap daemon failed: %v", err)
+	}
+
+	second, cancelSecond, secondDone := startDaemon(t, options)
+	defer func() {
+		cancelSecond()
+		if err := <-secondDone; err != nil {
+			t.Errorf("configured daemon failed: %v", err)
+		}
+	}()
+	status, err := daemonClient(t, second).Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() failed: %v", err)
+	}
+	if len(status.Providers) != 2 || status.Providers[0].ID != "mock" || !status.Providers[0].Available {
+		t.Fatalf("providers = %#v", status.Providers)
+	}
+	openAI := status.Providers[1]
+	if openAI.ID != "openai-primary" || openAI.Available || openAI.Code != "authentication_failed" || openAI.Reference != "OPENAI_API_KEY" {
+		t.Fatalf("OpenAI provider = %#v", openAI)
+	}
+	store, err := inferencetoken.NewStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := store.Load(second.paths.Instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, status.DataPlane.BaseURL+"/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token.String())
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("GET /models failed: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	var document struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		t.Fatalf("decode models failed: %v", err)
+	}
+	if response.StatusCode != http.StatusOK || len(document.Data) != 7 {
+		t.Fatalf("models status/data = %d, %#v", response.StatusCode, document.Data)
+	}
+	for _, model := range document.Data {
+		if len(model.ID) >= len("openai/") && model.ID[:len("openai/")] == "openai/" {
+			t.Fatalf("unavailable OpenAI model advertised: %q", model.ID)
+		}
 	}
 }
 

@@ -18,6 +18,7 @@ type RuntimeStatus struct {
 	StartedAt   time.Time
 	Config      *ConfigSummary
 	DataPlane   *DataPlaneSummary
+	Providers   []ProviderSummary
 }
 
 func (s RuntimeStatus) Validate() error {
@@ -45,6 +46,9 @@ func (s RuntimeStatus) Validate() error {
 	if s.DataPlane != nil && !validDataPlaneSummary(*s.DataPlane) {
 		return errors.New("runtime status is invalid")
 	}
+	if !validProviderSummaries(s.Providers) {
+		return errors.New("runtime status is invalid")
+	}
 	return nil
 }
 
@@ -58,6 +62,59 @@ func validDataPlaneSummary(summary DataPlaneSummary) bool {
 	}
 	address, err := netip.ParseAddrPort(parsed.Host)
 	return err == nil && address.Addr().Is4() && address.Addr().IsLoopback() && address.Port() != 0
+}
+
+func validProviderSummaries(providers []ProviderSummary) bool {
+	for index, provider := range providers {
+		if !validProviderIdentity(provider.ID) || provider.Kind != "mock" && provider.Kind != "openai" {
+			return false
+		}
+		if index > 0 && providers[index-1].ID >= provider.ID {
+			return false
+		}
+		if provider.Available {
+			if provider.Code != "" || provider.Reference != "" {
+				return false
+			}
+			continue
+		}
+		switch provider.Code {
+		case "unavailable", "authentication_failed", "permission_denied", "rate_limited", "internal":
+		default:
+			return false
+		}
+		if !validProviderReference(provider.Reference) {
+			return false
+		}
+	}
+	return true
+}
+
+func validProviderIdentity(value string) bool {
+	if len(value) == 0 || len(value) > 64 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for index := 1; index < len(value); index++ {
+		character := value[index]
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validProviderReference(value string) bool {
+	if len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_' || character == '-' || character == '.' || character == ':' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // StatusProvider returns an immutable runtime status and must honor cancellation.

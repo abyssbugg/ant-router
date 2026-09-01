@@ -22,7 +22,7 @@ type Snapshot struct {
 	sourceError error
 }
 
-func (s Snapshot) Config() Config         { return s.config }
+func (s Snapshot) Config() Config         { return s.config.clone() }
 func (s Snapshot) RevisionID() RevisionID { return s.revisionID }
 func (s Snapshot) SourcePath() string     { return s.sourcePath }
 func (s Snapshot) Generation() uint64     { return s.generation }

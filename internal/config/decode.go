@@ -19,6 +19,7 @@ type wireConfig struct {
 	Daemon        *wireDaemon       `toml:"daemon"`
 	DataPlane     *wireDataPlane    `toml:"data_plane"`
 	MockProvider  *wireMockProvider `toml:"mock_provider"`
+	Providers     []wireProvider    `toml:"providers"`
 	_             struct{}          `toml:"" json:"-"` // Catch unknown fields at root
 }
 
@@ -39,6 +40,28 @@ type wireDataPlane struct {
 type wireMockProvider struct {
 	Enabled *bool    `toml:"enabled"`
 	_       struct{} `toml:"" json:"-"`
+}
+
+type wireProvider struct {
+	ID         *string             `toml:"id"`
+	Kind       *string             `toml:"kind"`
+	Enabled    *bool               `toml:"enabled"`
+	Credential *wireCredential     `toml:"credential"`
+	Models     []wireProviderModel `toml:"models"`
+	_          struct{}            `toml:"" json:"-"`
+}
+
+type wireCredential struct {
+	Source *string  `toml:"source"`
+	Name   *string  `toml:"name"`
+	_      struct{} `toml:"" json:"-"`
+}
+
+type wireProviderModel struct {
+	Alias        *string   `toml:"alias"`
+	Upstream     *string   `toml:"upstream"`
+	Capabilities *[]string `toml:"capabilities"`
+	_            struct{}  `toml:"" json:"-"`
 }
 
 // Decode decodes a Config from a TOML reader with strict validation.
@@ -112,7 +135,7 @@ func Decode(r io.Reader) (Config, error) {
 		}
 	}
 
-	// Accept legacy v1 only as input and normalize every in-memory config to v2.
+	// Accept legacy v1/v2 only as input and normalize every in-memory config to v3.
 	switch *wire.SchemaVersion {
 	case LegacySchemaVersion:
 		if wire.DataPlane != nil {
@@ -121,7 +144,17 @@ func Decode(r io.Reader) (Config, error) {
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 1")}
 		}
+		if wire.Providers != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "providers", Err: fmt.Errorf("field is unavailable in schema version 1")}
+		}
+	case PreviousSchemaVersion:
+		if wire.Providers != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "providers", Err: fmt.Errorf("field is unavailable in schema version 2")}
+		}
 	case SchemaVersion:
+		if wire.MockProvider != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 3")}
+		}
 	default:
 		return Config{}, &Error{Code: CodeUnsupportedSchema, Path: "schema_version", Err: fmt.Errorf("unsupported schema version %d", *wire.SchemaVersion)}
 	}
@@ -166,11 +199,52 @@ func Decode(r io.Reader) (Config, error) {
 			cfg.DataPlane.ShutdownTimeout = parsed
 		}
 	}
-	if wire.MockProvider != nil && wire.MockProvider.Enabled != nil {
-		cfg.MockProvider.Enabled = *wire.MockProvider.Enabled
+	if *wire.SchemaVersion == PreviousSchemaVersion && wire.MockProvider != nil && wire.MockProvider.Enabled != nil && *wire.MockProvider.Enabled {
+		cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
+	}
+	if *wire.SchemaVersion == SchemaVersion {
+		if wire.Providers != nil {
+			cfg.Providers = make([]ProviderConfig, len(wire.Providers))
+		}
+		for i, provider := range wire.Providers {
+			converted := ProviderConfig{}
+			if provider.ID != nil {
+				converted.ID = *provider.ID
+			}
+			if provider.Kind != nil {
+				converted.Kind = ProviderKind(*provider.Kind)
+			}
+			if provider.Enabled != nil {
+				converted.Enabled = *provider.Enabled
+			}
+			if provider.Credential != nil {
+				converted.Credential = &CredentialRef{}
+				if provider.Credential.Source != nil {
+					converted.Credential.Source = CredentialSourceKind(*provider.Credential.Source)
+				}
+				if provider.Credential.Name != nil {
+					converted.Credential.Name = *provider.Credential.Name
+				}
+			}
+			if provider.Models != nil {
+				converted.Models = make([]ProviderModelConfig, len(provider.Models))
+			}
+			for j, model := range provider.Models {
+				if model.Alias != nil {
+					converted.Models[j].Alias = *model.Alias
+				}
+				if model.Upstream != nil {
+					converted.Models[j].Upstream = *model.Upstream
+				}
+				if model.Capabilities != nil {
+					converted.Models[j].Capabilities = append([]string(nil), (*model.Capabilities)...)
+				}
+			}
+			cfg.Providers[i] = converted
+		}
 	}
 
-	// Validate the final normalized configuration.
+	cfg = cfg.normalized()
 	if valErr := cfg.Validate(); valErr != nil {
 		return Config{}, valErr
 	}

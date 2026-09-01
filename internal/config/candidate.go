@@ -32,7 +32,7 @@ func NewCandidate(cfg Config, sourcePath string, baseGeneration uint64) (Candida
 	}
 
 	return Candidate{
-		config:         cfg,
+		config:         cfg.clone(),
 		canonical:      canonical,
 		revisionID:     revisionID,
 		sourcePath:     cleanSourcePath,
@@ -56,7 +56,7 @@ func LoadCandidate(path string, baseGeneration uint64) (Candidate, error) {
 
 // Config returns the underlying Config.
 func (c Candidate) Config() Config {
-	return c.config
+	return c.config.clone()
 }
 
 // Canonical returns a copy of the canonical TOML bytes.

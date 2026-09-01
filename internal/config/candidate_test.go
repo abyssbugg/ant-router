@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -16,7 +17,7 @@ func TestNewCandidateBasic(t *testing.T) {
 		t.Fatalf("NewCandidate failed: %v", err)
 	}
 
-	if cand.Config() != cfg {
+	if !reflect.DeepEqual(cand.Config(), cfg) {
 		t.Error("Config() mismatch")
 	}
 
@@ -195,7 +196,7 @@ shutdown_timeout = "30s"
 	// Verify config is loaded correctly
 	cfg := cand.Config()
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("SchemaVersion = %d, want 2", cfg.SchemaVersion)
+		t.Errorf("SchemaVersion = %d, want 3", cfg.SchemaVersion)
 	}
 }
 

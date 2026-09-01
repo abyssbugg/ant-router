@@ -8,10 +8,12 @@ CANONICAL_PACKAGES := ./internal/canonical ./internal/canonicaljson
 STREAMING_PACKAGES := ./internal/streaming
 PHASE3A_PACKAGES := ./internal/openai/responses ./internal/provider/mock ./internal/dataplane ./internal/daemon ./cmd/routerctl
 PHASE3B_PACKAGES := ./internal/openai/responses ./internal/provider/mock ./internal/dataplane
+PHASE4A_PACKAGES := ./internal/config ./internal/credential ./internal/execution ./internal/provider/openai ./internal/daemon ./internal/control
 TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 FUZZ_TIME ?= 10s
 export GOTOOLCHAIN ?= local
 
+.PHONY: phase4a-test phase4a-race phase4a-contract phase4a-fault phase4a-stress phase4a-fuzz phase4a-ci phase4a-live-compile phase4a-live
 .PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz phase2a-ci streaming-test streaming-race streaming-golden streaming-stress streaming-fuzz phase2b-ci phase3a-test phase3a-race phase3a-fault phase3a-sdk phase3a-stress phase3a-fuzz phase3a-ci phase3b-test phase3b-race phase3b-sdk phase3b-e2e phase3b-stress phase3b-fuzz phase3b-ci build cross-build verify ci clean
 
 fmt-check:
@@ -181,6 +183,36 @@ phase3b-fuzz:
 
 phase3b-ci: phase3b-test phase3b-race phase3b-sdk phase3b-e2e phase3b-stress
 
+phase4a-test:
+	$(GO) test $(PHASE4A_PACKAGES) -count=100
+
+phase4a-race:
+	$(GO) test -race $(PHASE4A_PACKAGES)
+
+phase4a-contract:
+	$(GO) test ./internal/provider/openai -run '^TestOpenAIProviderLocalContract' -count=20
+	$(GO) test ./internal/daemon -run '^TestDaemonReportsMissingOpenAICredentialAndOmitsItsModels$$' -count=20
+
+phase4a-fault:
+	$(GO) test ./internal/provider/openai -run 'Test(OpenAIProviderLocalContractRejectsMalformedAndSequenceGap|OpenAIProviderLocalContractNormalizesHTTPFailuresWithoutRetry|SecureHTTPClientBoundsWireResponse|EventSourceRejectsSequenceGapsAndUnsupportedEvents|EventSourceProtocolFailurePoisonsStream|ProviderNormalizesStarterAndCancellationErrors|NormalizeProviderErrorBoundsRetryAfter)' -count=20
+
+phase4a-stress:
+	$(GO) test -race -tags=phase4astress ./internal/provider/openai -run '^TestOpenAIProviderConcurrentStress$$' -count=3
+
+phase4a-fuzz:
+	$(GO) test ./internal/provider/openai -run='^$$' -fuzz='^FuzzOpenAIEventSourceRawEvent$$' -fuzztime=$(FUZZ_TIME)
+
+phase4a-ci: phase4a-test phase4a-race phase4a-contract phase4a-fault phase4a-stress phase4a-live-compile
+
+phase4a-live-compile:
+	$(GO) test -tags=liveopenai ./internal/provider/openai -run '^$$' -count=1
+
+phase4a-live:
+	@test "$${ANT_ROUTER_LIVE_OPENAI:-}" = "1" || { echo "ANT_ROUTER_LIVE_OPENAI=1 is required" >&2; exit 2; }
+	@test -n "$${OPENAI_API_KEY:-}" || { echo "OPENAI_API_KEY is required" >&2; exit 2; }
+	@test -n "$${ANT_ROUTER_LIVE_OPENAI_MODEL:-}" || { echo "ANT_ROUTER_LIVE_OPENAI_MODEL is required" >&2; exit 2; }
+	$(GO) test -tags=liveopenai ./internal/provider/openai -run '^TestLiveOpenAICertification$$' -count=1
+
 build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BIN_DIR)/routerd ./cmd/routerd
@@ -202,7 +234,7 @@ cross-build:
 
 verify: fmt-check vet test test-race build cross-build
 
-ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault canonical-test canonical-golden canonical-stress streaming-test streaming-golden streaming-stress phase3a-test phase3a-fault phase3a-sdk phase3a-stress phase3b-test phase3b-sdk phase3b-e2e phase3b-stress
+ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault canonical-test canonical-golden canonical-stress streaming-test streaming-golden streaming-stress phase3a-test phase3a-fault phase3a-sdk phase3a-stress phase3b-test phase3b-sdk phase3b-e2e phase3b-stress phase4a-ci
 
 clean:
 	rm -rf $(BIN_DIR)

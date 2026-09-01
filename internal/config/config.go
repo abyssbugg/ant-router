@@ -4,17 +4,20 @@ import "time"
 
 const (
 	LegacySchemaVersion    = 1
-	SchemaVersion          = 2
+	PreviousSchemaVersion  = 2
+	SchemaVersion          = 3
 	DefaultShutdownTimeout = 30 * time.Second
 )
 
 // Config represents the root configuration structure.
 // Direct construction with invalid values is defended by Validate().
 type Config struct {
-	SchemaVersion int                `toml:"schema_version"`
-	Daemon        DaemonConfig       `toml:"daemon"`
-	DataPlane     DataPlaneConfig    `toml:"data_plane"`
-	MockProvider  MockProviderConfig `toml:"mock_provider"`
+	SchemaVersion int              `toml:"schema_version"`
+	Daemon        DaemonConfig     `toml:"daemon"`
+	DataPlane     DataPlaneConfig  `toml:"data_plane"`
+	Providers     []ProviderConfig `toml:"providers,omitempty"`
+	// MockProvider is an unencoded compatibility shadow removed after daemon registry wiring.
+	MockProvider MockProviderConfig `toml:"-"`
 }
 
 // DaemonConfig contains daemon-specific configuration
