@@ -89,9 +89,10 @@ func TestRequestCrossInvariantRejections(t *testing.T) {
 	if _, err := NewRequest(RequestParams{ID: testRequestID(t, 1), Model: "model", Input: []Item{messageItem}, Tools: []ToolDefinition{tool}, ToolChoice: unknownChoice}); err == nil {
 		t.Error("unknown specific tool choice accepted")
 	}
-	continuation, _ := NewContinuation("openai", "other-model", []byte{1})
-	if _, err := NewRequest(RequestParams{ID: testRequestID(t, 1), Model: "model", Input: []Item{messageItem}, Continuation: &continuation}); codeOfCanonical(err) != CodeContinuationAffinityRequired {
-		t.Errorf("continuation mismatch code = %q", codeOfCanonical(err))
+	continuation, _ := NewContinuation("openai-primary", "gpt-upstream", []byte{1})
+	request, err := NewRequest(RequestParams{ID: testRequestID(t, 1), Model: "openai/public", Input: []Item{messageItem}, Continuation: &continuation})
+	if err != nil || !request.Valid() {
+		t.Fatalf("provider-affine continuation rejected before registry resolution: %v", err)
 	}
 }
 
