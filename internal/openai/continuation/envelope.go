@@ -37,6 +37,30 @@ func NewContinuationEntry(canonicalItemID canonical.ItemID, upstreamItemID, encr
 	return ContinuationEntry{entry: envelope.entries[0]}, nil
 }
 
+// CanonicalItemID returns the canonical reasoning item anchor.
+func (e ContinuationEntry) CanonicalItemID() canonical.ItemID { return e.entry.canonicalItemID }
+
+// UpstreamItemID returns the original OpenAI reasoning item ID.
+func (e ContinuationEntry) UpstreamItemID() string { return e.entry.upstreamItemID }
+
+// EncryptedContent returns opaque OpenAI-encrypted reasoning content. Callers
+// must use it only in an authorized OpenAI wire payload and must never log it.
+func (e ContinuationEntry) EncryptedContent() string { return e.entry.encryptedContent }
+
+// DecodeContinuation strictly decodes and validates an opaque continuation for
+// the expected affinity and optional allowed canonical reasoning anchors.
+func DecodeContinuation(value canonical.Continuation, providerID, upstreamModel string, allowedAnchors []canonical.ItemID) ([]ContinuationEntry, error) {
+	envelope, err := decodeContinuationEnvelope(value, providerID, upstreamModel, allowedAnchors)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]ContinuationEntry, len(envelope.entries))
+	for index, entry := range envelope.entries {
+		entries[index] = ContinuationEntry{entry: entry}
+	}
+	return entries, nil
+}
+
 // EncodeContinuation creates a deterministic provider/upstream-affine opaque
 // continuation from ordered validated entries.
 func EncodeContinuation(providerID, upstreamModel string, entries []ContinuationEntry) (canonical.Continuation, error) {

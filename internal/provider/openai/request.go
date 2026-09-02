@@ -9,6 +9,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 	"github.com/abyssbugg/ant-router/internal/execution"
+	openaicontinuation "github.com/abyssbugg/ant-router/internal/openai/continuation"
 	"github.com/openai/openai-go/v3/packages/param"
 	sdkresponses "github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
@@ -21,14 +22,22 @@ func mapRequest(request canonical.Request, upstreamModel string) (sdkresponses.R
 	if upstreamModel == "" {
 		return sdkresponses.ResponseNewParams{}, requestMapError("provider.model")
 	}
-	if request.Continuation() != nil {
-		return sdkresponses.ResponseNewParams{}, requestMapError("continuation")
-	}
 	if _, ok := request.Sampling().Seed(); ok {
 		return sdkresponses.ResponseNewParams{}, requestMapError("sampling.seed")
 	}
 
-	input, err := mapInput(request.Input())
+	replay := make(map[string]openaicontinuation.ContinuationEntry)
+	if continuation := request.Continuation(); continuation != nil {
+		anchors := reasoningItemIDs(request.Input())
+		entries, err := openaicontinuation.DecodeContinuation(*continuation, continuation.Provider(), upstreamModel, anchors)
+		if err != nil {
+			return sdkresponses.ResponseNewParams{}, requestMapError("continuation")
+		}
+		for _, entry := range entries {
+			replay[entry.CanonicalItemID().String()] = entry
+		}
+	}
+	input, err := mapInput(request.Input(), replay)
 	if err != nil {
 		return sdkresponses.ResponseNewParams{}, err
 	}
@@ -46,10 +55,12 @@ func mapRequest(request canonical.Request, upstreamModel string) (sdkresponses.R
 	}
 
 	result := sdkresponses.ResponseNewParams{
-		Model: shared.ResponsesModel(upstreamModel),
-		Input: sdkresponses.ResponseNewParamsInputUnion{OfInputItemList: input},
-		Tools: tools,
-		Text:  text,
+		Model:   shared.ResponsesModel(upstreamModel),
+		Input:   sdkresponses.ResponseNewParamsInputUnion{OfInputItemList: input},
+		Tools:   tools,
+		Text:    text,
+		Store:   param.NewOpt(false),
+		Include: []sdkresponses.ResponseIncludable{sdkresponses.ResponseIncludable("reasoning.encrypted_content")},
 	}
 	if len(tools) > 0 {
 		result.ToolChoice = choice
@@ -73,7 +84,7 @@ func mapRequest(request canonical.Request, upstreamModel string) (sdkresponses.R
 	return result, nil
 }
 
-func mapInput(items []canonical.Item) (sdkresponses.ResponseInputParam, error) {
+func mapInput(items []canonical.Item, replay map[string]openaicontinuation.ContinuationEntry) (sdkresponses.ResponseInputParam, error) {
 	result := make(sdkresponses.ResponseInputParam, 0, len(items))
 	for index, item := range items {
 		path := "input[" + jsonIndex(index) + "]"
@@ -102,12 +113,34 @@ func mapInput(items []canonical.Item) (sdkresponses.ResponseInputParam, error) {
 				Output: output,
 			}})
 		case canonical.ItemType("reasoning_summary"):
-			return nil, requestMapError(path + ".type")
+			reasoning, _ := item.ReasoningSummary()
+			entry, exists := replay[reasoning.ID().String()]
+			if !exists {
+				return nil, requestMapError(path + ".type")
+			}
+			summaries := reasoning.Summaries()
+			mappedSummaries := make([]sdkresponses.ResponseReasoningItemSummaryParam, len(summaries))
+			for summaryIndex, summary := range summaries {
+				mappedSummaries[summaryIndex] = sdkresponses.ResponseReasoningItemSummaryParam{Text: summary.Text()}
+			}
+			mapped := sdkresponses.ResponseInputItemParamOfReasoning(entry.UpstreamItemID(), mappedSummaries)
+			mapped.OfReasoning.EncryptedContent = param.NewOpt(entry.EncryptedContent())
+			result = append(result, mapped)
 		default:
 			return nil, requestMapError(path + ".type")
 		}
 	}
 	return result, nil
+}
+
+func reasoningItemIDs(items []canonical.Item) []canonical.ItemID {
+	ids := make([]canonical.ItemID, 0)
+	for _, item := range items {
+		if reasoning, ok := item.ReasoningSummary(); ok {
+			ids = append(ids, reasoning.ID())
+		}
+	}
+	return ids
 }
 
 func mapMessageContent(blocks []canonical.ContentBlock, path string) (sdkresponses.ResponseInputMessageContentListParam, error) {
