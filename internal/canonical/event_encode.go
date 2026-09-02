@@ -24,6 +24,11 @@ func encodeEventData(event Event) (json.RawMessage, error) {
 	case EventType("response_started"):
 		payload, _ := event.ResponseStarted()
 		return marshalCodec(responseStartedDTO{Model: payload.Model()}, MaxOrdinaryEventBytes)
+	case EventType("continuation_updated"):
+		payload, _ := event.ContinuationUpdated()
+		continuation := payload.Continuation()
+		encoded := encodeContinuation(&continuation)
+		return marshalCodec(continuationUpdatedDTO{Continuation: *encoded}, MaxOrdinaryEventBytes)
 	case EventType("item_started"):
 		payload, _ := event.ItemStarted()
 		return marshalCodec(itemStartedDTO{Index: payload.Index(), ID: payload.ID().String(), ItemType: string(payload.Type()), Role: string(payload.Role()), CallID: payload.CallID().String(), Name: payload.Name()}, MaxOrdinaryEventBytes)

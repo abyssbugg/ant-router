@@ -4,22 +4,23 @@ import "errors"
 
 // Event is an immutable stateless canonical stream event.
 type Event struct {
-	id               EventID
-	responseID       ResponseID
-	sequence         uint64
-	kind             EventType
-	responseStarted  ResponseStartedPayload
-	itemStarted      ItemStartedPayload
-	contentStarted   ContentStartedPayload
-	textDelta        DeltaPayload
-	jsonDelta        DeltaPayload
-	argumentsDelta   ToolArgumentsDeltaPayload
-	contentCompleted ContentCompletedPayload
-	itemCompleted    ItemCompletedPayload
-	usageUpdated     UsageUpdatedPayload
-	completed        ResponseCompletedPayload
-	failed           ResponseFailedPayload
-	cancelled        ResponseCancelledPayload
+	id                  EventID
+	responseID          ResponseID
+	sequence            uint64
+	kind                EventType
+	responseStarted     ResponseStartedPayload
+	continuationUpdated ContinuationUpdatedPayload
+	itemStarted         ItemStartedPayload
+	contentStarted      ContentStartedPayload
+	textDelta           DeltaPayload
+	jsonDelta           DeltaPayload
+	argumentsDelta      ToolArgumentsDeltaPayload
+	contentCompleted    ContentCompletedPayload
+	itemCompleted       ItemCompletedPayload
+	usageUpdated        UsageUpdatedPayload
+	completed           ResponseCompletedPayload
+	failed              ResponseFailedPayload
+	cancelled           ResponseCancelledPayload
 }
 
 func (e Event) ID() EventID            { return e.id }
@@ -33,6 +34,8 @@ func (e Event) Valid() bool {
 	switch e.kind {
 	case EventType("response_started"):
 		return e.responseStarted.Valid()
+	case EventType("continuation_updated"):
+		return e.continuationUpdated.Valid()
 	case EventType("item_started"):
 		return e.itemStarted.Valid()
 	case EventType("content_started"):
@@ -62,6 +65,9 @@ func (e Event) Valid() bool {
 
 func (e Event) ResponseStarted() (ResponseStartedPayload, bool) {
 	return e.responseStarted, e.kind == EventType("response_started")
+}
+func (e Event) ContinuationUpdated() (ContinuationUpdatedPayload, bool) {
+	return e.continuationUpdated, e.kind == EventType("continuation_updated")
 }
 func (e Event) ItemStarted() (ItemStartedPayload, bool) {
 	return e.itemStarted, e.kind == EventType("item_started")

@@ -79,6 +79,13 @@ func NewRequest(params RequestParams) (Request, error) {
 	if params.Continuation != nil && (!params.Continuation.Valid() || params.Continuation.Model() != params.Model) {
 		return Request{}, requestError(CodeContinuationAffinityRequired, "request.continuation")
 	}
+	if params.Continuation == nil {
+		for _, item := range params.Input {
+			if reasoning, ok := item.ReasoningSummary(); ok && len(reasoning.Summaries()) == 0 {
+				return Request{}, requestError(CodeInvalidInvariant, "request.input")
+			}
+		}
+	}
 	if err := validateRequestItemsAndTools(params.Input, params.Tools, choice, output); err != nil {
 		return Request{}, err
 	}

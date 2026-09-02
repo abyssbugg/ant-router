@@ -23,9 +23,6 @@ func TestReasoningSummaryRejectsInvalid(t *testing.T) {
 	if _, err := NewReasoningSummary("", []TextContent{valid}); codeOfCanonical(err) != CodeInvalidID {
 		t.Error("invalid summary ID accepted")
 	}
-	if _, err := NewReasoningSummary(testItemID(t, 1), nil); codeOfCanonical(err) != CodeInvalidInvariant {
-		t.Error("empty summary accepted")
-	}
 	if _, err := NewReasoningSummary(testItemID(t, 1), []TextContent{{}}); codeOfCanonical(err) != CodeInvalidInvariant {
 		t.Error("invalid text accepted")
 	}

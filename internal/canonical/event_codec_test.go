@@ -17,6 +17,8 @@ func codecEvents(t *testing.T) []Event {
 	failure, _ := NewFailure(FailureParams{Code: FailureCode("internal_error"), Message: "internal error", Retryable: true})
 	cancelFailure, _ := NewFailure(FailureParams{Code: FailureCode("cancelled"), Message: "cancelled"})
 	started, _ := NewResponseStartedEvent(eventID, responseID, 0, "model-a")
+	continuation, _ := NewContinuation("openai-primary", "gpt-5.2", []byte{1, 2, 3})
+	continuationUpdated, _ := NewContinuationUpdatedEvent(eventID, responseID, 12, continuation)
 	itemStarted, _ := NewItemStartedEvent(eventID, responseID, 1, ItemStartParams{Index: 0, ID: itemID, Type: ItemType("message"), Role: Role("assistant")})
 	contentStarted, _ := NewContentStartedEvent(eventID, responseID, 2, itemID, 0, ContentType("text"))
 	textDelta, _ := NewTextDeltaEvent(eventID, responseID, 3, itemID, 0, "hel")
@@ -28,7 +30,7 @@ func codecEvents(t *testing.T) []Event {
 	completed, _ := NewResponseCompletedEvent(eventID, responseID, 9, FinishReason("stop"), usage, []ItemID{itemID})
 	failed, _ := NewResponseFailedEvent(eventID, responseID, 10, failure, &usage)
 	cancelled, _ := NewResponseCancelledEvent(eventID, responseID, 11, cancelFailure, nil)
-	return []Event{started, itemStarted, contentStarted, textDelta, jsonDelta, argumentsDelta, contentCompleted, itemCompleted, usageUpdated, completed, failed, cancelled}
+	return []Event{started, itemStarted, contentStarted, textDelta, jsonDelta, argumentsDelta, contentCompleted, itemCompleted, usageUpdated, completed, failed, cancelled, continuationUpdated}
 }
 
 func TestEventCodecRoundTripAllVariants(t *testing.T) {
