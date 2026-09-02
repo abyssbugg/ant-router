@@ -18,6 +18,8 @@ type Machine struct {
 	items              map[canonical.ItemID]*itemState
 	itemOrder          []canonical.ItemID
 	latestUsage        canonical.Usage
+	continuation       *canonical.Continuation
+	continuationBytes  int
 	committed          bool
 	terminal           TerminalKind
 	reconstructedBytes int
@@ -47,7 +49,7 @@ func (m *Machine) Snapshot() Snapshot {
 			}
 		}
 	}
-	return newSnapshot(m.state, m.responseID, m.nextSequence, len(m.itemOrder), completed, open, m.latestUsage, m.committed, m.terminal, m.reconstructedBytes)
+	return newSnapshot(m.state, m.responseID, m.nextSequence, len(m.itemOrder), completed, open, m.latestUsage, m.continuation != nil, m.continuationBytes, m.committed, m.terminal, m.reconstructedBytes)
 }
 
 // Accept validates and atomically applies one canonical event.
@@ -73,6 +75,8 @@ func (m *Machine) Accept(event canonical.Event) (Transition, error) {
 	outcome := acceptOutcome{terminal: TerminalNone}
 	var err error
 	switch event.Type() {
+	case canonical.EventType("continuation_updated"):
+		err = m.acceptContinuationUpdated(event)
 	case canonical.EventType("item_started"):
 		err = m.acceptItemStarted(event)
 	case canonical.EventType("content_started"):

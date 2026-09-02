@@ -11,13 +11,15 @@ type Snapshot struct {
 	completedItems     int
 	openContent        int
 	latestUsage        canonical.Usage
+	hasContinuation    bool
+	continuationBytes  int
 	committed          bool
 	terminal           TerminalKind
 	reconstructedBytes int
 }
 
-func newSnapshot(state State, responseID canonical.ResponseID, next uint64, started, completed, open int, usage canonical.Usage, committed bool, terminal TerminalKind, byteCount int) Snapshot {
-	return Snapshot{state: state, responseID: responseID, nextSequence: next, startedItems: started, completedItems: completed, openContent: open, latestUsage: usage, committed: committed, terminal: terminal, reconstructedBytes: byteCount}
+func newSnapshot(state State, responseID canonical.ResponseID, next uint64, started, completed, open int, usage canonical.Usage, hasContinuation bool, continuationBytes int, committed bool, terminal TerminalKind, byteCount int) Snapshot {
+	return Snapshot{state: state, responseID: responseID, nextSequence: next, startedItems: started, completedItems: completed, openContent: open, latestUsage: usage, hasContinuation: hasContinuation, continuationBytes: continuationBytes, committed: committed, terminal: terminal, reconstructedBytes: byteCount}
 }
 
 // State returns the machine lifecycle state.
@@ -40,6 +42,12 @@ func (s Snapshot) OpenContent() int { return s.openContent }
 
 // LatestUsage returns the latest accepted usage counters.
 func (s Snapshot) LatestUsage() canonical.Usage { return s.latestUsage }
+
+// HasContinuation reports whether the machine has accepted opaque continuation.
+func (s Snapshot) HasContinuation() bool { return s.hasContinuation }
+
+// ContinuationBytes returns the safe opaque continuation byte count.
+func (s Snapshot) ContinuationBytes() int { return s.continuationBytes }
 
 // Committed reports whether semantic output has committed.
 func (s Snapshot) Committed() bool { return s.committed }
