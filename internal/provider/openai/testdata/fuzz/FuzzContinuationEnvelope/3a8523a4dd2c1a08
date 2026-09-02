@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"entries\":[{\"CAnoniCAl_item_id\":\"item_000000000000000000000A\",\"enCrYpted_Content\":\"00000000000\",\"upstreAm_item_id\":\"rs_0000\"}],\"version\":1}")
