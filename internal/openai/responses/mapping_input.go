@@ -9,28 +9,35 @@ import (
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
+	openaicontinuation "github.com/abyssbugg/ant-router/internal/openai/continuation"
 )
 
-func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDefinition) ([]canonical.Item, error) {
+type decodedInput struct {
+	items               []canonical.Item
+	continuationEntries []openaicontinuation.ContinuationEntry
+}
+
+func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDefinition) (decodedInput, error) {
 	if len(raw) == 0 {
-		return nil, newError(CodeInvalidField, "input", errors.New("input is required"))
+		return decodedInput{}, newError(CodeInvalidField, "input", errors.New("input is required"))
 	}
 	if len(bytes.TrimSpace(raw)) > 0 && bytes.TrimSpace(raw)[0] == '"' {
 		text, err := decodeStringInput(raw)
 		if err != nil {
-			return nil, err
+			return decodedInput{}, err
 		}
 		item, err := messageItem(ids, canonical.Role("user"), text, "input")
 		if err != nil {
-			return nil, err
+			return decodedInput{}, err
 		}
-		return []canonical.Item{item}, nil
+		return decodedInput{items: []canonical.Item{item}}, nil
 	}
 	var values []json.RawMessage
 	if err := json.Unmarshal(raw, &values); err != nil || len(values) == 0 || len(values) > canonical.MaxInputItems {
-		return nil, newError(CodeInvalidField, "input", errors.New("input array is invalid"))
+		return decodedInput{}, newError(CodeInvalidField, "input", errors.New("input array is invalid"))
 	}
 	items := make([]canonical.Item, 0, len(values))
+	continuationEntries := make([]openaicontinuation.ContinuationEntry, 0)
 	calls := make(map[string]canonical.ToolCallID)
 	results := make(map[string]struct{})
 	toolNames := make(map[string]struct{}, len(tools))
@@ -39,15 +46,15 @@ func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDef
 	}
 	for index, value := range values {
 		path := fmt.Sprintf("input[%d]", index)
-		fields, err := strictObject(value, path, "type", "role", "content", "call_id", "name", "arguments", "output")
+		fields, err := strictObject(value, path, "type", "role", "content", "call_id", "name", "arguments", "output", "id", "status", "summary", "encrypted_content")
 		if err != nil {
-			return nil, err
+			return decodedInput{}, err
 		}
 		kind := ""
 		if _, hasType := fields["type"]; hasType {
 			kind, err = requiredString(fields, "type", path+".type")
 			if err != nil {
-				return nil, err
+				return decodedInput{}, err
 			}
 		} else if _, hasRole := fields["role"]; hasRole {
 			if _, hasContent := fields["content"]; hasContent {
@@ -55,7 +62,7 @@ func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDef
 			}
 		}
 		if kind == "" {
-			return nil, newError(CodeInvalidField, path+".type", errors.New("item type is required"))
+			return decodedInput{}, newError(CodeInvalidField, path+".type", errors.New("item type is required"))
 		}
 		var item canonical.Item
 		switch kind {
@@ -65,15 +72,21 @@ func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDef
 			item, err = decodeFunctionCall(fields, ids, calls, toolNames, path)
 		case "function_call_output":
 			item, err = decodeFunctionOutput(fields, ids, calls, results, path)
+		case "reasoning":
+			var entry openaicontinuation.ContinuationEntry
+			item, entry, err = decodeReasoningReplay(fields, ids, path)
+			if err == nil {
+				continuationEntries = append(continuationEntries, entry)
+			}
 		default:
-			return nil, newError(CodeUnsupportedField, path+".type", errors.New("input item type is unsupported"))
+			return decodedInput{}, newError(CodeUnsupportedField, path+".type", errors.New("input item type is unsupported"))
 		}
 		if err != nil {
-			return nil, err
+			return decodedInput{}, err
 		}
 		items = append(items, item)
 	}
-	return items, nil
+	return decodedInput{items: items, continuationEntries: continuationEntries}, nil
 }
 
 func decodeMessage(fields map[string]json.RawMessage, ids IDGenerator, path string) (canonical.Item, error) {
@@ -176,7 +189,10 @@ func responseTextBlock(text, path string) (canonical.ContentBlock, error) {
 }
 
 func decodeFunctionCall(fields map[string]json.RawMessage, ids IDGenerator, calls map[string]canonical.ToolCallID, toolNames map[string]struct{}, path string) (canonical.Item, error) {
-	if err := rejectFields(fields, path, "type", "call_id", "name", "arguments"); err != nil {
+	if err := rejectFields(fields, path, "type", "call_id", "name", "arguments", "id", "status"); err != nil {
+		return canonical.Item{}, err
+	}
+	if err := validateReplayMetadata(fields, path); err != nil {
 		return canonical.Item{}, err
 	}
 	externalID, err := requiredString(fields, "call_id", path+".call_id")
@@ -222,7 +238,10 @@ func decodeFunctionCall(fields map[string]json.RawMessage, ids IDGenerator, call
 }
 
 func decodeFunctionOutput(fields map[string]json.RawMessage, ids IDGenerator, calls map[string]canonical.ToolCallID, results map[string]struct{}, path string) (canonical.Item, error) {
-	if err := rejectFields(fields, path, "type", "call_id", "output"); err != nil {
+	if err := rejectFields(fields, path, "type", "call_id", "output", "id", "status"); err != nil {
+		return canonical.Item{}, err
+	}
+	if err := validateReplayMetadata(fields, path); err != nil {
 		return canonical.Item{}, err
 	}
 	externalID, err := requiredString(fields, "call_id", path+".call_id")

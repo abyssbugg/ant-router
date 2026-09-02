@@ -37,24 +37,26 @@ func StaticTokenSource(token inferencetoken.Token) TokenSource {
 
 // HandlerOptions configures the authenticated inference handler.
 type HandlerOptions struct {
-	TokenSource    TokenSource
-	Executor       execution.Executor
-	Catalog        execution.ModelCatalog
-	ListenAddress  string
-	MaxConcurrent  int
-	RequestTimeout time.Duration
-	Clock          func() time.Time
+	TokenSource      TokenSource
+	Executor         execution.Executor
+	Catalog          execution.ModelCatalog
+	AffinityResolver responses.AffinityResolver
+	ListenAddress    string
+	MaxConcurrent    int
+	RequestTimeout   time.Duration
+	Clock            func() time.Time
 }
 
 type handler struct {
-	tokens         TokenSource
-	executor       execution.Executor
-	catalog        execution.ModelCatalog
-	listenAddress  string
-	clock          func() time.Time
-	requestTimeout time.Duration
-	semaphore      chan struct{}
-	mux            *http.ServeMux
+	tokens           TokenSource
+	executor         execution.Executor
+	catalog          execution.ModelCatalog
+	affinityResolver responses.AffinityResolver
+	listenAddress    string
+	clock            func() time.Time
+	requestTimeout   time.Duration
+	semaphore        chan struct{}
+	mux              *http.ServeMux
 }
 
 // NewHandler constructs the exact /v1/models and /v1/responses route set.
@@ -62,7 +64,7 @@ func NewHandler(options HandlerOptions) (http.Handler, error) {
 	if nilInterface(options.TokenSource) || nilInterface(options.Executor) || nilInterface(options.Catalog) || options.ListenAddress == "" || options.MaxConcurrent < 1 || options.MaxConcurrent > 1024 || options.RequestTimeout <= 0 || options.Clock == nil {
 		return nil, errors.New("data-plane options are invalid")
 	}
-	h := &handler{tokens: options.TokenSource, executor: options.Executor, catalog: options.Catalog, listenAddress: options.ListenAddress, clock: options.Clock, requestTimeout: options.RequestTimeout, semaphore: make(chan struct{}, options.MaxConcurrent), mux: http.NewServeMux()}
+	h := &handler{tokens: options.TokenSource, executor: options.Executor, catalog: options.Catalog, affinityResolver: options.AffinityResolver, listenAddress: options.ListenAddress, clock: options.Clock, requestTimeout: options.RequestTimeout, semaphore: make(chan struct{}, options.MaxConcurrent), mux: http.NewServeMux()}
 	h.mux.HandleFunc("/v1/models", h.models)
 	h.mux.HandleFunc("/v1/responses", h.responses)
 	return http.HandlerFunc(h.serve), nil
@@ -133,7 +135,12 @@ func (h *handler) responses(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusRequestTimeout, "server_error", "request_timeout", "request", "request timed out")
 		return
 	}
-	parsed, err := responses.Decode(r.Body, randomRequestIDs{})
+	var parsed responses.ParsedRequest
+	if h.affinityResolver != nil {
+		parsed, err = responses.DecodeWithAffinity(r.Body, randomRequestIDs{}, h.affinityResolver)
+	} else {
+		parsed, err = responses.Decode(r.Body, randomRequestIDs{})
+	}
 	if err != nil {
 		writeResponsesError(w, err)
 		return
@@ -219,6 +226,10 @@ func validAuthorization(values []string, token inferencetoken.Token) bool {
 }
 
 func writeResponsesError(w http.ResponseWriter, err error) {
+	if responses.CodeOf(err) == responses.CodeInternal {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "internal", "request", "request failed")
+		return
+	}
 	writeAPIError(w, http.StatusBadRequest, "invalid_request_error", string(responses.CodeOf(err)), responses.PathOf(err), "request is invalid")
 }
 func writeExecutionError(w http.ResponseWriter, err error) {

@@ -1,8 +1,9 @@
-package openai
+package continuation
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"unicode/utf8"
@@ -20,6 +21,30 @@ type continuationEntry struct {
 	canonicalItemID  canonical.ItemID
 	upstreamItemID   string
 	encryptedContent string
+}
+
+// ContinuationEntry is one opaque OpenAI reasoning replay entry. Its fields are
+// intentionally inaccessible outside this package.
+type ContinuationEntry struct{ entry continuationEntry }
+
+// NewContinuationEntry validates one canonical/upstream reasoning anchor and
+// opaque encrypted payload without exposing the payload through errors.
+func NewContinuationEntry(canonicalItemID canonical.ItemID, upstreamItemID, encryptedContent string) (ContinuationEntry, error) {
+	envelope, err := newContinuationEnvelope([]continuationEntry{{canonicalItemID: canonicalItemID, upstreamItemID: upstreamItemID, encryptedContent: encryptedContent}})
+	if err != nil {
+		return ContinuationEntry{}, err
+	}
+	return ContinuationEntry{entry: envelope.entries[0]}, nil
+}
+
+// EncodeContinuation creates a deterministic provider/upstream-affine opaque
+// continuation from ordered validated entries.
+func EncodeContinuation(providerID, upstreamModel string, entries []ContinuationEntry) (canonical.Continuation, error) {
+	values := make([]continuationEntry, len(entries))
+	for index, entry := range entries {
+		values[index] = entry.entry
+	}
+	return encodeContinuationEnvelope(providerID, upstreamModel, values)
 }
 
 type continuationEnvelope struct {
@@ -117,7 +142,7 @@ func validEncryptedContent(value string) bool {
 }
 
 func continuationEnvelopeError() error {
-	return requestMapError("request.continuation")
+	return errors.New("openai continuation is invalid")
 }
 
 func encodeContinuationEnvelope(providerID, upstreamModel string, entries []continuationEntry) (canonical.Continuation, error) {

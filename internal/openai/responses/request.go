@@ -6,10 +6,12 @@ import (
 	"io"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
+	openaicontinuation "github.com/abyssbugg/ant-router/internal/openai/continuation"
 )
 
 // MaxRequestBodyBytes bounds a Responses request before JSON parsing.
@@ -20,6 +22,12 @@ type IDGenerator interface {
 	RequestID() (canonical.RequestID, error)
 	ItemID() (canonical.ItemID, error)
 	ToolCallID() (canonical.ToolCallID, error)
+}
+
+// AffinityResolver maps a public model alias to its configured provider and
+// upstream model without resolving credentials or provider availability.
+type AffinityResolver interface {
+	ResolveModel(alias string) (providerID string, upstreamModel string, err error)
 }
 
 // ParsedRequest contains the canonical request and client delivery mode.
@@ -56,8 +64,21 @@ var allowedRequestFields = map[string]struct{}{
 	"background": {}, "store": {}, "include": {}, "service_tier": {}, "metadata": {},
 }
 
-// Decode strictly decodes one Responses request and adapts it to canonical form.
+// Decode strictly decodes one Responses request without continuation affinity.
 func Decode(reader io.Reader, ids IDGenerator) (ParsedRequest, error) {
+	return decode(reader, ids, nil)
+}
+
+// DecodeWithAffinity strictly decodes a request and binds replayed reasoning
+// items to the configured provider and upstream model.
+func DecodeWithAffinity(reader io.Reader, ids IDGenerator, resolver AffinityResolver) (ParsedRequest, error) {
+	if nilAffinityResolver(resolver) {
+		return ParsedRequest{}, newError(CodeInternal, "request.continuation", errors.New("affinity resolver is unavailable"))
+	}
+	return decode(reader, ids, resolver)
+}
+
+func decode(reader io.Reader, ids IDGenerator, resolver AffinityResolver) (ParsedRequest, error) {
 	if reader == nil || nilIDGenerator(ids) {
 		return ParsedRequest{}, newError(CodeInternal, "request", errors.New("decoder dependency is unavailable"))
 	}
@@ -96,16 +117,17 @@ func Decode(reader io.Reader, ids IDGenerator) (ParsedRequest, error) {
 		raw  json.RawMessage
 	}{
 		{path: "background", raw: wire.Background},
-		{path: "include", raw: wire.Include},
 		{path: "metadata", raw: wire.Metadata},
 		{path: "previous_response_id", raw: wire.PreviousResponseID},
 		{path: "service_tier", raw: wire.ServiceTier},
-		{path: "store", raw: wire.Store},
 	}
 	for _, field := range unsupported {
 		if len(field.raw) != 0 {
 			return ParsedRequest{}, newError(CodeUnsupportedField, field.path, errors.New("field is unsupported"))
 		}
+	}
+	if err := decodeStatelessControls(wire.Store, wire.Include); err != nil {
+		return ParsedRequest{}, err
 	}
 	if wire.Model == "" || strings.TrimSpace(wire.Model) != wire.Model {
 		return ParsedRequest{}, newError(CodeInvalidField, "model", errors.New("model is invalid"))
@@ -114,10 +136,11 @@ func Decode(reader io.Reader, ids IDGenerator) (ParsedRequest, error) {
 	if err != nil {
 		return ParsedRequest{}, err
 	}
-	items, err := decodeInput(wire.Input, ids, tools)
+	decoded, err := decodeInput(wire.Input, ids, tools)
 	if err != nil {
 		return ParsedRequest{}, err
 	}
+	items := decoded.items
 	if wire.Instructions != nil {
 		instruction, err := messageItem(ids, canonical.Role("system"), *wire.Instructions, "instructions")
 		if err != nil {
@@ -149,7 +172,22 @@ func Decode(reader io.Reader, ids IDGenerator) (ParsedRequest, error) {
 	if err != nil {
 		return ParsedRequest{}, newError(CodeInternal, "request.id", errors.New("ID generation failed"))
 	}
-	request, err := canonical.NewRequest(canonical.RequestParams{ID: requestID, Model: wire.Model, Input: items, Tools: tools, ToolChoice: choice, Output: output, Sampling: sampling, ReasoningSummary: reasoningSummary})
+	var continuation *canonical.Continuation
+	if len(decoded.continuationEntries) > 0 {
+		if nilAffinityResolver(resolver) {
+			return ParsedRequest{}, newError(CodeInternal, "request.continuation", errors.New("affinity resolver is unavailable"))
+		}
+		providerID, upstreamModel, err := resolver.ResolveModel(wire.Model)
+		if err != nil || providerID == "" || upstreamModel == "" {
+			return ParsedRequest{}, newError(CodeInvalidField, "model", errors.New("model affinity is invalid"))
+		}
+		value, err := openaicontinuation.EncodeContinuation(providerID, upstreamModel, decoded.continuationEntries)
+		if err != nil {
+			return ParsedRequest{}, newError(CodeInvalidField, "input", errors.New("continuation is invalid"))
+		}
+		continuation = &value
+	}
+	request, err := canonical.NewRequest(canonical.RequestParams{ID: requestID, Model: wire.Model, Input: items, Tools: tools, ToolChoice: choice, Output: output, Sampling: sampling, ReasoningSummary: reasoningSummary, Continuation: continuation})
 	if err != nil {
 		return ParsedRequest{}, newError(CodeInvalidField, "request", errors.New("request is invalid"))
 	}
@@ -209,4 +247,43 @@ func valueOrZero(value *int) int {
 		return 0
 	}
 	return *value
+}
+
+func decodeStatelessControls(store, include json.RawMessage) error {
+	if len(store) > 0 {
+		var value *bool
+		if json.Unmarshal(store, &value) != nil || value == nil {
+			return newError(CodeInvalidField, "store", errors.New("store is invalid"))
+		}
+		if *value {
+			return newError(CodeUnsupportedField, "store", errors.New("stored responses are unsupported"))
+		}
+	}
+	if len(include) == 0 {
+		return nil
+	}
+	var values []string
+	if json.Unmarshal(include, &values) != nil || len(values) == 0 {
+		return newError(CodeInvalidField, "include", errors.New("include is invalid"))
+	}
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		path := "include[" + strconv.Itoa(index) + "]"
+		if value != "reasoning.encrypted_content" {
+			return newError(CodeUnsupportedField, path, errors.New("include value is unsupported"))
+		}
+		if _, exists := seen[value]; exists {
+			return newError(CodeInvalidField, path, errors.New("include value is duplicated"))
+		}
+		seen[value] = struct{}{}
+	}
+	return nil
+}
+
+func nilAffinityResolver(resolver AffinityResolver) bool {
+	if resolver == nil {
+		return true
+	}
+	value := reflect.ValueOf(resolver)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }
