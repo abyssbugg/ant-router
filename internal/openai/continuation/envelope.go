@@ -17,9 +17,14 @@ const (
 	maxUpstreamItemIDBytes      = 256
 )
 
+const functionCallEntryKind = "function_call"
+
 type continuationEntry struct {
+	kind             string
 	canonicalItemID  canonical.ItemID
+	canonicalCallID  canonical.ToolCallID
 	upstreamItemID   string
+	upstreamCallID   string
 	encryptedContent string
 }
 
@@ -37,8 +42,29 @@ func NewContinuationEntry(canonicalItemID canonical.ItemID, upstreamItemID, encr
 	return ContinuationEntry{entry: envelope.entries[0]}, nil
 }
 
-// CanonicalItemID returns the canonical reasoning item anchor.
+// NewFunctionCallEntry validates one canonical/upstream function-call identity.
+func NewFunctionCallEntry(canonicalItemID canonical.ItemID, canonicalCallID canonical.ToolCallID, upstreamItemID, upstreamCallID string) (ContinuationEntry, error) {
+	envelope, err := newContinuationEnvelope([]continuationEntry{{kind: functionCallEntryKind, canonicalItemID: canonicalItemID, canonicalCallID: canonicalCallID, upstreamItemID: upstreamItemID, upstreamCallID: upstreamCallID}})
+	if err != nil {
+		return ContinuationEntry{}, err
+	}
+	return ContinuationEntry{entry: envelope.entries[0]}, nil
+}
+
+// IsReasoning reports whether this entry carries encrypted reasoning identity.
+func (e ContinuationEntry) IsReasoning() bool { return e.entry.kind == "" }
+
+// IsFunctionCall reports whether this entry carries function-call identity.
+func (e ContinuationEntry) IsFunctionCall() bool { return e.entry.kind == functionCallEntryKind }
+
+// CanonicalItemID returns the canonical item anchor.
 func (e ContinuationEntry) CanonicalItemID() canonical.ItemID { return e.entry.canonicalItemID }
+
+// CanonicalCallID returns the canonical call identity for function-call entries.
+func (e ContinuationEntry) CanonicalCallID() canonical.ToolCallID { return e.entry.canonicalCallID }
+
+// UpstreamCallID returns the original OpenAI call identity for function-call entries.
+func (e ContinuationEntry) UpstreamCallID() string { return e.entry.upstreamCallID }
 
 // UpstreamItemID returns the original OpenAI reasoning item ID.
 func (e ContinuationEntry) UpstreamItemID() string { return e.entry.upstreamItemID }
@@ -81,8 +107,11 @@ type continuationEnvelopeDTO struct {
 }
 
 type continuationEntryDTO struct {
+	CanonicalCallID  string `json:"canonical_call_id,omitempty"`
 	CanonicalItemID  string `json:"canonical_item_id"`
-	EncryptedContent string `json:"encrypted_content"`
+	EncryptedContent string `json:"encrypted_content,omitempty"`
+	Kind             string `json:"kind,omitempty"`
+	UpstreamCallID   string `json:"upstream_call_id,omitempty"`
 	UpstreamItemID   string `json:"upstream_item_id"`
 }
 
@@ -92,9 +121,23 @@ func newContinuationEnvelope(entries []continuationEntry) (continuationEnvelope,
 	}
 	seenItems := make(map[canonical.ItemID]struct{}, len(entries))
 	seenUpstream := make(map[string]struct{}, len(entries))
+	seenCalls := make(map[canonical.ToolCallID]struct{}, len(entries))
+	seenUpstreamCalls := make(map[string]struct{}, len(entries))
 	copyEntries := make([]continuationEntry, len(entries))
 	for index, entry := range entries {
-		if !entry.canonicalItemID.Valid() || !validUpstreamReasoningID(entry.upstreamItemID) || !validEncryptedContent(entry.encryptedContent) {
+		if !entry.canonicalItemID.Valid() {
+			return continuationEnvelope{}, continuationEnvelopeError()
+		}
+		switch entry.kind {
+		case "":
+			if entry.canonicalCallID.Valid() || entry.upstreamCallID != "" || !validUpstreamID(entry.upstreamItemID, "rs_") || !validEncryptedContent(entry.encryptedContent) {
+				return continuationEnvelope{}, continuationEnvelopeError()
+			}
+		case functionCallEntryKind:
+			if !entry.canonicalCallID.Valid() || entry.encryptedContent != "" || !validUpstreamID(entry.upstreamItemID, "fc_") || !validUpstreamID(entry.upstreamCallID, "call_") {
+				return continuationEnvelope{}, continuationEnvelopeError()
+			}
+		default:
 			return continuationEnvelope{}, continuationEnvelopeError()
 		}
 		if _, exists := seenItems[entry.canonicalItemID]; exists {
@@ -102,6 +145,16 @@ func newContinuationEnvelope(entries []continuationEntry) (continuationEnvelope,
 		}
 		if _, exists := seenUpstream[entry.upstreamItemID]; exists {
 			return continuationEnvelope{}, continuationEnvelopeError()
+		}
+		if entry.kind == functionCallEntryKind {
+			if _, exists := seenCalls[entry.canonicalCallID]; exists {
+				return continuationEnvelope{}, continuationEnvelopeError()
+			}
+			if _, exists := seenUpstreamCalls[entry.upstreamCallID]; exists {
+				return continuationEnvelope{}, continuationEnvelopeError()
+			}
+			seenCalls[entry.canonicalCallID] = struct{}{}
+			seenUpstreamCalls[entry.upstreamCallID] = struct{}{}
 		}
 		seenItems[entry.canonicalItemID] = struct{}{}
 		seenUpstream[entry.upstreamItemID] = struct{}{}
@@ -127,6 +180,11 @@ func (e continuationEnvelope) canonicalBytes() ([]byte, error) {
 	dto := continuationEnvelopeDTO{Version: continuationEnvelopeVersion, Entries: make([]continuationEntryDTO, len(e.entries))}
 	for index, entry := range e.entries {
 		dto.Entries[index] = continuationEntryDTO{CanonicalItemID: entry.canonicalItemID.String(), UpstreamItemID: entry.upstreamItemID, EncryptedContent: entry.encryptedContent}
+		if entry.kind == functionCallEntryKind {
+			dto.Entries[index].Kind = functionCallEntryKind
+			dto.Entries[index].CanonicalCallID = entry.canonicalCallID.String()
+			dto.Entries[index].UpstreamCallID = entry.upstreamCallID
+		}
 	}
 	raw, err := json.Marshal(dto)
 	if err != nil {
@@ -139,8 +197,10 @@ func (e continuationEnvelope) canonicalBytes() ([]byte, error) {
 	return value.Bytes(), nil
 }
 
-func validUpstreamReasoningID(value string) bool {
-	if !strings.HasPrefix(value, "rs_") || len(value) > maxUpstreamItemIDBytes {
+func validUpstreamReasoningID(value string) bool { return validUpstreamID(value, "rs_") }
+
+func validUpstreamID(value, prefix string) bool {
+	if !strings.HasPrefix(value, prefix) || len(value) > maxUpstreamItemIDBytes {
 		return false
 	}
 	for index := range len(value) {
@@ -208,7 +268,15 @@ func decodeContinuationEnvelope(continuation canonical.Continuation, providerID,
 		if err != nil {
 			return continuationEnvelope{}, continuationEnvelopeError()
 		}
-		entries[index] = continuationEntry{canonicalItemID: itemID, upstreamItemID: item.UpstreamItemID, encryptedContent: item.EncryptedContent}
+		entry := continuationEntry{kind: item.Kind, canonicalItemID: itemID, upstreamItemID: item.UpstreamItemID, encryptedContent: item.EncryptedContent, upstreamCallID: item.UpstreamCallID}
+		if item.CanonicalCallID != "" {
+			callID, parseErr := canonical.ParseToolCallID(item.CanonicalCallID)
+			if parseErr != nil {
+				return continuationEnvelope{}, continuationEnvelopeError()
+			}
+			entry.canonicalCallID = callID
+		}
+		entries[index] = entry
 	}
 	envelope, err := newContinuationEnvelope(entries)
 	if err != nil {
