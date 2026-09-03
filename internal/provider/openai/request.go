@@ -26,18 +26,23 @@ func mapRequest(request canonical.Request, upstreamModel string) (sdkresponses.R
 		return sdkresponses.ResponseNewParams{}, requestMapError("sampling.seed")
 	}
 
-	replay := make(map[string]openaicontinuation.ContinuationEntry)
+	replayByItem := make(map[string]openaicontinuation.ContinuationEntry)
+	replayByCall := make(map[string]openaicontinuation.ContinuationEntry)
+	hasContinuation := request.Continuation() != nil
 	if continuation := request.Continuation(); continuation != nil {
-		anchors := reasoningItemIDs(request.Input())
+		anchors := continuationItemIDs(request.Input())
 		entries, err := openaicontinuation.DecodeContinuation(*continuation, continuation.Provider(), upstreamModel, anchors)
 		if err != nil {
 			return sdkresponses.ResponseNewParams{}, requestMapError("continuation")
 		}
 		for _, entry := range entries {
-			replay[entry.CanonicalItemID().String()] = entry
+			replayByItem[entry.CanonicalItemID().String()] = entry
+			if entry.IsFunctionCall() {
+				replayByCall[entry.CanonicalCallID().String()] = entry
+			}
 		}
 	}
-	input, err := mapInput(request.Input(), replay)
+	input, err := mapInput(request.Input(), replayByItem, replayByCall, hasContinuation)
 	if err != nil {
 		return sdkresponses.ResponseNewParams{}, err
 	}
@@ -84,7 +89,7 @@ func mapRequest(request canonical.Request, upstreamModel string) (sdkresponses.R
 	return result, nil
 }
 
-func mapInput(items []canonical.Item, replay map[string]openaicontinuation.ContinuationEntry) (sdkresponses.ResponseInputParam, error) {
+func mapInput(items []canonical.Item, replayByItem, replayByCall map[string]openaicontinuation.ContinuationEntry, hasContinuation bool) (sdkresponses.ResponseInputParam, error) {
 	result := make(sdkresponses.ResponseInputParam, 0, len(items))
 	for index, item := range items {
 		path := "input[" + jsonIndex(index) + "]"
@@ -98,7 +103,17 @@ func mapInput(items []canonical.Item, replay map[string]openaicontinuation.Conti
 			result = append(result, sdkresponses.ResponseInputItemParamOfMessage(content, sdkresponses.EasyInputMessageRole(message.Role())))
 		case canonical.ItemType("tool_call"):
 			call, _ := item.ToolCall()
-			result = append(result, sdkresponses.ResponseInputItemParamOfFunctionCall(string(call.Arguments().Bytes()), call.CallID().String(), call.Name()))
+			entry, exists := replayByItem[item.ID().String()]
+			if hasContinuation && (!exists || !entry.IsFunctionCall() || entry.CanonicalCallID() != call.CallID()) {
+				return nil, requestMapError(path + ".id")
+			}
+			mapped := sdkresponses.ResponseInputItemParamOfFunctionCall(string(call.Arguments().Bytes()), call.CallID().String(), call.Name())
+			if exists {
+				mapped.OfFunctionCall.ID = param.NewOpt(entry.UpstreamItemID())
+				mapped.OfFunctionCall.CallID = entry.UpstreamCallID()
+				mapped.OfFunctionCall.Status = sdkresponses.ResponseFunctionToolCallStatusCompleted
+			}
+			result = append(result, mapped)
 		case canonical.ItemType("tool_result"):
 			toolResult, _ := item.ToolResult()
 			if toolResult.IsError() {
@@ -108,14 +123,20 @@ func mapInput(items []canonical.Item, replay map[string]openaicontinuation.Conti
 			if err != nil {
 				return nil, err
 			}
+			callID := toolResult.CallID().String()
+			if entry, exists := replayByCall[callID]; exists {
+				callID = entry.UpstreamCallID()
+			} else if hasContinuation {
+				return nil, requestMapError(path + ".call_id")
+			}
 			result = append(result, sdkresponses.ResponseInputItemUnionParam{OfFunctionCallOutput: &sdkresponses.ResponseInputItemFunctionCallOutputParam{
-				CallID: param.NewOpt(toolResult.CallID().String()),
+				CallID: param.NewOpt(callID),
 				Output: output,
 			}})
 		case canonical.ItemType("reasoning_summary"):
 			reasoning, _ := item.ReasoningSummary()
-			entry, exists := replay[reasoning.ID().String()]
-			if !exists {
+			entry, exists := replayByItem[reasoning.ID().String()]
+			if !exists || !entry.IsReasoning() {
 				return nil, requestMapError(path + ".type")
 			}
 			summaries := reasoning.Summaries()
@@ -133,11 +154,15 @@ func mapInput(items []canonical.Item, replay map[string]openaicontinuation.Conti
 	return result, nil
 }
 
-func reasoningItemIDs(items []canonical.Item) []canonical.ItemID {
+func continuationItemIDs(items []canonical.Item) []canonical.ItemID {
 	ids := make([]canonical.ItemID, 0)
 	for _, item := range items {
-		if reasoning, ok := item.ReasoningSummary(); ok {
-			ids = append(ids, reasoning.ID())
+		if _, reasoning := item.ReasoningSummary(); reasoning {
+			ids = append(ids, item.ID())
+			continue
+		}
+		if _, toolCall := item.ToolCall(); toolCall {
+			ids = append(ids, item.ID())
 		}
 	}
 	return ids

@@ -38,6 +38,7 @@ func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDef
 	}
 	items := make([]canonical.Item, 0, len(values))
 	continuationEntries := make([]openaicontinuation.ContinuationEntry, 0)
+	missingCallIdentityPath := ""
 	calls := make(map[string]canonical.ToolCallID)
 	results := make(map[string]struct{})
 	toolNames := make(map[string]struct{}, len(tools))
@@ -69,7 +70,16 @@ func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDef
 		case "message":
 			item, err = decodeMessage(fields, ids, path)
 		case "function_call":
-			item, err = decodeFunctionCall(fields, ids, calls, toolNames, path)
+			var entry openaicontinuation.ContinuationEntry
+			var hasEntry bool
+			item, entry, hasEntry, err = decodeFunctionCall(fields, ids, calls, toolNames, path)
+			if err == nil {
+				if hasEntry {
+					continuationEntries = append(continuationEntries, entry)
+				} else if missingCallIdentityPath == "" {
+					missingCallIdentityPath = path + ".id"
+				}
+			}
 		case "function_call_output":
 			item, err = decodeFunctionOutput(fields, ids, calls, results, path)
 		case "reasoning":
@@ -85,6 +95,9 @@ func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDef
 			return decodedInput{}, err
 		}
 		items = append(items, item)
+	}
+	if len(continuationEntries) > 0 && missingCallIdentityPath != "" {
+		return decodedInput{}, newError(CodeInvalidField, missingCallIdentityPath, errors.New("function call replay identity is required"))
 	}
 	return decodedInput{items: items, continuationEntries: continuationEntries}, nil
 }
@@ -188,53 +201,66 @@ func responseTextBlock(text, path string) (canonical.ContentBlock, error) {
 	return block, nil
 }
 
-func decodeFunctionCall(fields map[string]json.RawMessage, ids IDGenerator, calls map[string]canonical.ToolCallID, toolNames map[string]struct{}, path string) (canonical.Item, error) {
+func decodeFunctionCall(fields map[string]json.RawMessage, ids IDGenerator, calls map[string]canonical.ToolCallID, toolNames map[string]struct{}, path string) (canonical.Item, openaicontinuation.ContinuationEntry, bool, error) {
 	if err := rejectFields(fields, path, "type", "call_id", "name", "arguments", "id", "status"); err != nil {
-		return canonical.Item{}, err
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, err
 	}
 	if err := validateReplayMetadata(fields, path); err != nil {
-		return canonical.Item{}, err
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, err
 	}
 	externalID, err := requiredString(fields, "call_id", path+".call_id")
 	if err != nil || externalID == "" {
-		return canonical.Item{}, newError(CodeInvalidField, path+".call_id", errors.New("call ID is invalid"))
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInvalidField, path+".call_id", errors.New("call ID is invalid"))
 	}
 	if _, exists := calls[externalID]; exists {
-		return canonical.Item{}, newError(CodeInvalidField, path+".call_id", errors.New("call ID is duplicated"))
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInvalidField, path+".call_id", errors.New("call ID is duplicated"))
 	}
 	name, err := requiredString(fields, "name", path+".name")
 	if err != nil {
-		return canonical.Item{}, err
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, err
 	}
 	if _, declared := toolNames[name]; !declared {
-		return canonical.Item{}, newError(CodeInvalidField, path+".name", errors.New("tool is not declared"))
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInvalidField, path+".name", errors.New("tool is not declared"))
 	}
 	argumentsText, err := requiredString(fields, "arguments", path+".arguments")
 	if err != nil {
-		return canonical.Item{}, err
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, err
 	}
 	arguments, err := canonicaljson.Parse([]byte(argumentsText), canonicaljson.DefaultLimits())
 	if err != nil || !arguments.IsObject() {
-		return canonical.Item{}, newError(CodeInvalidField, path+".arguments", errors.New("arguments are invalid"))
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInvalidField, path+".arguments", errors.New("arguments are invalid"))
 	}
 	itemID, err := ids.ItemID()
 	if err != nil {
-		return canonical.Item{}, newError(CodeInternal, path+".id", errors.New("ID generation failed"))
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInternal, path+".id", errors.New("ID generation failed"))
 	}
 	callID, err := ids.ToolCallID()
 	if err != nil {
-		return canonical.Item{}, newError(CodeInternal, path+".call_id", errors.New("ID generation failed"))
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInternal, path+".call_id", errors.New("ID generation failed"))
 	}
 	call, err := canonical.NewToolCall(itemID, callID, name, arguments)
 	if err != nil {
-		return canonical.Item{}, newError(CodeInvalidField, path, errors.New("function call is invalid"))
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInvalidField, path, errors.New("function call is invalid"))
 	}
 	item, err := canonical.NewToolCallItem(call)
 	if err != nil {
-		return canonical.Item{}, newError(CodeInvalidField, path, errors.New("function call is invalid"))
+		return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInvalidField, path, errors.New("function call is invalid"))
+	}
+	var entry openaicontinuation.ContinuationEntry
+	hasEntry := false
+	if rawID, exists := fields["id"]; exists {
+		var upstreamItemID string
+		if json.Unmarshal(rawID, &upstreamItemID) != nil {
+			return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInvalidField, path+".id", errors.New("item ID is invalid"))
+		}
+		entry, err = openaicontinuation.NewFunctionCallEntry(itemID, callID, upstreamItemID, externalID)
+		if err != nil {
+			return canonical.Item{}, openaicontinuation.ContinuationEntry{}, false, newError(CodeInvalidField, path, errors.New("function call replay identity is invalid"))
+		}
+		hasEntry = true
 	}
 	calls[externalID] = callID
-	return item, nil
+	return item, entry, hasEntry, nil
 }
 
 func decodeFunctionOutput(fields map[string]json.RawMessage, ids IDGenerator, calls map[string]canonical.ToolCallID, results map[string]struct{}, path string) (canonical.Item, error) {

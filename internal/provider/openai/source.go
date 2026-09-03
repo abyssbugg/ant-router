@@ -276,6 +276,9 @@ func (s *eventSource) mapItemStarted(upstream sdkresponses.ResponseStreamEventUn
 	default:
 		return canonical.Event{}, false, streamError("stream.item.type")
 	}
+	if state.kind == canonical.ItemType("tool_call") {
+		return s.startToolCallWithContinuation(state, upstream.Item.ID, params)
+	}
 	if deferReasoning {
 		s.items[upstream.Item.ID] = state
 		s.orderedItemIDs = append(s.orderedItemIDs, itemID)

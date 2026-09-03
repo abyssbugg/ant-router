@@ -25,7 +25,8 @@ type SSESink struct {
 	machine          *streaming.Machine
 	itemIndexes      map[canonical.ItemID]int
 	itemTypes        map[canonical.ItemID]canonical.ItemType
-	reasoningEntries reasoningOutputEntries
+	itemCallIDs      map[canonical.ItemID]canonical.ToolCallID
+	reasoningEntries continuationOutputEntries
 	model            string
 }
 
@@ -38,7 +39,7 @@ func NewSSESink(writer SSEWriter, encoder Encoder) (*SSESink, error) {
 	if err != nil {
 		return nil, newError(CodeInternal, "stream.machine", errors.New("stream machine is unavailable"))
 	}
-	return &SSESink{writer: writer, encoder: encoder, machine: machine, itemIndexes: make(map[canonical.ItemID]int), itemTypes: make(map[canonical.ItemID]canonical.ItemType), reasoningEntries: make(reasoningOutputEntries)}, nil
+	return &SSESink{writer: writer, encoder: encoder, machine: machine, itemIndexes: make(map[canonical.ItemID]int), itemTypes: make(map[canonical.ItemID]canonical.ItemType), itemCallIDs: make(map[canonical.ItemID]canonical.ToolCallID), reasoningEntries: make(continuationOutputEntries)}, nil
 }
 
 // Send validates one canonical event and writes its OpenAI SSE representation.
@@ -80,7 +81,7 @@ func (s *SSESink) mapEvent(event canonical.Event, transition streaming.Transitio
 		return "response.created", base, false, nil
 	case canonical.EventType("continuation_updated"):
 		payload, _ := event.ContinuationUpdated()
-		entries, err := continuationReasoningEntries(payload.Continuation())
+		entries, err := continuationOutputIndex(payload.Continuation())
 		if err != nil {
 			return "", nil, false, newError(CodeInternal, "stream.continuation", errors.New("response continuation is invalid"))
 		}
@@ -90,6 +91,9 @@ func (s *SSESink) mapEvent(event canonical.Event, transition streaming.Transitio
 		payload, _ := event.ItemStarted()
 		s.itemIndexes[payload.ID()] = payload.Index()
 		s.itemTypes[payload.ID()] = payload.Type()
+		if payload.Type() == canonical.ItemType("tool_call") {
+			s.itemCallIDs[payload.ID()] = payload.CallID()
+		}
 		setType("response.output_item.added")
 		base["output_index"] = payload.Index()
 		base["item"] = startedOutputItem(payload, s.reasoningEntries)
@@ -135,7 +139,7 @@ func (s *SSESink) mapEvent(event canonical.Event, transition streaming.Transitio
 	case canonical.EventType("tool_arguments_delta"):
 		payload, _ := event.ToolArgumentsDelta()
 		setType("response.function_call_arguments.delta")
-		base["item_id"] = wireItemID("fc", payload.ItemID())
+		base["item_id"] = s.wireItemID(payload.ItemID())
 		base["output_index"] = s.itemIndexes[payload.ItemID()]
 		base["delta"] = payload.Delta()
 		return "response.function_call_arguments.delta", base, false, nil
@@ -229,14 +233,15 @@ func (s *SSESink) writeData(ctx context.Context, data string) error {
 	return nil
 }
 
-func startedOutputItem(payload canonical.ItemStartedPayload, reasoningEntries reasoningOutputEntries) any {
+func startedOutputItem(payload canonical.ItemStartedPayload, continuationEntries continuationOutputEntries) any {
 	switch payload.Type() {
 	case canonical.ItemType("message"):
 		return wireMessage{ID: wireItemID("msg", payload.ID()), Type: "message", Status: "in_progress", Role: "assistant", Content: []wireOutputText{}}
 	case canonical.ItemType("tool_call"):
-		return wireFunctionCall{ID: wireItemID("fc", payload.ID()), Type: "function_call", Status: "in_progress", CallID: wireCallID(payload.CallID()), Name: payload.Name(), Arguments: ""}
+		wireItem, wireCall := toolCallWireIdentity(payload.ID(), payload.CallID(), continuationEntries)
+		return wireFunctionCall{ID: wireItem, Type: "function_call", Status: "in_progress", CallID: wireCall, Name: payload.Name(), Arguments: ""}
 	default:
-		wireID, encrypted := reasoningWireIdentity(payload.ID(), reasoningEntries)
+		wireID, encrypted := reasoningWireIdentity(payload.ID(), continuationEntries)
 		return wireReasoning{ID: wireID, Type: "reasoning", Status: "in_progress", Summary: []wireReasoningSummary{}, EncryptedContent: encrypted}
 	}
 }
@@ -270,6 +275,10 @@ func (s *SSESink) wireItemID(itemID canonical.ItemID) string {
 	itemType := s.itemTypes[itemID]
 	if itemType == canonical.ItemType("reasoning_summary") {
 		wireID, _ := reasoningWireIdentity(itemID, s.reasoningEntries)
+		return wireID
+	}
+	if itemType == canonical.ItemType("tool_call") {
+		wireID, _ := toolCallWireIdentity(itemID, s.itemCallIDs[itemID], s.reasoningEntries)
 		return wireID
 	}
 	return wireItemID(itemPrefix(itemType), itemID)

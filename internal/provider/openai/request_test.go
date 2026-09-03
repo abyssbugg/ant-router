@@ -220,8 +220,8 @@ func decodeContinuationRequest(t *testing.T) canonical.Request {
 		"tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}],
 		"input":[
 			{"type":"reasoning","id":"rs_upstream","summary":[{"type":"summary_text","text":"checked docs"}],"encrypted_content":"cipher-marker","status":"completed"},
-			{"type":"function_call","id":"fc_upstream","status":"completed","call_id":"call-1","name":"Search","arguments":"{}"},
-			{"type":"function_call_output","call_id":"call-1","output":"found"}
+			{"type":"function_call","id":"fc_upstream","status":"completed","call_id":"call_upstream","name":"Search","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_upstream","output":"found"}
 		]
 	}`
 	parsed, err := inbound.DecodeWithAffinity(bytes.NewBufferString(body), &mapperIDs{}, mapperAffinityResolver{providerID: "openai-primary", upstreamModel: "gpt-upstream"})
@@ -256,8 +256,10 @@ func TestMapRequestReplaysReasoningContinuationInInputOrder(t *testing.T) {
 	if len(summary) != 1 || objectField(t, summary[0], "input[0].summary[0]")["text"] != "checked docs" {
 		t.Fatalf("reasoning summary = %#v", summary)
 	}
-	if objectField(t, input[1], "input[1]")["type"] != "function_call" || objectField(t, input[2], "input[2]")["type"] != "function_call_output" {
-		t.Fatalf("replay order = %#v", input)
+	functionCall := objectField(t, input[1], "input[1]")
+	functionOutput := objectField(t, input[2], "input[2]")
+	if functionCall["type"] != "function_call" || functionCall["id"] != "fc_upstream" || functionCall["call_id"] != "call_upstream" || functionOutput["type"] != "function_call_output" || functionOutput["call_id"] != "call_upstream" {
+		t.Fatalf("replay order or identity = %#v", input)
 	}
 }
 

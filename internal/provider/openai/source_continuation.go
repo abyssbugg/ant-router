@@ -43,6 +43,35 @@ func (s *eventSource) hasUnfinishedReasoning() bool {
 	return false
 }
 
+func (s *eventSource) startToolCallWithContinuation(state *sourceItem, upstreamItemID string, params canonical.ItemStartParams) (canonical.Event, bool, error) {
+	entry, err := openaicontinuation.NewFunctionCallEntry(state.id, state.callID, upstreamItemID, state.upstreamCallID)
+	if err != nil {
+		return canonical.Event{}, false, streamError("stream.tool.continuation")
+	}
+	entries := append(append([]openaicontinuation.ContinuationEntry(nil), s.continuationEntries...), entry)
+	continuation, err := openaicontinuation.EncodeContinuation(s.providerID, s.upstreamModel, entries)
+	if err != nil {
+		return canonical.Event{}, false, streamError("stream.tool.continuation")
+	}
+	continuationEvent, err := s.newEvent(func(id canonical.EventID, sequence uint64) (canonical.Event, error) {
+		return canonical.NewContinuationUpdatedEvent(id, s.responseID, sequence, continuation)
+	})
+	if err != nil {
+		return canonical.Event{}, false, s.wrapCanonicalError(err)
+	}
+	itemEvent, err := s.newEvent(func(id canonical.EventID, sequence uint64) (canonical.Event, error) {
+		return canonical.NewItemStartedEvent(id, s.responseID, sequence, params)
+	})
+	if err != nil {
+		return canonical.Event{}, false, s.wrapCanonicalError(err)
+	}
+	s.items[upstreamItemID] = state
+	s.orderedItemIDs = append(s.orderedItemIDs, state.id)
+	s.continuationEntries = entries
+	s.pending = append(s.pending, itemEvent)
+	return continuationEvent, true, nil
+}
+
 func (s *eventSource) completeReasoning(state *sourceItem, upstreamID, encryptedContent string, item canonical.Item) (canonical.Event, bool, error) {
 	entry, err := openaicontinuation.NewContinuationEntry(state.id, upstreamID, encryptedContent)
 	if err != nil {

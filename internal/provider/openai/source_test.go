@@ -207,11 +207,11 @@ func TestEventSourceIDFailureLeavesStateTransactional(t *testing.T) {
 	})
 
 	t.Run("tool delta", func(t *testing.T) {
-		source, err := newEventSource(&fakeSDKStream{events: toolSDKEvents(t)}, "openai/public", canonical.OutputFormat("text"), &failingEventIDs{failAt: 3})
+		source, err := newEventSource(&fakeSDKStream{events: toolSDKEvents(t)}, "openai/public", canonical.OutputFormat("text"), &failingEventIDs{failAt: 4})
 		if err != nil {
 			t.Fatal(err)
 		}
-		for index := 0; index < 2; index++ {
+		for index := 0; index < 3; index++ {
 			if _, err = source.Recv(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -219,8 +219,8 @@ func TestEventSourceIDFailureLeavesStateTransactional(t *testing.T) {
 		if _, err = source.Recv(context.Background()); execution.CodeOf(err) != execution.CodeInternal {
 			t.Fatalf("error = %v", err)
 		}
-		state := source.items["fc"]
-		if state == nil || state.arguments != "" || source.canonicalSequence != 2 {
+		state := source.items["fc_upstream"]
+		if state == nil || state.arguments != "" || source.canonicalSequence != 3 {
 			t.Fatalf("state mutated: state=%#v sequence=%d", state, source.canonicalSequence)
 		}
 	})

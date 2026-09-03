@@ -36,6 +36,37 @@ func encryptedReasoningResponse(t *testing.T, encrypted string) (canonical.Respo
 	return response, itemID
 }
 
+func TestEncodeResponseEmitsUpstreamFunctionCallIdentity(t *testing.T) {
+	response := outputResponse(t, "tool")
+	item := response.Items()[0]
+	call, _ := item.ToolCall()
+	entry, err := openaicontinuation.NewFunctionCallEntry(item.ID(), call.CallID(), "fc_upstream", "call_upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuation, err := openaicontinuation.EncodeContinuation("openai-primary", "gpt-upstream", []openaicontinuation.ContinuationEntry{entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = response.WithContinuation(continuation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder, _ := NewEncoder(time.Unix(1700000000, 0))
+	encoded, err := encoder.EncodeResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	output := document["output"].([]any)[0].(map[string]any)
+	if output["id"] != "fc_upstream" || output["call_id"] != "call_upstream" {
+		t.Fatalf("function call identity = %#v", output)
+	}
+}
+
 func TestEncodeResponseEmitsEncryptedReasoningWithUpstreamID(t *testing.T) {
 	const encrypted = "encrypted-output-secret"
 	response, itemID := encryptedReasoningResponse(t, encrypted)

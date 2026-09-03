@@ -8,6 +8,7 @@ import (
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/execution"
+	openaicontinuation "github.com/abyssbugg/ant-router/internal/openai/continuation"
 	"github.com/abyssbugg/ant-router/internal/streaming"
 	sdkresponses "github.com/openai/openai-go/v3/responses"
 )
@@ -44,11 +45,11 @@ func toolSDKEvents(t *testing.T) []sdkresponses.ResponseStreamEventUnion {
 	t.Helper()
 	return []sdkresponses.ResponseStreamEventUnion{
 		sdkStreamEvent(t, `{"type":"response.created","sequence_number":0,"response":{"id":"r","model":"gpt","status":"in_progress"}}`),
-		sdkStreamEvent(t, `{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc","type":"function_call","call_id":"call_up","name":"Search","arguments":"","status":"in_progress"}}`),
-		sdkStreamEvent(t, `{"type":"response.function_call_arguments.delta","sequence_number":2,"output_index":0,"item_id":"fc","delta":"{\"query\":"}`),
-		sdkStreamEvent(t, `{"type":"response.function_call_arguments.delta","sequence_number":3,"output_index":0,"item_id":"fc","delta":"\"docs\"}"}`),
-		sdkStreamEvent(t, `{"type":"response.function_call_arguments.done","sequence_number":4,"output_index":0,"item_id":"fc","name":"Search","arguments":"{\"query\":\"docs\"}"}`),
-		sdkStreamEvent(t, `{"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"fc","type":"function_call","call_id":"call_up","name":"Search","arguments":"{\"query\":\"docs\"}","status":"completed"}}`),
+		sdkStreamEvent(t, `{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_upstream","type":"function_call","call_id":"call_up","name":"Search","arguments":"","status":"in_progress"}}`),
+		sdkStreamEvent(t, `{"type":"response.function_call_arguments.delta","sequence_number":2,"output_index":0,"item_id":"fc_upstream","delta":"{\"query\":"}`),
+		sdkStreamEvent(t, `{"type":"response.function_call_arguments.delta","sequence_number":3,"output_index":0,"item_id":"fc_upstream","delta":"\"docs\"}"}`),
+		sdkStreamEvent(t, `{"type":"response.function_call_arguments.done","sequence_number":4,"output_index":0,"item_id":"fc_upstream","name":"Search","arguments":"{\"query\":\"docs\"}"}`),
+		sdkStreamEvent(t, `{"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"fc_upstream","type":"function_call","call_id":"call_up","name":"Search","arguments":"{\"query\":\"docs\"}","status":"completed"}}`),
 		sdkStreamEvent(t, `{"type":"response.completed","sequence_number":6,"response":{"id":"r","model":"gpt","status":"completed","usage":{"input_tokens":2,"input_tokens_details":{"cached_tokens":0},"output_tokens":3,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":5}}}`),
 	}
 }
@@ -61,6 +62,14 @@ func TestEventSourceMapsToolCallStream(t *testing.T) {
 	call, ok := response.Items()[0].ToolCall()
 	if !ok || call.Name() != "Search" || string(call.Arguments().Bytes()) != `{"query":"docs"}` {
 		t.Fatalf("tool call = %#v, ok=%v", call, ok)
+	}
+	continuation, ok := response.Continuation()
+	if !ok {
+		t.Fatal("tool response omitted continuation")
+	}
+	entries, err := openaicontinuation.DecodeContinuation(continuation, continuation.Provider(), continuation.Model(), []canonical.ItemID{response.Items()[0].ID()})
+	if err != nil || len(entries) != 1 || !entries[0].IsFunctionCall() || entries[0].CanonicalItemID() != response.Items()[0].ID() || entries[0].CanonicalCallID() != call.CallID() || entries[0].UpstreamItemID() != "fc_upstream" || entries[0].UpstreamCallID() != "call_up" {
+		t.Fatalf("tool continuation = %#v, error = %v", entries, err)
 	}
 }
 

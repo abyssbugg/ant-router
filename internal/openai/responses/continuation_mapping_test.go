@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
+	openaicontinuation "github.com/abyssbugg/ant-router/internal/openai/continuation"
 )
 
 type fixedAffinityResolver struct {
@@ -44,8 +45,8 @@ func TestDecodeMapsStandardReasoningReplayToProviderAffineContinuation(t *testin
 		"tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}],
 		"input":[
 			{"type":"reasoning","id":"rs_upstream","summary":[{"type":"summary_text","text":"looked up docs"}],"encrypted_content":"cipher-marker","status":"completed"},
-			{"type":"function_call","id":"fc_upstream","status":"completed","call_id":"call-1","name":"Search","arguments":"{}"},
-			{"type":"function_call_output","call_id":"call-1","output":"found"}
+			{"type":"function_call","id":"fc_upstream","status":"completed","call_id":"call_upstream","name":"Search","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_upstream","output":"found"}
 		]
 	}`
 	parsed, err := DecodeWithAffinity(strings.NewReader(body), &sequenceIDs{}, resolver)
@@ -71,8 +72,25 @@ func TestDecodeMapsStandardReasoningReplayToProviderAffineContinuation(t *testin
 	if continuation == nil || continuation.Provider() != "openai-primary" || continuation.Model() != "gpt-upstream" || strings.Contains(string(continuation.Bytes()), "openai/public") {
 		t.Fatalf("continuation affinity = %#v", continuation)
 	}
+	toolCall, _ := items[1].ToolCall()
+	entries, err := openaicontinuation.DecodeContinuation(*continuation, "openai-primary", "gpt-upstream", []canonical.ItemID{items[0].ID(), items[1].ID()})
+	if err != nil || len(entries) != 2 || !entries[0].IsReasoning() || !entries[1].IsFunctionCall() {
+		t.Fatalf("continuation entries = %#v, error = %v", entries, err)
+	}
+	if entries[1].CanonicalItemID() != items[1].ID() || entries[1].CanonicalCallID() != toolCall.CallID() || entries[1].UpstreamItemID() != "fc_upstream" || entries[1].UpstreamCallID() != "call_upstream" {
+		t.Fatal("continuation envelope omitted exact function-call identity")
+	}
 	if !strings.Contains(string(continuation.Bytes()), "cipher-marker") || !strings.Contains(string(continuation.Bytes()), "rs_upstream") {
 		t.Fatal("continuation envelope omitted replay identity or ciphertext")
+	}
+}
+
+func TestDecodeRejectsReasoningReplayCallWithoutUpstreamItemID(t *testing.T) {
+	resolver := &fixedAffinityResolver{providerID: "openai-primary", upstreamModel: "gpt-upstream"}
+	body := `{"model":"openai/public","tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}],"input":[{"type":"reasoning","id":"rs_upstream","summary":[],"encrypted_content":"cipher"},{"type":"function_call","call_id":"call_upstream","name":"Search","arguments":"{}"},{"type":"function_call_output","call_id":"call_upstream","output":"found"}]}`
+	_, err := DecodeWithAffinity(strings.NewReader(body), &sequenceIDs{}, resolver)
+	if CodeOf(err) != CodeInvalidField || PathOf(err) != "input[1].id" {
+		t.Fatalf("error code/path = %q/%q", CodeOf(err), PathOf(err))
 	}
 }
 

@@ -27,13 +27,13 @@ func (e Encoder) EncodeResponse(response canonical.Response) ([]byte, error) {
 	if !response.Valid() {
 		return nil, newError(CodeInternal, "response", errors.New("canonical response is invalid"))
 	}
-	reasoningEntries, err := responseReasoningEntries(response)
+	continuationEntries, err := responseContinuationEntries(response)
 	if err != nil {
 		return nil, newError(CodeInternal, "response.continuation", errors.New("response continuation is invalid"))
 	}
 	output := make([]any, 0, len(response.Items()))
 	for _, item := range response.Items() {
-		value, err := encodeOutputItem(item, reasoningEntries)
+		value, err := encodeOutputItem(item, continuationEntries)
 		if err != nil {
 			return nil, newError(CodeInternal, "response.output", errors.New("canonical output is invalid"))
 		}
@@ -114,7 +114,7 @@ type wireReasoningSummary struct {
 	Text string `json:"text"`
 }
 
-func encodeOutputItem(item canonical.Item, reasoningEntries reasoningOutputEntries) (any, error) {
+func encodeOutputItem(item canonical.Item, continuationEntries continuationOutputEntries) (any, error) {
 	switch item.Type() {
 	case canonical.ItemType("message"):
 		message, ok := item.Message()
@@ -139,7 +139,8 @@ func encodeOutputItem(item canonical.Item, reasoningEntries reasoningOutputEntri
 		if !ok {
 			return nil, errors.New("function call is invalid")
 		}
-		return wireFunctionCall{ID: wireItemID("fc", item.ID()), Type: "function_call", Status: "completed", CallID: wireCallID(call.CallID()), Name: call.Name(), Arguments: string(call.Arguments().Bytes())}, nil
+		wireItem, wireCall := toolCallWireIdentity(item.ID(), call.CallID(), continuationEntries)
+		return wireFunctionCall{ID: wireItem, Type: "function_call", Status: "completed", CallID: wireCall, Name: call.Name(), Arguments: string(call.Arguments().Bytes())}, nil
 	case canonical.ItemType("reasoning_summary"):
 		reasoning, ok := item.ReasoningSummary()
 		if !ok {
@@ -149,7 +150,7 @@ func encodeOutputItem(item canonical.Item, reasoningEntries reasoningOutputEntri
 		for _, value := range reasoning.Summaries() {
 			summary = append(summary, wireReasoningSummary{Type: "summary_text", Text: value.Text()})
 		}
-		wireID, encrypted := reasoningWireIdentity(item.ID(), reasoningEntries)
+		wireID, encrypted := reasoningWireIdentity(item.ID(), continuationEntries)
 		return wireReasoning{ID: wireID, Type: "reasoning", Status: "completed", Summary: summary, EncryptedContent: encrypted}, nil
 	default:
 		return nil, errors.New("output item is unsupported")
