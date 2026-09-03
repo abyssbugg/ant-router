@@ -11,13 +11,15 @@ import (
 )
 
 type registryAdapter struct {
-	availability    Availability
-	availabilityErr error
-	source          streaming.EventSource
-	executeErr      error
-	calls           int
-	upstream        string
-	requestModel    string
+	availability         Availability
+	availabilityErr      error
+	source               streaming.EventSource
+	executeErr           error
+	calls                int
+	upstream             string
+	requestModel         string
+	continuationProvider string
+	continuationModel    string
 }
 
 func (a *registryAdapter) Availability(ctx context.Context) (Availability, error) {
@@ -31,6 +33,10 @@ func (a *registryAdapter) Execute(ctx context.Context, upstream string, request 
 	a.calls++
 	a.upstream = upstream
 	a.requestModel = request.Model()
+	if continuation := request.Continuation(); continuation != nil {
+		a.continuationProvider = continuation.Provider()
+		a.continuationModel = continuation.Model()
+	}
 	return a.source, a.executeErr
 }
 
@@ -193,6 +199,95 @@ func TestRegistryReportsSafeProviderAvailability(t *testing.T) {
 	}
 	if len(statuses) != 1 || statuses[0].ProviderID() != "openai" || statuses[0].Availability().Available() || statuses[0].Availability().Reference() != "OPENAI_API_KEY" {
 		t.Fatalf("statuses = %#v", statuses)
+	}
+}
+
+func registryRequestWithContinuation(t *testing.T, model, providerID, upstreamModel string) canonical.Request {
+	t.Helper()
+	base := registryRequest(t, model)
+	continuation, err := canonical.NewContinuation(providerID, upstreamModel, []byte(`{"entries":[{"canonical_item_id":"item_AQEBAQEBAQEBAQEBAQEBAQ","encrypted_content":"cipher","upstream_item_id":"rs_1"}],"version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := canonical.NewRequest(canonical.RequestParams{
+		ID: base.ID(), Model: base.Model(), Input: base.Input(), Tools: base.Tools(), ToolChoice: base.ToolChoice(),
+		Output: base.Output(), Sampling: base.Sampling(), ReasoningSummary: base.ReasoningSummary(), Continuation: &continuation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func TestRegistryDispatchesOnlyMatchingContinuationAffinity(t *testing.T) {
+	sentinel := &registrySource{}
+	adapter := &registryAdapter{availability: Available(), source: sentinel}
+	model := registryModel(t, "openai/public", "openai-primary", canonical.CapabilityText, canonical.CapabilityContinuation)
+	registry, err := NewRegistry([]Registration{{ProviderID: "openai-primary", Adapter: adapter, Models: []ModelBinding{{Model: model, Upstream: "gpt-upstream"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := registryRequestWithContinuation(t, "openai/public", "openai-primary", "gpt-upstream")
+	if _, err := registry.Execute(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.calls != 1 || adapter.continuationProvider != "openai-primary" || adapter.continuationModel != "gpt-upstream" {
+		t.Fatalf("dispatch calls=%d continuation=%q/%q", adapter.calls, adapter.continuationProvider, adapter.continuationModel)
+	}
+}
+
+func TestRegistryRejectsContinuationAffinityMismatchBeforeProvider(t *testing.T) {
+	for name, affinity := range map[string][2]string{
+		"provider": {"openai-secondary", "gpt-upstream"},
+		"model":    {"openai-primary", "gpt-other"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			adapter := &registryAdapter{availability: Available(), source: &registrySource{}}
+			model := registryModel(t, "openai/public", "openai-primary", canonical.CapabilityText, canonical.CapabilityContinuation)
+			registry, err := NewRegistry([]Registration{{ProviderID: "openai-primary", Adapter: adapter, Models: []ModelBinding{{Model: model, Upstream: "gpt-upstream"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := registryRequestWithContinuation(t, "openai/public", affinity[0], affinity[1])
+			if _, err := registry.Execute(context.Background(), request); CodeOf(err) != CodeInvalidRequest {
+				t.Fatalf("Execute() code = %q, want %q", CodeOf(err), CodeInvalidRequest)
+			}
+			if adapter.calls != 0 {
+				t.Fatalf("provider called %d times", adapter.calls)
+			}
+		})
+	}
+}
+
+func TestRegistryRequiresContinuationCapability(t *testing.T) {
+	adapter := &registryAdapter{availability: Available(), source: &registrySource{}}
+	model := registryModel(t, "mock/text", "mock", canonical.CapabilityText)
+	registry, err := NewRegistry([]Registration{{ProviderID: "mock", Adapter: adapter, Models: []ModelBinding{{Model: model, Upstream: "mock/text"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := registryRequestWithContinuation(t, "mock/text", "mock", "mock/text")
+	if _, err := registry.Execute(context.Background(), request); CodeOf(err) != CodeInvalidModel {
+		t.Fatalf("Execute() code = %q, want %q", CodeOf(err), CodeInvalidModel)
+	}
+	if adapter.calls != 0 {
+		t.Fatalf("provider called %d times", adapter.calls)
+	}
+}
+
+func TestRegistryResolvesConfiguredModelAffinity(t *testing.T) {
+	adapter := &registryAdapter{availability: Available(), source: &registrySource{}}
+	model := registryModel(t, "openai/public", "openai-primary", canonical.CapabilityText)
+	registry, err := NewRegistry([]Registration{{ProviderID: "openai-primary", Adapter: adapter, Models: []ModelBinding{{Model: model, Upstream: "gpt-upstream"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerID, upstreamModel, err := registry.ResolveModel("openai/public")
+	if err != nil || providerID != "openai-primary" || upstreamModel != "gpt-upstream" {
+		t.Fatalf("ResolveModel() = %q/%q, %v", providerID, upstreamModel, err)
+	}
+	if _, _, err := registry.ResolveModel("missing"); CodeOf(err) != CodeInvalidModel {
+		t.Fatalf("missing model code = %q, want %q", CodeOf(err), CodeInvalidModel)
 	}
 }
 

@@ -76,8 +76,18 @@ func NewRequest(params RequestParams) (Request, error) {
 	if !reasoningSummary.Valid() {
 		return Request{}, requestError(CodeInvalidInvariant, "request.reasoning_summary")
 	}
-	if params.Continuation != nil && (!params.Continuation.Valid() || params.Continuation.Model() != params.Model) {
+	// Continuations bind to a configured provider ID and upstream model, while
+	// request.Model is a public alias. Exact affinity is enforced by the
+	// execution registry after resolving that alias.
+	if params.Continuation != nil && !params.Continuation.Valid() {
 		return Request{}, requestError(CodeContinuationAffinityRequired, "request.continuation")
+	}
+	if params.Continuation == nil {
+		for _, item := range params.Input {
+			if reasoning, ok := item.ReasoningSummary(); ok && len(reasoning.Summaries()) == 0 {
+				return Request{}, requestError(CodeInvalidInvariant, "request.input")
+			}
+		}
 	}
 	if err := validateRequestItemsAndTools(params.Input, params.Tools, choice, output); err != nil {
 		return Request{}, err

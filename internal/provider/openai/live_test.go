@@ -3,7 +3,9 @@
 package openai
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/credential"
+	inbound "github.com/abyssbugg/ant-router/internal/openai/responses"
 )
 
 const (
@@ -38,22 +41,73 @@ func TestLiveOpenAICertification(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text := decodeCanonicalRequest(t, `{"model":"openai/live","input":"Reply with a short acknowledgement.","max_output_tokens":64}`)
-	textResponse := executeLiveRequest(t, provider, upstreamModel, text)
-	if !hasMessage(textResponse.Items()) {
-		t.Fatal("live text response did not contain an assistant message")
-	}
-
-	tool := decodeCanonicalRequest(t, `{"model":"openai/live","input":"Call Ping with an empty JSON object.","tools":[{"type":"function","name":"Ping","description":"Return a health acknowledgement.","parameters":{"type":"object","properties":{},"additionalProperties":false},"strict":true}],"tool_choice":{"type":"function","name":"Ping"},"max_output_tokens":64}`)
+	tool := decodeCanonicalRequest(t, `{"model":"openai/live","input":"Call Ping with an empty JSON object.","tools":[{"type":"function","name":"Ping","description":"Return a health acknowledgement.","parameters":{"type":"object","properties":{},"additionalProperties":false},"strict":true}],"tool_choice":{"type":"function","name":"Ping"},"reasoning":{"summary":"concise"},"max_output_tokens":64}`)
 	toolResponse := executeLiveRequest(t, provider, upstreamModel, tool)
-	if !hasToolCall(toolResponse.Items(), "Ping") {
-		t.Fatal("live tool response did not contain the required function call")
+	if !hasSingleToolCall(toolResponse.Items(), "Ping") {
+		t.Fatal("live tool response did not contain exactly one required function call")
+	}
+	if _, ok := toolResponse.Continuation(); !ok {
+		t.Fatal("live tool response did not contain stateless continuation")
+	}
+	followUp := liveContinuationRequest(t, toolResponse, upstreamModel)
+	finalResponse := executeLiveRequest(t, provider, upstreamModel, followUp)
+	if !hasMessage(finalResponse.Items()) {
+		t.Fatal("live continuation response did not contain an assistant message")
 	}
 
-	total := textResponse.Usage().TotalTokens() + toolResponse.Usage().TotalTokens()
+	total := toolResponse.Usage().TotalTokens() + finalResponse.Usage().TotalTokens()
 	if total <= 0 || total > liveTokenBudget {
 		t.Fatalf("live usage exceeded certification bounds: total_tokens=%d", total)
 	}
+}
+
+func liveContinuationRequest(t *testing.T, response canonical.Response, upstreamModel string) canonical.Request {
+	t.Helper()
+	encoder, err := inbound.NewEncoder(time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := encoder.EncodeResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	input, ok := document["output"].([]any)
+	if !ok {
+		t.Fatal("live response output is invalid")
+	}
+	input = append([]any(nil), input...)
+	callID := ""
+	callCount := 0
+	for _, value := range input {
+		item, ok := value.(map[string]any)
+		if ok && item["type"] == "function_call" {
+			callCount++
+			callID, _ = item["call_id"].(string)
+		}
+	}
+	if callCount != 1 || callID == "" {
+		t.Fatal("live response did not contain exactly one function call identity")
+	}
+	input = append(input, map[string]any{"type": "function_call_output", "call_id": callID, "output": "pong"})
+	requestDocument := map[string]any{
+		"model": "openai/live", "input": input, "store": false,
+		"include":   []string{"reasoning.encrypted_content"},
+		"tools":     []any{map[string]any{"type": "function", "name": "Ping", "description": "Return a health acknowledgement.", "parameters": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}, "strict": true}},
+		"reasoning": map[string]any{"summary": "concise"}, "max_output_tokens": 64,
+	}
+	wire, err := json.Marshal(requestDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := inbound.DecodeWithAffinity(bytes.NewReader(wire), &mapperIDs{}, mapperAffinityResolver{providerID: "openai", upstreamModel: upstreamModel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Request
 }
 
 func executeLiveRequest(t *testing.T, provider *Provider, upstreamModel string, request canonical.Request) canonical.Response {
@@ -83,11 +137,15 @@ func hasMessage(items []canonical.Item) bool {
 	return false
 }
 
-func hasToolCall(items []canonical.Item, name string) bool {
+func hasSingleToolCall(items []canonical.Item, name string) bool {
+	count := 0
 	for _, item := range items {
-		if call, ok := item.ToolCall(); ok && call.Name() == name {
-			return true
+		if call, ok := item.ToolCall(); ok {
+			if call.Name() != name {
+				return false
+			}
+			count++
 		}
 	}
-	return false
+	return count == 1
 }

@@ -32,6 +32,16 @@ func DecodeEvent(data []byte) (Event, error) {
 			return Event{}, err
 		}
 		event, err = NewResponseStartedEvent(id, responseID, dto.Sequence, payload.Model)
+	case EventType("continuation_updated"):
+		var payload continuationUpdatedDTO
+		if err := strictDecode(dto.Data, &payload); err != nil {
+			return Event{}, err
+		}
+		continuation, parseErr := decodeContinuation(&payload.Continuation)
+		if parseErr != nil {
+			return Event{}, parseErr
+		}
+		event, err = NewContinuationUpdatedEvent(id, responseID, dto.Sequence, *continuation)
 	case EventType("item_started"):
 		var payload itemStartedDTO
 		if err := strictDecode(dto.Data, &payload); err != nil {

@@ -48,7 +48,7 @@ func (m *Machine) acceptResponseCompleted(payload canonical.ResponseCompletedPay
 	if !payload.Usage().AtLeast(m.latestUsage) {
 		return acceptOutcome{}, m.error(CodeUsageRegression, "event.response_completed.usage")
 	}
-	response, err := canonical.NewResponse(canonical.ResponseParams{ID: m.responseID, Model: m.model, Items: items, FinishReason: payload.FinishReason(), Usage: payload.Usage()})
+	response, err := canonical.NewResponse(canonical.ResponseParams{ID: m.responseID, Model: m.model, Items: items, FinishReason: payload.FinishReason(), Usage: payload.Usage(), Continuation: m.continuation})
 	if err != nil {
 		return acceptOutcome{}, m.error(CodeTerminalMismatch, "event.response_completed")
 	}

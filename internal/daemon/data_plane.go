@@ -51,13 +51,14 @@ func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, providers
 		return nil, fmt.Errorf("provider registry is unavailable")
 	}
 	handler, err := dataplane.NewHandler(dataplane.HandlerOptions{
-		TokenSource:    dataplane.StaticTokenSource(token),
-		Executor:       providers.registry,
-		Catalog:        providers.registry,
-		ListenAddress:  configuration.DataPlane.Listen,
-		MaxConcurrent:  configuration.DataPlane.MaxConcurrentRequests,
-		RequestTimeout: dataPlaneRequestTimeout,
-		Clock:          time.Now,
+		TokenSource:      dataplane.StaticTokenSource(token),
+		Executor:         providers.registry,
+		Catalog:          providers.registry,
+		AffinityResolver: providers.registry,
+		ListenAddress:    configuration.DataPlane.Listen,
+		MaxConcurrent:    configuration.DataPlane.MaxConcurrentRequests,
+		RequestTimeout:   dataPlaneRequestTimeout,
+		Clock:            time.Now,
 	})
 	if err != nil {
 		return nil, err

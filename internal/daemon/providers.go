@@ -67,7 +67,7 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 		if err != nil {
 			return execution.Registration{}, err
 		}
-		provider, err := openaiprovider.NewProvider(source, ref)
+		provider, err := openaiprovider.NewProviderForID(providerConfig.ID, source, ref)
 		if err != nil {
 			return execution.Registration{}, err
 		}

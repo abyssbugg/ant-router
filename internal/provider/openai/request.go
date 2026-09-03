@@ -9,6 +9,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 	"github.com/abyssbugg/ant-router/internal/execution"
+	openaicontinuation "github.com/abyssbugg/ant-router/internal/openai/continuation"
 	"github.com/openai/openai-go/v3/packages/param"
 	sdkresponses "github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
@@ -21,14 +22,27 @@ func mapRequest(request canonical.Request, upstreamModel string) (sdkresponses.R
 	if upstreamModel == "" {
 		return sdkresponses.ResponseNewParams{}, requestMapError("provider.model")
 	}
-	if request.Continuation() != nil {
-		return sdkresponses.ResponseNewParams{}, requestMapError("continuation")
-	}
 	if _, ok := request.Sampling().Seed(); ok {
 		return sdkresponses.ResponseNewParams{}, requestMapError("sampling.seed")
 	}
 
-	input, err := mapInput(request.Input())
+	replayByItem := make(map[string]openaicontinuation.ContinuationEntry)
+	replayByCall := make(map[string]openaicontinuation.ContinuationEntry)
+	hasContinuation := request.Continuation() != nil
+	if continuation := request.Continuation(); continuation != nil {
+		anchors := continuationItemIDs(request.Input())
+		entries, err := openaicontinuation.DecodeContinuation(*continuation, continuation.Provider(), upstreamModel, anchors)
+		if err != nil {
+			return sdkresponses.ResponseNewParams{}, requestMapError("continuation")
+		}
+		for _, entry := range entries {
+			replayByItem[entry.CanonicalItemID().String()] = entry
+			if entry.IsFunctionCall() {
+				replayByCall[entry.CanonicalCallID().String()] = entry
+			}
+		}
+	}
+	input, err := mapInput(request.Input(), replayByItem, replayByCall, hasContinuation)
 	if err != nil {
 		return sdkresponses.ResponseNewParams{}, err
 	}
@@ -46,10 +60,12 @@ func mapRequest(request canonical.Request, upstreamModel string) (sdkresponses.R
 	}
 
 	result := sdkresponses.ResponseNewParams{
-		Model: shared.ResponsesModel(upstreamModel),
-		Input: sdkresponses.ResponseNewParamsInputUnion{OfInputItemList: input},
-		Tools: tools,
-		Text:  text,
+		Model:   shared.ResponsesModel(upstreamModel),
+		Input:   sdkresponses.ResponseNewParamsInputUnion{OfInputItemList: input},
+		Tools:   tools,
+		Text:    text,
+		Store:   param.NewOpt(false),
+		Include: []sdkresponses.ResponseIncludable{sdkresponses.ResponseIncludable("reasoning.encrypted_content")},
 	}
 	if len(tools) > 0 {
 		result.ToolChoice = choice
@@ -73,7 +89,7 @@ func mapRequest(request canonical.Request, upstreamModel string) (sdkresponses.R
 	return result, nil
 }
 
-func mapInput(items []canonical.Item) (sdkresponses.ResponseInputParam, error) {
+func mapInput(items []canonical.Item, replayByItem, replayByCall map[string]openaicontinuation.ContinuationEntry, hasContinuation bool) (sdkresponses.ResponseInputParam, error) {
 	result := make(sdkresponses.ResponseInputParam, 0, len(items))
 	for index, item := range items {
 		path := "input[" + jsonIndex(index) + "]"
@@ -87,7 +103,17 @@ func mapInput(items []canonical.Item) (sdkresponses.ResponseInputParam, error) {
 			result = append(result, sdkresponses.ResponseInputItemParamOfMessage(content, sdkresponses.EasyInputMessageRole(message.Role())))
 		case canonical.ItemType("tool_call"):
 			call, _ := item.ToolCall()
-			result = append(result, sdkresponses.ResponseInputItemParamOfFunctionCall(string(call.Arguments().Bytes()), call.CallID().String(), call.Name()))
+			entry, exists := replayByItem[item.ID().String()]
+			if hasContinuation && (!exists || !entry.IsFunctionCall() || entry.CanonicalCallID() != call.CallID()) {
+				return nil, requestMapError(path + ".id")
+			}
+			mapped := sdkresponses.ResponseInputItemParamOfFunctionCall(string(call.Arguments().Bytes()), call.CallID().String(), call.Name())
+			if exists {
+				mapped.OfFunctionCall.ID = param.NewOpt(entry.UpstreamItemID())
+				mapped.OfFunctionCall.CallID = entry.UpstreamCallID()
+				mapped.OfFunctionCall.Status = sdkresponses.ResponseFunctionToolCallStatusCompleted
+			}
+			result = append(result, mapped)
 		case canonical.ItemType("tool_result"):
 			toolResult, _ := item.ToolResult()
 			if toolResult.IsError() {
@@ -97,17 +123,49 @@ func mapInput(items []canonical.Item) (sdkresponses.ResponseInputParam, error) {
 			if err != nil {
 				return nil, err
 			}
+			callID := toolResult.CallID().String()
+			if entry, exists := replayByCall[callID]; exists {
+				callID = entry.UpstreamCallID()
+			} else if hasContinuation {
+				return nil, requestMapError(path + ".call_id")
+			}
 			result = append(result, sdkresponses.ResponseInputItemUnionParam{OfFunctionCallOutput: &sdkresponses.ResponseInputItemFunctionCallOutputParam{
-				CallID: param.NewOpt(toolResult.CallID().String()),
+				CallID: param.NewOpt(callID),
 				Output: output,
 			}})
 		case canonical.ItemType("reasoning_summary"):
-			return nil, requestMapError(path + ".type")
+			reasoning, _ := item.ReasoningSummary()
+			entry, exists := replayByItem[reasoning.ID().String()]
+			if !exists || !entry.IsReasoning() {
+				return nil, requestMapError(path + ".type")
+			}
+			summaries := reasoning.Summaries()
+			mappedSummaries := make([]sdkresponses.ResponseReasoningItemSummaryParam, len(summaries))
+			for summaryIndex, summary := range summaries {
+				mappedSummaries[summaryIndex] = sdkresponses.ResponseReasoningItemSummaryParam{Text: summary.Text()}
+			}
+			mapped := sdkresponses.ResponseInputItemParamOfReasoning(entry.UpstreamItemID(), mappedSummaries)
+			mapped.OfReasoning.EncryptedContent = param.NewOpt(entry.EncryptedContent())
+			result = append(result, mapped)
 		default:
 			return nil, requestMapError(path + ".type")
 		}
 	}
 	return result, nil
+}
+
+func continuationItemIDs(items []canonical.Item) []canonical.ItemID {
+	ids := make([]canonical.ItemID, 0)
+	for _, item := range items {
+		if _, reasoning := item.ReasoningSummary(); reasoning {
+			ids = append(ids, item.ID())
+			continue
+		}
+		if _, toolCall := item.ToolCall(); toolCall {
+			ids = append(ids, item.ID())
+		}
+	}
+	return ids
 }
 
 func mapMessageContent(blocks []canonical.ContentBlock, path string) (sdkresponses.ResponseInputMessageContentListParam, error) {

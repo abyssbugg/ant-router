@@ -9,6 +9,7 @@ type responseDTO struct {
 	Items        []json.RawMessage `json:"items"`
 	FinishReason string            `json:"finish_reason"`
 	Usage        usageDTO          `json:"usage"`
+	Continuation *continuationDTO  `json:"continuation,omitempty"`
 }
 
 type usageDTO struct {
@@ -38,6 +39,9 @@ type eventDTO struct {
 
 type responseStartedDTO struct {
 	Model string `json:"model"`
+}
+type continuationUpdatedDTO struct {
+	Continuation continuationDTO `json:"continuation"`
 }
 type itemStartedDTO struct {
 	Index    int    `json:"index"`

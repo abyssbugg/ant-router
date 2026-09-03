@@ -28,9 +28,15 @@ func reconstructItem(state *itemState, final canonical.Item) (canonical.Item, in
 		}
 		return item, 0, nil
 	case canonical.ItemType("reasoning_summary"):
-		content, err := completedContent(state)
-		if err != nil {
-			return canonical.Item{}, 0, err
+		var content []canonical.ContentBlock
+		// Any streamed content state must pass normal completion validation;
+		// only a completely absent summary is reconstructed as empty.
+		if state.nextContent > 0 || len(state.contents) > 0 {
+			var err error
+			content, err = completedContent(state)
+			if err != nil {
+				return canonical.Item{}, 0, err
+			}
 		}
 		summaries := make([]canonical.TextContent, 0, len(content))
 		for _, block := range content {

@@ -11,6 +11,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 	"github.com/abyssbugg/ant-router/internal/execution"
+	openaicontinuation "github.com/abyssbugg/ant-router/internal/openai/continuation"
 	"github.com/abyssbugg/ant-router/internal/streaming"
 	sdkresponses "github.com/openai/openai-go/v3/responses"
 )
@@ -30,41 +31,52 @@ type streamIDGenerator interface {
 }
 
 type eventSource struct {
-	stream      sdkEventStream
-	publicModel string
-	format      canonical.OutputFormat
-	ids         streamIDGenerator
+	stream        sdkEventStream
+	publicModel   string
+	providerID    string
+	upstreamModel string
+	format        canonical.OutputFormat
+	ids           streamIDGenerator
 
-	providerSequence  int64
-	hasProviderEvent  bool
-	canonicalSequence uint64
-	responseID        canonical.ResponseID
-	upstreamResponse  string
-	started           bool
-	terminal          bool
-	items             map[string]*sourceItem
-	orderedItemIDs    []canonical.ItemID
-	closeOnce         sync.Once
-	closeErr          error
-	fatalErr          error
+	providerSequence    int64
+	hasProviderEvent    bool
+	canonicalSequence   uint64
+	responseID          canonical.ResponseID
+	upstreamResponse    string
+	started             bool
+	terminal            bool
+	items               map[string]*sourceItem
+	orderedItemIDs      []canonical.ItemID
+	closeOnce           sync.Once
+	closeErr            error
+	fatalErr            error
+	pending             []canonical.Event
+	continuationEntries []openaicontinuation.ContinuationEntry
 }
 
 type sourceItem struct {
-	id             canonical.ItemID
-	index          int
-	kind           canonical.ItemType
-	contents       map[int]canonical.ContentBlock
-	callID         canonical.ToolCallID
-	upstreamCallID string
-	name           string
-	arguments      string
+	id              canonical.ItemID
+	index           int
+	kind            canonical.ItemType
+	contents        map[int]canonical.ContentBlock
+	callID          canonical.ToolCallID
+	upstreamCallID  string
+	name            string
+	arguments       string
+	reasoningEvents []bufferedReasoningEvent
+	reasoningBytes  int
+	reasoningDone   bool
 }
 
 func newEventSource(stream sdkEventStream, publicModel string, format canonical.OutputFormat, ids streamIDGenerator) (*eventSource, error) {
-	if nilInterface(stream) || publicModel == "" || !format.Valid() || nilInterface(ids) {
+	return newEventSourceWithAffinity(stream, publicModel, "openai-test", "gpt-test", format, ids)
+}
+
+func newEventSourceWithAffinity(stream sdkEventStream, publicModel, providerID, upstreamModel string, format canonical.OutputFormat, ids streamIDGenerator) (*eventSource, error) {
+	if nilInterface(stream) || publicModel == "" || providerID == "" || upstreamModel == "" || !format.Valid() || nilInterface(ids) {
 		return nil, streamError("stream.options")
 	}
-	return &eventSource{stream: stream, publicModel: publicModel, format: format, ids: ids, providerSequence: -1, items: make(map[string]*sourceItem)}, nil
+	return &eventSource{stream: stream, publicModel: publicModel, providerID: providerID, upstreamModel: upstreamModel, format: format, ids: ids, providerSequence: -1, items: make(map[string]*sourceItem)}, nil
 }
 
 func (s *eventSource) Recv(ctx context.Context) (canonical.Event, error) {
@@ -79,6 +91,11 @@ func (s *eventSource) Recv(ctx context.Context) (canonical.Event, error) {
 	}
 	if s.terminal {
 		return canonical.Event{}, io.EOF
+	}
+	if len(s.pending) > 0 {
+		event := s.pending[0]
+		s.pending = s.pending[1:]
+		return event, nil
 	}
 	for {
 		if !s.stream.Next() {
@@ -232,6 +249,7 @@ func (s *eventSource) mapItemStarted(upstream sdkresponses.ResponseStreamEventUn
 	}
 	state := &sourceItem{id: itemID, index: int(upstream.OutputIndex), contents: make(map[int]canonical.ContentBlock)}
 	params := canonical.ItemStartParams{Index: state.index, ID: state.id}
+	deferReasoning := false
 	switch upstream.Item.Type {
 	case "message":
 		message := upstream.Item.AsMessage()
@@ -254,8 +272,17 @@ func (s *eventSource) mapItemStarted(upstream sdkresponses.ResponseStreamEventUn
 	case "reasoning":
 		state.kind = canonical.ItemType("reasoning_summary")
 		params.Type = state.kind
+		deferReasoning = true
 	default:
 		return canonical.Event{}, false, streamError("stream.item.type")
+	}
+	if state.kind == canonical.ItemType("tool_call") {
+		return s.startToolCallWithContinuation(state, upstream.Item.ID, params)
+	}
+	if deferReasoning {
+		s.items[upstream.Item.ID] = state
+		s.orderedItemIDs = append(s.orderedItemIDs, itemID)
+		return canonical.Event{}, false, nil
 	}
 	event, err := s.newEvent(func(eventID canonical.EventID, sequence uint64) (canonical.Event, error) {
 		return canonical.NewItemStartedEvent(eventID, s.responseID, sequence, params)
@@ -273,10 +300,10 @@ func (s *eventSource) mapReasoningStarted(upstream sdkresponses.ResponseStreamEv
 	if err != nil || state.kind != canonical.ItemType("reasoning_summary") || upstream.SummaryIndex < 0 || upstream.SummaryIndex >= int64(canonical.MaxContentBlocks) || upstream.Part.Type != "summary_text" {
 		return canonical.Event{}, false, streamError("stream.reasoning")
 	}
-	event, err := s.newEvent(func(eventID canonical.EventID, sequence uint64) (canonical.Event, error) {
-		return canonical.NewContentStartedEvent(eventID, s.responseID, sequence, state.id, int(upstream.SummaryIndex), canonical.ContentType("text"))
-	})
-	return event, true, s.wrapCanonicalError(err)
+	if err := state.bufferReasoning(bufferedReasoningEvent{kind: bufferedReasoningStart, index: int(upstream.SummaryIndex)}, 0); err != nil {
+		return canonical.Event{}, false, err
+	}
+	return canonical.Event{}, false, nil
 }
 
 func (s *eventSource) mapReasoningDelta(upstream sdkresponses.ResponseStreamEventUnion) (canonical.Event, bool, error) {
@@ -284,10 +311,10 @@ func (s *eventSource) mapReasoningDelta(upstream sdkresponses.ResponseStreamEven
 	if err != nil || state.kind != canonical.ItemType("reasoning_summary") || upstream.SummaryIndex < 0 || upstream.SummaryIndex >= int64(canonical.MaxContentBlocks) {
 		return canonical.Event{}, false, streamError("stream.reasoning")
 	}
-	event, err := s.newEvent(func(eventID canonical.EventID, sequence uint64) (canonical.Event, error) {
-		return canonical.NewTextDeltaEvent(eventID, s.responseID, sequence, state.id, int(upstream.SummaryIndex), upstream.Delta)
-	})
-	return event, true, s.wrapCanonicalError(err)
+	if err := state.bufferReasoning(bufferedReasoningEvent{kind: bufferedReasoningDelta, index: int(upstream.SummaryIndex), text: upstream.Delta}, len(upstream.Delta)); err != nil {
+		return canonical.Event{}, false, err
+	}
+	return canonical.Event{}, false, nil
 }
 
 func (s *eventSource) mapReasoningCompleted(upstream sdkresponses.ResponseStreamEventUnion) (canonical.Event, bool, error) {
@@ -303,14 +330,11 @@ func (s *eventSource) mapReasoningCompleted(upstream sdkresponses.ResponseStream
 	if err != nil {
 		return canonical.Event{}, false, streamError("stream.reasoning")
 	}
-	event, err := s.newEvent(func(eventID canonical.EventID, sequence uint64) (canonical.Event, error) {
-		return canonical.NewContentCompletedEvent(eventID, s.responseID, sequence, state.id, int(upstream.SummaryIndex), block)
-	})
-	if err != nil {
-		return canonical.Event{}, false, s.wrapCanonicalError(err)
+	if err := state.bufferReasoning(bufferedReasoningEvent{kind: bufferedReasoningCompleted, index: int(upstream.SummaryIndex), block: block}, len(upstream.Text)); err != nil {
+		return canonical.Event{}, false, err
 	}
 	state.contents[int(upstream.SummaryIndex)] = block
-	return event, true, nil
+	return canonical.Event{}, false, nil
 }
 
 func (s *eventSource) mapToolDelta(upstream sdkresponses.ResponseStreamEventUnion) (canonical.Event, bool, error) {
@@ -494,6 +518,7 @@ func (s *eventSource) mapItemCompleted(upstream sdkresponses.ResponseStreamEvent
 		if err != nil {
 			return canonical.Event{}, false, streamError("stream.reasoning")
 		}
+		return s.completeReasoning(state, upstream.Item.ID, done.EncryptedContent, item)
 	default:
 		return canonical.Event{}, false, streamError("stream.item.type")
 	}
@@ -516,7 +541,7 @@ func orderedContents(contents map[int]canonical.ContentBlock) ([]canonical.Conte
 }
 
 func (s *eventSource) mapResponseCompleted(upstream sdkresponses.ResponseStreamEventUnion, finish canonical.FinishReason) (canonical.Event, bool, error) {
-	if !s.started || upstream.Response.ID != s.upstreamResponse {
+	if !s.started || upstream.Response.ID != s.upstreamResponse || s.hasUnfinishedReasoning() {
 		return canonical.Event{}, false, streamError("stream.response")
 	}
 	usage, err := canonical.NewUsage(canonical.UsageParams{

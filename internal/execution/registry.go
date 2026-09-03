@@ -37,9 +37,10 @@ type registryRegistration struct {
 }
 
 type boundModel struct {
-	adapter  ProviderAdapter
-	model    Model
-	upstream string
+	providerID string
+	adapter    ProviderAdapter
+	model      Model
+	upstream   string
 }
 
 // Registry exposes available public models and dispatches exact aliases once.
@@ -75,7 +76,7 @@ func NewRegistry(registrations []Registration) (*Registry, error) {
 			if _, exists := registry.bindings[binding.Model.ID()]; exists {
 				return nil, NewError(CodeInvalidModel, "providers.models", 0, nil)
 			}
-			registry.bindings[binding.Model.ID()] = boundModel{adapter: registration.Adapter, model: binding.Model, upstream: binding.Upstream}
+			registry.bindings[binding.Model.ID()] = boundModel{providerID: registration.ProviderID, adapter: registration.Adapter, model: binding.Model, upstream: binding.Upstream}
 		}
 		registry.registrations = append(registry.registrations, registryRegistration{providerID: registration.ProviderID, adapter: registration.Adapter, models: models})
 	}
@@ -133,6 +134,19 @@ func (r *Registry) ProviderStatuses(ctx context.Context) ([]ProviderStatus, erro
 	return append([]ProviderStatus(nil), statuses...), nil
 }
 
+// ResolveModel returns the configured provider ID and upstream model for a
+// public alias without consulting provider availability or credentials.
+func (r *Registry) ResolveModel(alias string) (string, string, error) {
+	if r == nil {
+		return "", "", NewError(CodeInternal, "registry", 0, nil)
+	}
+	binding, exists := r.bindings[alias]
+	if !exists {
+		return "", "", NewError(CodeInvalidModel, "request.model", 0, nil)
+	}
+	return binding.providerID, binding.upstream, nil
+}
+
 // Execute dispatches a public alias to exactly one provider attempt.
 func (r *Registry) Execute(ctx context.Context, request canonical.Request) (streaming.EventSource, error) {
 	if r == nil || ctx == nil {
@@ -145,7 +159,13 @@ func (r *Registry) Execute(ctx context.Context, request canonical.Request) (stre
 		return nil, NewError(CodeInvalidRequest, "request", 0, nil)
 	}
 	binding, exists := r.bindings[request.Model()]
-	if !exists || !supportsCapabilities(binding.model.Capabilities(), request.Capabilities()) {
+	if !exists {
+		return nil, NewError(CodeInvalidModel, "request.model", 0, nil)
+	}
+	if continuation := request.Continuation(); continuation != nil && (continuation.Provider() != binding.providerID || continuation.Model() != binding.upstream) {
+		return nil, NewError(CodeInvalidRequest, "request.continuation", 0, nil)
+	}
+	if !supportsCapabilities(binding.model.Capabilities(), request.Capabilities()) {
 		return nil, NewError(CodeInvalidModel, "request.model", 0, nil)
 	}
 	source, err := binding.adapter.Execute(ctx, binding.upstream, request)

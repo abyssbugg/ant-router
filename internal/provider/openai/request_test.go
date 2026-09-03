@@ -128,12 +128,19 @@ func TestMapRequestPreservesControlsAndUsesUpstreamModel(t *testing.T) {
 	}
 }
 
-func TestMapRequestOmitsInactiveControls(t *testing.T) {
+func TestMapRequestForcesStatelessControlsAndOmitsInactiveControls(t *testing.T) {
 	params, err := mapRequest(decodeCanonicalRequest(t, `{"model":"public/openai","input":"hello"}`), "gpt-5.2")
 	if err != nil {
 		t.Fatal(err)
 	}
 	object := marshaledObject(t, params)
+	if object["store"] != false {
+		t.Fatalf("store = %#v, want false", object["store"])
+	}
+	include := arrayField(t, object["include"], "include")
+	if len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("include = %#v", include)
+	}
 	for _, field := range []string{"tool_choice", "tools", "parallel_tool_calls", "temperature", "top_p", "max_output_tokens", "reasoning", "text"} {
 		if _, exists := object[field]; exists {
 			t.Fatalf("inactive field %q was emitted: %#v", field, object[field])
@@ -195,6 +202,71 @@ func TestMapRequestPreservesImagesCallsAndResults(t *testing.T) {
 	}
 	if result["type"] != "function_call_output" || result["output"] != "found" || result["call_id"] != call["call_id"] {
 		t.Fatalf("function result = %#v, call = %#v", result, call)
+	}
+}
+
+type mapperAffinityResolver struct{ providerID, upstreamModel string }
+
+func (r mapperAffinityResolver) ResolveModel(string) (string, string, error) {
+	return r.providerID, r.upstreamModel, nil
+}
+
+func decodeContinuationRequest(t *testing.T) canonical.Request {
+	t.Helper()
+	body := `{
+		"model":"openai/public",
+		"store":false,
+		"include":["reasoning.encrypted_content"],
+		"tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}],
+		"input":[
+			{"type":"reasoning","id":"rs_upstream","summary":[{"type":"summary_text","text":"checked docs"}],"encrypted_content":"cipher-marker","status":"completed"},
+			{"type":"function_call","id":"fc_upstream","status":"completed","call_id":"call_upstream","name":"Search","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_upstream","output":"found"}
+		]
+	}`
+	parsed, err := inbound.DecodeWithAffinity(bytes.NewBufferString(body), &mapperIDs{}, mapperAffinityResolver{providerID: "openai-primary", upstreamModel: "gpt-upstream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Request
+}
+
+func TestMapRequestReplaysReasoningContinuationInInputOrder(t *testing.T) {
+	params, err := mapRequest(decodeContinuationRequest(t), "gpt-upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	object := marshaledObject(t, params)
+	if object["store"] != false {
+		t.Fatalf("store = %#v, want false", object["store"])
+	}
+	include := arrayField(t, object["include"], "include")
+	if len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("include = %#v", include)
+	}
+	input := arrayField(t, object["input"], "input")
+	if len(input) != 3 {
+		t.Fatalf("input length = %d, want 3", len(input))
+	}
+	reasoning := objectField(t, input[0], "input[0]")
+	if reasoning["type"] != "reasoning" || reasoning["id"] != "rs_upstream" || reasoning["encrypted_content"] != "cipher-marker" {
+		t.Fatalf("reasoning replay = %#v", reasoning)
+	}
+	summary := arrayField(t, reasoning["summary"], "input[0].summary")
+	if len(summary) != 1 || objectField(t, summary[0], "input[0].summary[0]")["text"] != "checked docs" {
+		t.Fatalf("reasoning summary = %#v", summary)
+	}
+	functionCall := objectField(t, input[1], "input[1]")
+	functionOutput := objectField(t, input[2], "input[2]")
+	if functionCall["type"] != "function_call" || functionCall["id"] != "fc_upstream" || functionCall["call_id"] != "call_upstream" || functionOutput["type"] != "function_call_output" || functionOutput["call_id"] != "call_upstream" {
+		t.Fatalf("replay order or identity = %#v", input)
+	}
+}
+
+func TestMapRequestRejectsContinuationUpstreamMismatch(t *testing.T) {
+	request := decodeContinuationRequest(t)
+	if _, err := mapRequest(request, "gpt-other"); executionErrorPath(err) != "continuation" {
+		t.Fatalf("error path = %q, want continuation", executionErrorPath(err))
 	}
 }
 

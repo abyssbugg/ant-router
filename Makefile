@@ -9,11 +9,13 @@ STREAMING_PACKAGES := ./internal/streaming
 PHASE3A_PACKAGES := ./internal/openai/responses ./internal/provider/mock ./internal/dataplane ./internal/daemon ./cmd/routerctl
 PHASE3B_PACKAGES := ./internal/openai/responses ./internal/provider/mock ./internal/dataplane
 PHASE4A_PACKAGES := ./internal/config ./internal/credential ./internal/execution ./internal/provider/openai ./internal/daemon ./internal/control
+PHASE4B_PACKAGES := ./internal/canonical ./internal/streaming ./internal/openai/continuation ./internal/openai/responses ./internal/execution ./internal/provider/openai ./internal/dataplane ./internal/daemon
 TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 FUZZ_TIME ?= 10s
 export GOTOOLCHAIN ?= local
 
 .PHONY: phase4a-test phase4a-race phase4a-contract phase4a-fault phase4a-stress phase4a-fuzz phase4a-ci phase4a-live-compile phase4a-live
+.PHONY: phase4b-test phase4b-race phase4b-contract phase4b-fault phase4b-stress phase4b-fuzz phase4b-ci phase4b-live-compile
 .PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz phase2a-ci streaming-test streaming-race streaming-golden streaming-stress streaming-fuzz phase2b-ci phase3a-test phase3a-race phase3a-fault phase3a-sdk phase3a-stress phase3a-fuzz phase3a-ci phase3b-test phase3b-race phase3b-sdk phase3b-e2e phase3b-stress phase3b-fuzz phase3b-ci build cross-build verify ci clean
 
 fmt-check:
@@ -213,6 +215,30 @@ phase4a-live:
 	@test -n "$${ANT_ROUTER_LIVE_OPENAI_MODEL:-}" || { echo "ANT_ROUTER_LIVE_OPENAI_MODEL is required" >&2; exit 2; }
 	$(GO) test -tags=liveopenai ./internal/provider/openai -run '^TestLiveOpenAICertification$$' -count=1
 
+phase4b-test:
+	$(GO) test $(PHASE4B_PACKAGES) -run 'Continuation|TwoTurn' -count=100
+
+phase4b-race:
+	$(GO) test -race $(PHASE4B_PACKAGES) -run 'Continuation|TwoTurn'
+
+phase4b-contract:
+	$(GO) test ./internal/provider/openai -run 'TwoTurnStatelessToolContinuation' -count=20
+
+phase4b-fault:
+	$(GO) test $(PHASE4B_PACKAGES) -run 'Continuation.*(Rejects|Failure|Missing|Oversized)|AffinityMismatch' -count=20
+
+phase4b-stress:
+	$(GO) test -race -tags=phase4bstress ./internal/provider/openai -run '^TestOpenAIContinuationReplayConcurrentStress$$' -count=3
+
+phase4b-fuzz:
+	$(GO) test ./internal/openai/continuation -run='^$$' -fuzz='^FuzzContinuationEnvelope$$' -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/openai/responses -run='^$$' -fuzz='^FuzzDecodeContinuationReplay$$' -fuzztime=$(FUZZ_TIME)
+
+phase4b-live-compile:
+	$(GO) test -tags=liveopenai ./internal/provider/openai -run '^$$' -count=1
+
+phase4b-ci: phase4b-test phase4b-race phase4b-contract phase4b-fault phase4b-stress phase4b-live-compile
+
 build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BIN_DIR)/routerd ./cmd/routerd
@@ -234,7 +260,7 @@ cross-build:
 
 verify: fmt-check vet test test-race build cross-build
 
-ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault canonical-test canonical-golden canonical-stress streaming-test streaming-golden streaming-stress phase3a-test phase3a-fault phase3a-sdk phase3a-stress phase3b-test phase3b-sdk phase3b-e2e phase3b-stress phase4a-ci
+ci: verify config-test fault-test fuzz-smoke control-test control-fault configservice-test cli-test phase1c-fault canonical-test canonical-golden canonical-stress streaming-test streaming-golden streaming-stress phase3a-test phase3a-fault phase3a-sdk phase3a-stress phase3b-test phase3b-sdk phase3b-e2e phase3b-stress phase4a-ci phase4b-ci
 
 clean:
 	rm -rf $(BIN_DIR)

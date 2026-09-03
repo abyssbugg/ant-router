@@ -34,6 +34,7 @@ func (s *sdkStreamStarter) Start(ctx context.Context, secret credential.Secret, 
 // Provider executes canonical requests through the official OpenAI Responses API.
 // It is safe for concurrent use when its credential source is safe for concurrent use.
 type Provider struct {
+	providerID  string
 	credentials credential.Source
 	credential  credential.Ref
 	starter     streamStarter
@@ -43,14 +44,24 @@ type Provider struct {
 // NewProvider constructs a production OpenAI provider using the official endpoint,
 // secure HTTP transport, request-time credential resolution, and zero SDK retries.
 func NewProvider(source credential.Source, ref credential.Ref) (*Provider, error) {
-	return newProvider(source, ref, &sdkStreamStarter{factory: newProductionClientFactory()}, randomStreamIDs{})
+	return NewProviderForID("openai", source, ref)
+}
+
+// NewProviderForID constructs a production provider bound to one configured
+// provider identity for opaque continuation affinity.
+func NewProviderForID(providerID string, source credential.Source, ref credential.Ref) (*Provider, error) {
+	return newProviderWithID(providerID, source, ref, &sdkStreamStarter{factory: newProductionClientFactory()}, randomStreamIDs{})
 }
 
 func newProvider(source credential.Source, ref credential.Ref, starter streamStarter, ids streamIDGenerator) (*Provider, error) {
-	if nilInterface(source) || !ref.Valid() || nilInterface(starter) || nilInterface(ids) {
+	return newProviderWithID("openai-test", source, ref, starter, ids)
+}
+
+func newProviderWithID(providerID string, source credential.Source, ref credential.Ref, starter streamStarter, ids streamIDGenerator) (*Provider, error) {
+	if providerID == "" || nilInterface(source) || !ref.Valid() || nilInterface(starter) || nilInterface(ids) {
 		return nil, execution.NewError(execution.CodeInternal, "provider.openai.options", 0, nil)
 	}
-	return &Provider{credentials: source, credential: ref, starter: starter, ids: ids}, nil
+	return &Provider{providerID: providerID, credentials: source, credential: ref, starter: starter, ids: ids}, nil
 }
 
 // Availability resolves the configured credential without contacting OpenAI.
@@ -91,7 +102,7 @@ func (p *Provider) Execute(ctx context.Context, upstreamModel string, request ca
 	if err != nil {
 		return nil, normalizeProviderError(err)
 	}
-	source, err := newEventSource(stream, request.Model(), request.Output().Format(), p.ids)
+	source, err := newEventSourceWithAffinity(stream, request.Model(), p.providerID, upstreamModel, request.Output().Format(), p.ids)
 	if err != nil {
 		if !nilInterface(stream) {
 			_ = stream.Close()

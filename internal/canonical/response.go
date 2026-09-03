@@ -13,6 +13,7 @@ type ResponseParams struct {
 	Items        []Item
 	FinishReason FinishReason
 	Usage        Usage
+	Continuation *Continuation
 }
 
 // Response is an immutable completed canonical response.
@@ -22,16 +23,23 @@ type Response struct {
 	items        []Item
 	finishReason FinishReason
 	usage        Usage
+	continuation *Continuation
 }
 
 // NewResponse validates and defensively copies a completed response.
 func NewResponse(params ResponseParams) (Response, error) {
+	var continuation *Continuation
+	if params.Continuation != nil {
+		copyValue := *params.Continuation
+		continuation = &copyValue
+	}
 	response := Response{
 		id:           params.ID,
 		model:        params.Model,
 		items:        append([]Item(nil), params.Items...),
 		finishReason: params.FinishReason,
 		usage:        params.Usage,
+		continuation: continuation,
 	}
 	if err := response.validate(); err != nil {
 		return Response{}, err
@@ -44,7 +52,16 @@ func (r Response) Model() string              { return r.model }
 func (r Response) Items() []Item              { return append([]Item(nil), r.items...) }
 func (r Response) FinishReason() FinishReason { return r.finishReason }
 func (r Response) Usage() Usage               { return r.usage }
-func (r Response) Valid() bool                { return r.validate() == nil }
+func (r Response) Continuation() (Continuation, bool) {
+	if r.continuation == nil {
+		return Continuation{}, false
+	}
+	return *r.continuation, true
+}
+func (r Response) WithContinuation(value Continuation) (Response, error) {
+	return NewResponse(ResponseParams{ID: r.id, Model: r.model, Items: r.items, FinishReason: r.finishReason, Usage: r.usage, Continuation: &value})
+}
+func (r Response) Valid() bool { return r.validate() == nil }
 
 func (r Response) validate() error {
 	if !r.id.Valid() {
@@ -65,11 +82,17 @@ func (r Response) validate() error {
 	if !r.usage.Valid() {
 		return responseError(CodeInvalidInvariant, "response.usage")
 	}
+	if r.continuation != nil && !r.continuation.Valid() {
+		return responseError(CodeInvalidInvariant, "response.continuation")
+	}
 	itemIDs := make(map[ItemID]struct{}, len(r.items))
 	callIDs := make(map[ToolCallID]struct{})
 	hasToolCall := false
 	for _, item := range r.items {
 		if !item.Valid() || !item.ID().Valid() || item.Type() == ItemType("tool_result") {
+			return responseError(CodeInvalidInvariant, "response.items")
+		}
+		if reasoning, ok := item.ReasoningSummary(); ok && len(reasoning.Summaries()) == 0 && r.continuation == nil {
 			return responseError(CodeInvalidInvariant, "response.items")
 		}
 		if _, duplicate := itemIDs[item.ID()]; duplicate {
