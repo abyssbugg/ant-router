@@ -27,9 +27,13 @@ func (e Encoder) EncodeResponse(response canonical.Response) ([]byte, error) {
 	if !response.Valid() {
 		return nil, newError(CodeInternal, "response", errors.New("canonical response is invalid"))
 	}
+	reasoningEntries, err := responseReasoningEntries(response)
+	if err != nil {
+		return nil, newError(CodeInternal, "response.continuation", errors.New("response continuation is invalid"))
+	}
 	output := make([]any, 0, len(response.Items()))
 	for _, item := range response.Items() {
-		value, err := encodeOutputItem(item)
+		value, err := encodeOutputItem(item, reasoningEntries)
 		if err != nil {
 			return nil, newError(CodeInternal, "response.output", errors.New("canonical output is invalid"))
 		}
@@ -98,10 +102,11 @@ type wireFunctionCall struct {
 }
 
 type wireReasoning struct {
-	ID      string                 `json:"id"`
-	Type    string                 `json:"type"`
-	Status  string                 `json:"status"`
-	Summary []wireReasoningSummary `json:"summary"`
+	ID               string                 `json:"id"`
+	Type             string                 `json:"type"`
+	Status           string                 `json:"status"`
+	Summary          []wireReasoningSummary `json:"summary"`
+	EncryptedContent string                 `json:"encrypted_content,omitempty"`
 }
 
 type wireReasoningSummary struct {
@@ -109,7 +114,7 @@ type wireReasoningSummary struct {
 	Text string `json:"text"`
 }
 
-func encodeOutputItem(item canonical.Item) (any, error) {
+func encodeOutputItem(item canonical.Item, reasoningEntries reasoningOutputEntries) (any, error) {
 	switch item.Type() {
 	case canonical.ItemType("message"):
 		message, ok := item.Message()
@@ -144,7 +149,8 @@ func encodeOutputItem(item canonical.Item) (any, error) {
 		for _, value := range reasoning.Summaries() {
 			summary = append(summary, wireReasoningSummary{Type: "summary_text", Text: value.Text()})
 		}
-		return wireReasoning{ID: wireItemID("rs", item.ID()), Type: "reasoning", Status: "completed", Summary: summary}, nil
+		wireID, encrypted := reasoningWireIdentity(item.ID(), reasoningEntries)
+		return wireReasoning{ID: wireID, Type: "reasoning", Status: "completed", Summary: summary, EncryptedContent: encrypted}, nil
 	default:
 		return nil, errors.New("output item is unsupported")
 	}
