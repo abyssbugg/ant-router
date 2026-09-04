@@ -9,8 +9,8 @@ import (
 
 func TestDefaultDataPlaneConfiguration(t *testing.T) {
 	cfg := Default()
-	if cfg.SchemaVersion != 3 {
-		t.Fatalf("schema version = %d, want 3", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 4 {
+		t.Fatalf("schema version = %d, want 4", cfg.SchemaVersion)
 	}
 	if cfg.DataPlane.Enabled || cfg.MockProvider.Enabled || len(cfg.Providers) != 0 {
 		t.Fatal("data plane and providers must default to disabled")
@@ -117,7 +117,7 @@ func TestCanonicalIncludesDataPlaneSections(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(canonical)
-	for _, want := range []string{"schema_version = 3", "[data_plane]", "listen = '127.0.0.1:8787'"} {
+	for _, want := range []string{"schema_version = 4", "[data_plane]", "listen = '127.0.0.1:8787'"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("canonical config missing %q: %s", want, text)
 		}

@@ -8,8 +8,8 @@ import (
 )
 
 func TestSchemaVersionConstant(t *testing.T) {
-	if SchemaVersion != 3 {
-		t.Errorf("SchemaVersion = %d, want 3", SchemaVersion)
+	if SchemaVersion != 4 {
+		t.Errorf("SchemaVersion = %d, want 4", SchemaVersion)
 	}
 }
 
@@ -28,7 +28,7 @@ func TestConfigType(t *testing.T) {
 	}
 
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("Config.SchemaVersion = %d, want 3", cfg.SchemaVersion)
+		t.Errorf("Config.SchemaVersion = %d, want 4", cfg.SchemaVersion)
 	}
 }
 
@@ -46,7 +46,7 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := Default()
 
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("Default().SchemaVersion = %d, want 3", cfg.SchemaVersion)
+		t.Errorf("Default().SchemaVersion = %d, want 4", cfg.SchemaVersion)
 	}
 
 	if cfg.Daemon.ShutdownTimeout != (Duration{30 * time.Second}) {
@@ -105,9 +105,9 @@ func TestConfigValidate(t *testing.T) {
 			errPath: "schema_version",
 		},
 		{
-			name: "unsupported schema version 4",
+			name: "unsupported schema version 5",
 			config: Config{
-				SchemaVersion: 4,
+				SchemaVersion: 5,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{30 * time.Second},
 				},
@@ -171,7 +171,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestConfigValidateErrorMessage(t *testing.T) {
 	cfg := Config{
-		SchemaVersion: 4,
+		SchemaVersion: 5,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
