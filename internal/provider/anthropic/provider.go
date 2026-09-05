@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/credential"
@@ -29,28 +30,50 @@ func (s *sdkStreamStarter) Start(ctx context.Context, secret credential.Secret, 
 	return stream, nil
 }
 
+// ModelLimits defines configured output-token bounds for one upstream model.
+type ModelLimits struct {
+	Upstream               string
+	DefaultMaxOutputTokens int64
+	MaxOutputTokens        int64
+}
+
+type modelLimits struct {
+	defaultMax int64
+	maximum    int64
+}
+
 // Provider executes canonical requests through the official Anthropic Messages API.
 // It is safe for concurrent use when its credential source is safe for concurrent use.
 type Provider struct {
-	credentials      credential.Source
-	credential       credential.Ref
-	defaultMaxTokens int64
-	maxTokens        int64
-	starter          streamStarter
-	ids              streamIDGenerator
+	credentials credential.Source
+	credential  credential.Ref
+	models      map[string]modelLimits
+	starter     streamStarter
+	ids         streamIDGenerator
 }
 
 // NewProvider constructs a retry-free production Anthropic provider using the
 // official endpoint and request-time environment credential resolution.
-func NewProvider(source credential.Source, ref credential.Ref, defaultMaxTokens, maxTokens int64) (*Provider, error) {
-	return newProvider(source, ref, defaultMaxTokens, maxTokens, &sdkStreamStarter{factory: newProductionClientFactory()}, randomStreamIDs{})
+func NewProvider(source credential.Source, ref credential.Ref, models []ModelLimits) (*Provider, error) {
+	return newProvider(source, ref, models, &sdkStreamStarter{factory: newProductionClientFactory()}, randomStreamIDs{})
 }
 
-func newProvider(source credential.Source, ref credential.Ref, defaultMaxTokens, maxTokens int64, starter streamStarter, ids streamIDGenerator) (*Provider, error) {
-	if nilInterface(source) || !ref.Valid() || defaultMaxTokens <= 0 || maxTokens <= 0 || defaultMaxTokens > maxTokens || maxTokens > int64(canonical.MaxOutputTokens) || nilInterface(starter) || nilInterface(ids) {
+func newProvider(source credential.Source, ref credential.Ref, models []ModelLimits, starter streamStarter, ids streamIDGenerator) (*Provider, error) {
+	if nilInterface(source) || !ref.Valid() || len(models) == 0 || nilInterface(starter) || nilInterface(ids) {
 		return nil, execution.NewError(execution.CodeInternal, "provider.anthropic.options", 0, nil)
 	}
-	return &Provider{credentials: source, credential: ref, defaultMaxTokens: defaultMaxTokens, maxTokens: maxTokens, starter: starter, ids: ids}, nil
+	limits := make(map[string]modelLimits, len(models))
+	for _, model := range models {
+		upstream := strings.TrimSpace(model.Upstream)
+		if upstream == "" || upstream != model.Upstream || model.DefaultMaxOutputTokens <= 0 || model.MaxOutputTokens <= 0 || model.DefaultMaxOutputTokens > model.MaxOutputTokens || model.MaxOutputTokens > int64(canonical.MaxOutputTokens) {
+			return nil, execution.NewError(execution.CodeInternal, "provider.anthropic.options", 0, nil)
+		}
+		if _, exists := limits[upstream]; exists {
+			return nil, execution.NewError(execution.CodeInternal, "provider.anthropic.options", 0, nil)
+		}
+		limits[upstream] = modelLimits{defaultMax: model.DefaultMaxOutputTokens, maximum: model.MaxOutputTokens}
+	}
+	return &Provider{credentials: source, credential: ref, models: limits, starter: starter, ids: ids}, nil
 }
 
 // Availability resolves the credential without contacting Anthropic.
@@ -79,7 +102,11 @@ func (p *Provider) Execute(ctx context.Context, upstreamModel string, request ca
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	params, err := mapRequest(request, upstreamModel, p.defaultMaxTokens, p.maxTokens)
+	limits, exists := p.models[upstreamModel]
+	if !exists {
+		return nil, execution.NewError(execution.CodeInvalidModel, "request.model", 0, nil)
+	}
+	params, err := mapRequest(request, upstreamModel, limits.defaultMax, limits.maximum)
 	if err != nil {
 		return nil, err
 	}

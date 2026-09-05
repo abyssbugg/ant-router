@@ -9,6 +9,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/credential"
 	"github.com/abyssbugg/ant-router/internal/execution"
+	anthropicprovider "github.com/abyssbugg/ant-router/internal/provider/anthropic"
 	mockprovider "github.com/abyssbugg/ant-router/internal/provider/mock"
 	openaiprovider "github.com/abyssbugg/ant-router/internal/provider/openai"
 	"github.com/abyssbugg/ant-router/internal/streaming"
@@ -86,6 +87,34 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 				return execution.Registration{}, err
 			}
 			bindings[index] = execution.ModelBinding{Model: model, Upstream: modelConfig.Upstream}
+		}
+		return execution.Registration{ProviderID: providerConfig.ID, Adapter: provider, Models: bindings}, nil
+	case config.ProviderKindAnthropic:
+		ref, err := credential.NewRef(credential.SourceEnv, providerConfig.Credential.Name)
+		if err != nil {
+			return execution.Registration{}, err
+		}
+		limits := make([]anthropicprovider.ModelLimits, len(providerConfig.Models))
+		bindings := make([]execution.ModelBinding, len(providerConfig.Models))
+		for index, modelConfig := range providerConfig.Models {
+			capabilities := make([]canonical.Capability, len(modelConfig.Capabilities))
+			for capabilityIndex, value := range modelConfig.Capabilities {
+				capabilities[capabilityIndex] = canonical.Capability(value)
+			}
+			set, err := canonical.NewCapabilitySet(capabilities...)
+			if err != nil {
+				return execution.Registration{}, err
+			}
+			model, err := execution.NewModel(execution.ModelParams{ID: modelConfig.Alias, Provider: providerConfig.ID, Capabilities: set})
+			if err != nil {
+				return execution.Registration{}, err
+			}
+			limits[index] = anthropicprovider.ModelLimits{Upstream: modelConfig.Upstream, DefaultMaxOutputTokens: modelConfig.DefaultMaxOutputTokens, MaxOutputTokens: modelConfig.MaxOutputTokens}
+			bindings[index] = execution.ModelBinding{Model: model, Upstream: modelConfig.Upstream}
+		}
+		provider, err := anthropicprovider.NewProvider(source, ref, limits)
+		if err != nil {
+			return execution.Registration{}, err
 		}
 		return execution.Registration{ProviderID: providerConfig.ID, Adapter: provider, Models: bindings}, nil
 	default:
