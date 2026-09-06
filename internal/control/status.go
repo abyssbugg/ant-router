@@ -66,7 +66,7 @@ func validDataPlaneSummary(summary DataPlaneSummary) bool {
 
 func validProviderSummaries(providers []ProviderSummary) bool {
 	for index, provider := range providers {
-		if !validProviderIdentity(provider.ID) || provider.Kind != "mock" && provider.Kind != "openai" {
+		if !validProviderIdentity(provider.ID) || provider.Kind != "mock" && provider.Kind != "openai" && provider.Kind != "anthropic" {
 			return false
 		}
 		if index > 0 && providers[index-1].ID >= provider.ID {

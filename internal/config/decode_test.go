@@ -25,7 +25,7 @@ shutdown_timeout = "30s"
 	}
 
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("SchemaVersion = %d, want 3", cfg.SchemaVersion)
+		t.Errorf("SchemaVersion = %d, want 4", cfg.SchemaVersion)
 	}
 	if cfg.Daemon.ShutdownTimeout.Duration != 30*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 30s", cfg.Daemon.ShutdownTimeout.Duration)
@@ -42,7 +42,7 @@ func TestDecodeOmitDaemonUsesDefaults(t *testing.T) {
 	}
 
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("SchemaVersion = %d, want 3", cfg.SchemaVersion)
+		t.Errorf("SchemaVersion = %d, want 4", cfg.SchemaVersion)
 	}
 	// Should have default timeout
 	if cfg.Daemon.ShutdownTimeout.Duration != DefaultShutdownTimeout {
@@ -167,7 +167,7 @@ shutdown_timeout = "30s"
 }
 
 func TestDecodeUnsupportedSchema(t *testing.T) {
-	toml := `schema_version = 4
+	toml := `schema_version = 5
 [daemon]
 shutdown_timeout = "30s"
 `
@@ -290,7 +290,7 @@ shutdown_timeout = "45s"
 	}
 
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("SchemaVersion = %d, want 3", cfg.SchemaVersion)
+		t.Errorf("SchemaVersion = %d, want 4", cfg.SchemaVersion)
 	}
 	if cfg.Daemon.ShutdownTimeout.Duration != 45*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 45s", cfg.Daemon.ShutdownTimeout.Duration)
@@ -307,7 +307,7 @@ func TestDecodeFileSuccess(t *testing.T) {
 	}
 
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("SchemaVersion = %d, want 3", cfg.SchemaVersion)
+		t.Errorf("SchemaVersion = %d, want 4", cfg.SchemaVersion)
 	}
 	if cfg.Daemon.ShutdownTimeout.Duration != DefaultShutdownTimeout {
 		t.Errorf("ShutdownTimeout = %v, want %v", cfg.Daemon.ShutdownTimeout.Duration, DefaultShutdownTimeout)

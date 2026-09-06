@@ -58,10 +58,12 @@ type wireCredential struct {
 }
 
 type wireProviderModel struct {
-	Alias        *string   `toml:"alias"`
-	Upstream     *string   `toml:"upstream"`
-	Capabilities *[]string `toml:"capabilities"`
-	_            struct{}  `toml:"" json:"-"`
+	Alias                  *string   `toml:"alias"`
+	Upstream               *string   `toml:"upstream"`
+	Capabilities           *[]string `toml:"capabilities"`
+	DefaultMaxOutputTokens *int64    `toml:"default_max_output_tokens"`
+	MaxOutputTokens        *int64    `toml:"max_output_tokens"`
+	_                      struct{}  `toml:"" json:"-"`
 }
 
 // Decode decodes a Config from a TOML reader with strict validation.
@@ -135,7 +137,7 @@ func Decode(r io.Reader) (Config, error) {
 		}
 	}
 
-	// Accept legacy v1/v2 only as input and normalize every in-memory config to v3.
+	// Accept legacy v1/v2/v3 as input and normalize every in-memory config to v4.
 	switch *wire.SchemaVersion {
 	case LegacySchemaVersion:
 		if wire.DataPlane != nil {
@@ -151,9 +153,26 @@ func Decode(r io.Reader) (Config, error) {
 		if wire.Providers != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "providers", Err: fmt.Errorf("field is unavailable in schema version 2")}
 		}
-	case SchemaVersion:
+	case ProviderRegistrySchemaVersion:
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 3")}
+		}
+		for i, provider := range wire.Providers {
+			if provider.Kind != nil && ProviderKind(*provider.Kind) == ProviderKindAnthropic {
+				return Config{}, &Error{Code: CodeValidationFailed, Path: fmt.Sprintf("providers[%d].kind", i), Err: fmt.Errorf("provider kind is unavailable in schema version 3")}
+			}
+			for j, model := range provider.Models {
+				if model.DefaultMaxOutputTokens != nil {
+					return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].models[%d].default_max_output_tokens", i, j), Err: fmt.Errorf("field is unavailable in schema version 3")}
+				}
+				if model.MaxOutputTokens != nil {
+					return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].models[%d].max_output_tokens", i, j), Err: fmt.Errorf("field is unavailable in schema version 3")}
+				}
+			}
+		}
+	case SchemaVersion:
+		if wire.MockProvider != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 4")}
 		}
 	default:
 		return Config{}, &Error{Code: CodeUnsupportedSchema, Path: "schema_version", Err: fmt.Errorf("unsupported schema version %d", *wire.SchemaVersion)}
@@ -202,7 +221,7 @@ func Decode(r io.Reader) (Config, error) {
 	if *wire.SchemaVersion == PreviousSchemaVersion && wire.MockProvider != nil && wire.MockProvider.Enabled != nil && *wire.MockProvider.Enabled {
 		cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 	}
-	if *wire.SchemaVersion == SchemaVersion {
+	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == SchemaVersion {
 		if wire.Providers != nil {
 			cfg.Providers = make([]ProviderConfig, len(wire.Providers))
 		}
@@ -238,6 +257,12 @@ func Decode(r io.Reader) (Config, error) {
 				}
 				if model.Capabilities != nil {
 					converted.Models[j].Capabilities = append([]string(nil), (*model.Capabilities)...)
+				}
+				if model.DefaultMaxOutputTokens != nil {
+					converted.Models[j].DefaultMaxOutputTokens = *model.DefaultMaxOutputTokens
+				}
+				if model.MaxOutputTokens != nil {
+					converted.Models[j].MaxOutputTokens = *model.MaxOutputTokens
 				}
 			}
 			cfg.Providers[i] = converted

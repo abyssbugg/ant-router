@@ -3,10 +3,11 @@ package config
 import "time"
 
 const (
-	LegacySchemaVersion    = 1
-	PreviousSchemaVersion  = 2
-	SchemaVersion          = 3
-	DefaultShutdownTimeout = 30 * time.Second
+	LegacySchemaVersion           = 1
+	PreviousSchemaVersion         = 2
+	ProviderRegistrySchemaVersion = 3
+	SchemaVersion                 = 4
+	DefaultShutdownTimeout        = 30 * time.Second
 )
 
 // Config represents the root configuration structure.

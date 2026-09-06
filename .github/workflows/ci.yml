@@ -50,6 +50,7 @@ jobs:
       - run: make phase3b-ci
       - run: make phase4a-ci
       - run: make phase4b-ci
+      - run: make phase4c-ci
 
   platform-tests:
     name: Tests (${{ matrix.os }})
@@ -83,6 +84,9 @@ jobs:
       - run: make phase4a-live-compile
       - run: make phase4b-contract
       - run: make phase4b-live-compile
+      - run: make phase4c-contract
+      - run: make phase4c-e2e
+      - run: make phase4c-live-compile
 
   fuzz-smoke:
     name: Fuzz smoke
@@ -105,3 +109,4 @@ jobs:
       - run: make phase3b-fuzz FUZZ_TIME=10s
       - run: make phase4a-fuzz FUZZ_TIME=10s
       - run: make phase4b-fuzz FUZZ_TIME=10s
+      - run: make phase4c-fuzz FUZZ_TIME=10s

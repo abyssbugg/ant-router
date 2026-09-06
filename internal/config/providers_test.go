@@ -25,10 +25,10 @@ func validOpenAIProvider(id, alias string) ProviderConfig {
 	}
 }
 
-func TestDefaultUsesSchemaV3WithoutProviders(t *testing.T) {
+func TestDefaultUsesSchemaV4WithoutProviders(t *testing.T) {
 	cfg := Default()
-	if cfg.SchemaVersion != 3 {
-		t.Fatalf("schema version = %d, want 3", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 4 {
+		t.Fatalf("schema version = %d, want 4", cfg.SchemaVersion)
 	}
 	if len(cfg.Providers) != 0 {
 		t.Fatalf("providers = %#v, want none", cfg.Providers)
@@ -211,12 +211,21 @@ func TestProviderRegistryBoundsAndReservedAliases(t *testing.T) {
 	})
 }
 
+func TestOpenAIProviderAllowsContinuation(t *testing.T) {
+	cfg := Default()
+	provider := validOpenAIProvider("openai", "openai/model")
+	provider.Models[0].Capabilities = []string{"continuation", "text"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected supported OpenAI continuation: %v", err)
+	}
+}
+
 func TestOpenAIProviderCapabilityConstraints(t *testing.T) {
 	tests := []struct {
 		name         string
 		capabilities []string
 	}{
-		{"continuation deferred", []string{"continuation", "text"}},
 		{"parallel tools requires tools", []string{"parallel_tools", "text"}},
 	}
 	for _, tt := range tests {

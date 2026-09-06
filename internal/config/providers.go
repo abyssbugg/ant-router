@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/abyssbugg/ant-router/internal/canonical"
 )
 
 const (
@@ -19,8 +21,9 @@ const (
 type ProviderKind string
 
 const (
-	ProviderKindMock   ProviderKind = "mock"
-	ProviderKindOpenAI ProviderKind = "openai"
+	ProviderKindMock      ProviderKind = "mock"
+	ProviderKindOpenAI    ProviderKind = "openai"
+	ProviderKindAnthropic ProviderKind = "anthropic"
 )
 
 // CredentialSourceKind identifies a credential lookup mechanism.
@@ -36,9 +39,11 @@ type CredentialRef struct {
 
 // ProviderModelConfig maps a public model alias to a provider model.
 type ProviderModelConfig struct {
-	Alias        string   `toml:"alias"`
-	Upstream     string   `toml:"upstream"`
-	Capabilities []string `toml:"capabilities"`
+	Alias                  string   `toml:"alias"`
+	Upstream               string   `toml:"upstream"`
+	Capabilities           []string `toml:"capabilities"`
+	DefaultMaxOutputTokens int64    `toml:"default_max_output_tokens,omitempty"`
+	MaxOutputTokens        int64    `toml:"max_output_tokens,omitempty"`
 }
 
 // ProviderConfig defines one provider instance and its public models.
@@ -143,7 +148,7 @@ func validateProviders(c Config) error {
 			if len(provider.Models) != 0 {
 				return providerValidationError(prefix+".models", "mock provider uses its fixed model catalog")
 			}
-		case ProviderKindOpenAI:
+		case ProviderKindOpenAI, ProviderKindAnthropic:
 			if provider.Credential == nil {
 				return providerValidationError(prefix+".credential", "credential reference is required")
 			}
@@ -171,6 +176,7 @@ func validateProviders(c Config) error {
 				if len(model.Capabilities) == 0 {
 					return providerValidationError(modelPrefix+".capabilities", "at least one capability is required")
 				}
+				hasText := false
 				hasTools := false
 				parallelIndex := -1
 				for k, capability := range model.Capabilities {
@@ -181,9 +187,10 @@ func validateProviders(c Config) error {
 					if k > 0 && capability == model.Capabilities[k-1] {
 						return providerValidationError(path, "duplicate capability")
 					}
-					if capability == "continuation" {
-						return providerValidationError(path, "continuation is unavailable for the OpenAI provider")
+					if provider.Kind == ProviderKindAnthropic && (capability == "continuation" || capability == "reasoning_summary") {
+						return providerValidationError(path, "capability is deferred for the Anthropic provider")
 					}
+					hasText = hasText || capability == "text"
 					hasTools = hasTools || capability == "tools"
 					if capability == "parallel_tools" {
 						parallelIndex = k
@@ -192,6 +199,19 @@ func validateProviders(c Config) error {
 				if parallelIndex >= 0 && !hasTools {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, parallelIndex)
 					return providerValidationError(path, "parallel tools requires tools capability")
+				}
+				if provider.Kind == ProviderKindAnthropic {
+					if !hasText {
+						return providerValidationError(modelPrefix+".capabilities", "Anthropic models require text capability")
+					}
+					if model.MaxOutputTokens <= 0 || model.MaxOutputTokens > canonical.MaxOutputTokens {
+						return providerValidationError(modelPrefix+".max_output_tokens", "invalid maximum output tokens")
+					}
+					if model.DefaultMaxOutputTokens <= 0 || model.DefaultMaxOutputTokens > model.MaxOutputTokens {
+						return providerValidationError(modelPrefix+".default_max_output_tokens", "invalid default output tokens")
+					}
+				} else if model.DefaultMaxOutputTokens != 0 || model.MaxOutputTokens != 0 {
+					return providerValidationError(modelPrefix+".default_max_output_tokens", "token limits are unavailable for the OpenAI provider")
 				}
 			}
 		default:
