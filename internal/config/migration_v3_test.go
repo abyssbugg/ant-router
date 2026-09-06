@@ -18,8 +18,8 @@ enabled = true
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if cfg.SchemaVersion != 4 {
-		t.Fatalf("schema version = %d, want 4", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 5 {
+		t.Fatalf("schema version = %d, want 5", cfg.SchemaVersion)
 	}
 	want := []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 	if !reflect.DeepEqual(cfg.Providers, want) {
@@ -32,7 +32,7 @@ func TestDecodeMigratesDisabledSchemaV2MockProviderToNoProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 4 || len(cfg.Providers) != 0 {
+	if cfg.SchemaVersion != 5 || len(cfg.Providers) != 0 {
 		t.Fatalf("migrated config = %#v", cfg)
 	}
 }
@@ -45,7 +45,7 @@ func TestDecodeSchemaV3RejectsLegacyMockProviderField(t *testing.T) {
 	}
 }
 
-func TestMigratedSchemaV2CanonicalizesAsV4(t *testing.T) {
+func TestMigratedSchemaV2CanonicalizesAsV5(t *testing.T) {
 	cfg, err := Decode(strings.NewReader("schema_version = 2\n[mock_provider]\nenabled = true\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestMigratedSchemaV2CanonicalizesAsV4(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(canonical)
-	if !strings.Contains(text, "schema_version = 4") || !strings.Contains(text, "[[providers]]") || strings.Contains(text, "mock_provider") {
+	if !strings.Contains(text, "schema_version = 5") || !strings.Contains(text, "[[providers]]") || strings.Contains(text, "mock_provider") {
 		t.Fatalf("canonical migrated config = %s", canonical)
 	}
 	roundTrip, err := Decode(strings.NewReader(text))
@@ -67,12 +67,12 @@ func TestMigratedSchemaV2CanonicalizesAsV4(t *testing.T) {
 	}
 }
 
-func TestSchemaV1MigratesDirectlyToV4(t *testing.T) {
+func TestSchemaV1MigratesDirectlyToV5(t *testing.T) {
 	cfg, err := Decode(strings.NewReader("schema_version = 1\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 4 || len(cfg.Providers) != 0 {
+	if cfg.SchemaVersion != 5 || len(cfg.Providers) != 0 {
 		t.Fatalf("migrated config = %#v", cfg)
 	}
 }

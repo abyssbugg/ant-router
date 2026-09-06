@@ -25,10 +25,10 @@ func validOpenAIProvider(id, alias string) ProviderConfig {
 	}
 }
 
-func TestDefaultUsesSchemaV4WithoutProviders(t *testing.T) {
+func TestDefaultUsesSchemaV5WithoutProviders(t *testing.T) {
 	cfg := Default()
-	if cfg.SchemaVersion != 4 {
-		t.Fatalf("schema version = %d, want 4", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 5 {
+		t.Fatalf("schema version = %d, want 5", cfg.SchemaVersion)
 	}
 	if len(cfg.Providers) != 0 {
 		t.Fatalf("providers = %#v, want none", cfg.Providers)

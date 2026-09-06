@@ -39,11 +39,12 @@ type CredentialRef struct {
 
 // ProviderModelConfig maps a public model alias to a provider model.
 type ProviderModelConfig struct {
-	Alias                  string   `toml:"alias"`
-	Upstream               string   `toml:"upstream"`
-	Capabilities           []string `toml:"capabilities"`
-	DefaultMaxOutputTokens int64    `toml:"default_max_output_tokens,omitempty"`
-	MaxOutputTokens        int64    `toml:"max_output_tokens,omitempty"`
+	Alias                  string            `toml:"alias"`
+	Upstream               string            `toml:"upstream"`
+	Capabilities           []string          `toml:"capabilities"`
+	DefaultMaxOutputTokens int64             `toml:"default_max_output_tokens,omitempty"`
+	MaxOutputTokens        int64             `toml:"max_output_tokens,omitempty"`
+	Codex                  *CodexModelConfig `toml:"codex,omitempty"`
 }
 
 // ProviderConfig defines one provider instance and its public models.
@@ -87,6 +88,10 @@ func (c Config) clone() Config {
 		for j := range c.Providers[i].Models {
 			cloned.Providers[i].Models[j] = c.Providers[i].Models[j]
 			cloned.Providers[i].Models[j].Capabilities = append([]string(nil), c.Providers[i].Models[j].Capabilities...)
+			if c.Providers[i].Models[j].Codex != nil {
+				codex := *c.Providers[i].Models[j].Codex
+				cloned.Providers[i].Models[j].Codex = &codex
+			}
 		}
 	}
 	return cloned
@@ -199,6 +204,9 @@ func validateProviders(c Config) error {
 				if parallelIndex >= 0 && !hasTools {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, parallelIndex)
 					return providerValidationError(path, "parallel tools requires tools capability")
+				}
+				if err := validateCodexModel(model.Codex, modelPrefix+".codex"); err != nil {
+					return err
 				}
 				if provider.Kind == ProviderKindAnthropic {
 					if !hasText {

@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-func TestDefaultUsesSchemaV4(t *testing.T) {
-	if got := Default().SchemaVersion; got != 4 {
-		t.Fatalf("schema version = %d, want 4", got)
+func TestDefaultUsesSchemaV5FromV4Migration(t *testing.T) {
+	if got := Default().SchemaVersion; got != 5 {
+		t.Fatalf("schema version = %d, want 5", got)
 	}
 }
 
-func TestSchemaV3MigratesToV4WithoutTokenLimits(t *testing.T) {
+func TestSchemaV3MigratesToV5WithoutTokenLimits(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(`schema_version = 3
 [[providers]]
 id = "openai-primary"
@@ -29,8 +29,8 @@ capabilities = ["text"]
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if cfg.SchemaVersion != 4 {
-		t.Fatalf("schema version = %d, want 4", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 5 {
+		t.Fatalf("schema version = %d, want 5", cfg.SchemaVersion)
 	}
 	model := cfg.Providers[0].Models[0]
 	if model.DefaultMaxOutputTokens != 0 || model.MaxOutputTokens != 0 {
@@ -72,14 +72,14 @@ enabled = true
 	}
 }
 
-func TestSchemaV4CanonicalRoundTripAnthropic(t *testing.T) {
+func TestSchemaV5CanonicalRoundTripAnthropic(t *testing.T) {
 	cfg := Default()
 	cfg.Providers = []ProviderConfig{validAnthropicProvider("anthropic-primary", "anthropic/claude-test")}
 	encoded, err := Canonical(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(encoded), "schema_version = 4") || !strings.Contains(string(encoded), "kind = 'anthropic'") {
+	if !strings.Contains(string(encoded), "schema_version = 5") || !strings.Contains(string(encoded), "kind = 'anthropic'") {
 		t.Fatalf("canonical config = %s", encoded)
 	}
 	decoded, err := Decode(strings.NewReader(string(encoded)))
