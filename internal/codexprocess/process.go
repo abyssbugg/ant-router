@@ -20,6 +20,7 @@ type Runner struct {
 type RunOptions struct {
 	CodexHome, Profile string
 	Args               []string
+	Stdin              io.Reader
 	Stdout, Stderr     io.Writer
 }
 type Result struct{ ExitCode int }
@@ -74,6 +75,7 @@ func (runner *Runner) Run(ctx context.Context, options RunOptions) (Result, erro
 	args = append(args, options.Args...)
 	command := exec.Command(runner.path, args...)
 	command.Env = runner.environmentFor(options.CodexHome)
+	command.Stdin = options.Stdin
 	command.Stdout, command.Stderr = options.Stdout, options.Stderr
 	if command.Stdout == nil {
 		command.Stdout = io.Discard

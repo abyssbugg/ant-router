@@ -8,12 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
 type fakeControlClient struct {
 	status          control.StatusResponse
+	codexCatalog    control.CodexCatalogResponse
 	current         control.ConfigCurrentResponse
 	validation      control.ConfigValidateResponse
 	mutation        control.ConfigMutationResponse
@@ -29,6 +31,9 @@ type fakeControlClient struct {
 
 func (f *fakeControlClient) Status(context.Context) (control.StatusResponse, error) {
 	return f.status, f.err
+}
+func (f *fakeControlClient) CodexCatalog(context.Context) (control.CodexCatalogResponse, error) {
+	return f.codexCatalog, f.err
 }
 func (f *fakeControlClient) CurrentConfig(context.Context) (control.ConfigCurrentResponse, error) {
 	return f.current, f.err
@@ -99,6 +104,9 @@ func TestExecuteErrorExitCodes(t *testing.T) {
 		{&control.ClientError{Kind: control.ClientErrorAPI, API: control.CodeConfigurationInvalid}, ExitValidation},
 		{&control.ClientError{Kind: control.ClientErrorAPI, API: control.CodeGenerationConflict}, ExitConflict},
 		{&control.ClientError{Kind: control.ClientErrorAPI, API: control.CodeConfigurationUnavailable}, ExitUnavailable},
+		{codexintegration.ErrInvalid, ExitValidation},
+		{codexintegration.ErrConflict, ExitConflict},
+		{codexintegration.ErrUnavailable, ExitUnavailable},
 		{errors.New("unexpected"), ExitInternal},
 	}
 	for _, test := range tests {

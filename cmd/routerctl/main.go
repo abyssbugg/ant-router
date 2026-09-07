@@ -57,6 +57,17 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		return ExitSuccess
 	}
+	if command.Name == "codex" && command.Action == "token" {
+		return executeCodexToken(ctx, options, stdout, stderr)
+	}
+	if command.Name == "codex" && offlineCodexAction(command.Action) {
+		service, err := newCodexService(options, nil)
+		if err != nil {
+			_ = writeCLIError(stderr, options, err)
+			return exitCode(err)
+		}
+		return executeCodexService(ctx, options, command, stdin, stdout, stderr, service)
+	}
 	client, err := factory(options)
 	if err != nil {
 		code := exitCode(err)

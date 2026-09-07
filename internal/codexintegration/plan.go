@@ -31,8 +31,8 @@ type FileObservation struct {
 	SHA256 string
 }
 type Change struct {
-	Path string
-	Kind ChangeKind
+	Path string     `json:"path"`
+	Kind ChangeKind `json:"kind"`
 }
 
 type PlanInput struct {
@@ -55,7 +55,7 @@ type Plan struct {
 
 func NewPlan(input PlanInput) (Plan, error) {
 	if !validatePlanInput(input) {
-		return Plan{}, errors.New("invalid Codex integration plan")
+		return Plan{}, errors.Join(ErrInvalid, errors.New("invalid Codex integration plan"))
 	}
 	changes := make([]Change, 0, 2)
 	appendChange := func(path string, current FileObservation, desired []byte) {
@@ -75,11 +75,16 @@ func NewPlan(input PlanInput) (Plan, error) {
 	return Plan{input: input, action: input.Action, digest: planDigest(input), changes: changes, profile: append([]byte(nil), input.DesiredProfile...), catalog: append([]byte(nil), input.DesiredCatalog...)}, nil
 }
 
-func (p Plan) Action() Action    { return p.action }
-func (p Plan) Digest() string    { return p.digest }
-func (p Plan) Changes() []Change { return append([]Change(nil), p.changes...) }
-func (p Plan) Profile() []byte   { return append([]byte(nil), p.profile...) }
-func (p Plan) Catalog() []byte   { return append([]byte(nil), p.catalog...) }
+func (p Plan) Action() Action              { return p.action }
+func (p Plan) Digest() string              { return p.digest }
+func (p Plan) Changes() []Change           { return append([]Change(nil), p.changes...) }
+func (p Plan) ProfilePath() string         { return p.input.ProfilePath }
+func (p Plan) CatalogPath() string         { return p.input.CatalogPath }
+func (p Plan) CodexVersion() string        { return p.input.CodexVersion }
+func (p Plan) ConfigGeneration() uint64    { return p.input.ConfigGeneration }
+func (p Plan) OwnershipGeneration() string { return p.input.OwnershipGeneration }
+func (p Plan) Profile() []byte             { return append([]byte(nil), p.profile...) }
+func (p Plan) Catalog() []byte             { return append([]byte(nil), p.catalog...) }
 
 func validatePlanInput(input PlanInput) bool {
 	if input.Action != ActionEnable && input.Action != ActionDisable && input.Action != ActionRestore {

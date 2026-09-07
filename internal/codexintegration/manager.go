@@ -80,7 +80,7 @@ func (manager *Manager) apply(ctx context.Context, action Action, generation, pr
 		return Result{}, planErr
 	}
 	if subtle.ConstantTimeCompare([]byte(plan.Digest()), []byte(proof)) != 1 {
-		return Result{}, errors.New("stale Codex integration plan")
+		return Result{}, errors.Join(ErrConflict, errors.New("stale Codex integration plan"))
 	}
 	if len(plan.Changes()) == 0 {
 		return Result{Action: action, GenerationID: plan.input.OwnershipGeneration}, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
@@ -35,8 +36,14 @@ func exitCode(err error) int {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errConnection) {
 		return ExitConnection
 	}
-	if errors.Is(err, errDataPlaneUnavailable) {
+	if errors.Is(err, errDataPlaneUnavailable) || errors.Is(err, codexintegration.ErrUnavailable) {
 		return ExitUnavailable
+	}
+	if errors.Is(err, codexintegration.ErrConflict) {
+		return ExitConflict
+	}
+	if errors.Is(err, codexintegration.ErrInvalid) {
+		return ExitValidation
 	}
 	if code, ok := inferencetoken.CodeOf(err); ok {
 		switch code {

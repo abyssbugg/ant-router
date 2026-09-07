@@ -60,7 +60,7 @@ func (planner *Planner) PlanEnable(ctx context.Context) (Plan, error) {
 	}
 	catalogResponse, err := planner.catalog.CodexCatalog(ctx)
 	if err != nil || !validCatalogResponse(catalogResponse) {
-		return Plan{}, errors.New("Codex catalog unavailable")
+		return Plan{}, errors.Join(ErrUnavailable, errors.New("Codex catalog unavailable"))
 	}
 	profilePath := filepath.Join(planner.options.CodexHome, "ant-router.config.toml")
 	catalogPath := filepath.Join(planner.options.StateRoot, "codex", "ant-router", "models.json")
@@ -92,7 +92,7 @@ func (planner *Planner) PlanEnable(ctx context.Context) (Plan, error) {
 	} else if !errors.Is(ownershipErr, os.ErrNotExist) {
 		return Plan{}, errors.New("Codex ownership unavailable")
 	} else if profileObservation.Exists || catalogObservation.Exists {
-		return Plan{}, errors.New("Codex integration ownership conflict")
+		return Plan{}, errors.Join(ErrConflict, errors.New("Codex integration ownership conflict"))
 	}
 	return NewPlan(PlanInput{Action: ActionEnable, ProfilePath: profilePath, CatalogPath: catalogPath, RouterctlPath: planner.options.RouterctlPath, CodexVersion: version.String(), ConfigGeneration: catalogResponse.Generation, CurrentProfile: profileObservation, CurrentCatalog: catalogObservation, OwnershipGeneration: ownershipGeneration, DesiredProfile: profile, DesiredCatalog: []byte(catalogResponse.Catalog)})
 }

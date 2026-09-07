@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -28,6 +29,14 @@ func TestCodexProcessHelper(t *testing.T) {
 	args = args[marker:]
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Print("codex-cli 0.153.4\n")
+		os.Exit(0)
+	}
+	if len(args) > 0 && args[len(args)-1] == "stdin" {
+		data, err := io.ReadAll(io.LimitReader(os.Stdin, 1024))
+		if err != nil {
+			os.Exit(90)
+		}
+		fmt.Printf("STDIN=%s", data)
 		os.Exit(0)
 	}
 	if len(args) > 0 && args[len(args)-1] == "exit7" {
@@ -99,6 +108,14 @@ func TestRunnerRejectsInvalidRunOptions(t *testing.T) {
 		if _, err := helperRunner(t).Run(context.Background(), options); err == nil {
 			t.Fatalf("accepted %#v", options)
 		}
+	}
+}
+
+func TestRunnerPreservesStdin(t *testing.T) {
+	var stdout bytes.Buffer
+	result, err := helperRunner(t).Run(context.Background(), RunOptions{CodexHome: "/private/codex", Profile: "ant-router", Args: []string{"stdin"}, Stdin: strings.NewReader("hello"), Stdout: &stdout})
+	if err != nil || result.ExitCode != 0 || stdout.String() != "STDIN=hello" {
+		t.Fatalf("run=%#v output=%q error=%v", result, stdout.String(), err)
 	}
 }
 
