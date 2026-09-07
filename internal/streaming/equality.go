@@ -52,7 +52,7 @@ func itemEqual(left, right canonical.Item) bool {
 	case canonical.ItemType("tool_call"):
 		first, ok1 := left.ToolCall()
 		second, ok2 := right.ToolCall()
-		return ok1 && ok2 && first.CallID() == second.CallID() && first.Name() == second.Name() && first.Arguments().Equal(second.Arguments())
+		return ok1 && ok2 && first.CallID() == second.CallID() && first.Namespace() == second.Namespace() && first.Name() == second.Name() && first.Arguments().Equal(second.Arguments())
 	case canonical.ItemType("reasoning_summary"):
 		first, ok1 := left.ReasoningSummary()
 		second, ok2 := right.ReasoningSummary()

@@ -8,6 +8,7 @@ type itemState struct {
 	kind        canonical.ItemType
 	role        canonical.Role
 	callID      canonical.ToolCallID
+	namespace   string
 	name        string
 	contents    map[int]*contentState
 	nextContent int
@@ -17,7 +18,7 @@ type itemState struct {
 }
 
 func newItemState(payload canonical.ItemStartedPayload) *itemState {
-	return &itemState{index: payload.Index(), id: payload.ID(), kind: payload.Type(), role: payload.Role(), callID: payload.CallID(), name: payload.Name(), contents: make(map[int]*contentState)}
+	return &itemState{index: payload.Index(), id: payload.ID(), kind: payload.Type(), role: payload.Role(), callID: payload.CallID(), namespace: payload.Namespace(), name: payload.Name(), contents: make(map[int]*contentState)}
 }
 
 func (s *itemState) clone() *itemState {

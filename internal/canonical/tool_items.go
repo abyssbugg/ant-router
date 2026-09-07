@@ -6,12 +6,25 @@ import "github.com/abyssbugg/ant-router/internal/canonicaljson"
 type ToolCall struct {
 	id        ItemID
 	callID    ToolCallID
+	namespace string
 	name      string
 	arguments canonicaljson.Value
 }
 
-// NewToolCall validates a canonical tool invocation.
+// NewToolCall validates a direct canonical tool invocation.
 func NewToolCall(id ItemID, callID ToolCallID, name string, arguments canonicaljson.Value) (ToolCall, error) {
+	return newToolCall(id, callID, "", name, arguments)
+}
+
+// NewNamespacedToolCall validates a canonical namespaced function invocation.
+func NewNamespacedToolCall(id ItemID, callID ToolCallID, namespace, name string, arguments canonicaljson.Value) (ToolCall, error) {
+	if !validToolName(namespace) {
+		return ToolCall{}, itemError(CodeInvalidInvariant, "tool_call.namespace")
+	}
+	return newToolCall(id, callID, namespace, name, arguments)
+}
+
+func newToolCall(id ItemID, callID ToolCallID, namespace, name string, arguments canonicaljson.Value) (ToolCall, error) {
 	if !id.Valid() {
 		return ToolCall{}, itemError(CodeInvalidID, "tool_call.id")
 	}
@@ -27,15 +40,16 @@ func NewToolCall(id ItemID, callID ToolCallID, name string, arguments canonicalj
 	if len(arguments.Bytes()) > MaxJSONBytes {
 		return ToolCall{}, itemError(CodeLimitExceeded, "tool_call.arguments")
 	}
-	return ToolCall{id: id, callID: callID, name: name, arguments: arguments}, nil
+	return ToolCall{id: id, callID: callID, namespace: namespace, name: name, arguments: arguments}, nil
 }
 
 func (c ToolCall) ID() ItemID                     { return c.id }
 func (c ToolCall) CallID() ToolCallID             { return c.callID }
+func (c ToolCall) Namespace() string              { return c.namespace }
 func (c ToolCall) Name() string                   { return c.name }
 func (c ToolCall) Arguments() canonicaljson.Value { return c.arguments }
 func (c ToolCall) Valid() bool {
-	return c.id.Valid() && c.callID.Valid() && validToolName(c.name) && c.arguments.IsObject() && len(c.arguments.Bytes()) <= MaxJSONBytes
+	return c.id.Valid() && c.callID.Valid() && (c.namespace == "" || validToolName(c.namespace)) && validToolName(c.name) && c.arguments.IsObject() && len(c.arguments.Bytes()) <= MaxJSONBytes
 }
 
 // ToolResult is an immutable canonical result for a prior call.

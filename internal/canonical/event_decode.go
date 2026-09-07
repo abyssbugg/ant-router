@@ -58,7 +58,7 @@ func DecodeEvent(data []byte) (Event, error) {
 				return Event{}, parseErr
 			}
 		}
-		event, err = NewItemStartedEvent(id, responseID, dto.Sequence, ItemStartParams{Index: payload.Index, ID: itemID, Type: ItemType(payload.ItemType), Role: Role(payload.Role), CallID: callID, Name: payload.Name})
+		event, err = NewItemStartedEvent(id, responseID, dto.Sequence, ItemStartParams{Index: payload.Index, ID: itemID, Type: ItemType(payload.ItemType), Role: Role(payload.Role), CallID: callID, Namespace: payload.Namespace, Name: payload.Name})
 	case EventType("content_started"):
 		var payload contentStartedDTO
 		if err := strictDecode(dto.Data, &payload); err != nil {

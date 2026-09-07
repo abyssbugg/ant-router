@@ -44,12 +44,13 @@ type continuationUpdatedDTO struct {
 	Continuation continuationDTO `json:"continuation"`
 }
 type itemStartedDTO struct {
-	Index    int    `json:"index"`
-	ID       string `json:"id"`
-	ItemType string `json:"item_type"`
-	Role     string `json:"role,omitempty"`
-	CallID   string `json:"call_id,omitempty"`
-	Name     string `json:"name,omitempty"`
+	Index     int    `json:"index"`
+	ID        string `json:"id"`
+	ItemType  string `json:"item_type"`
+	Role      string `json:"role,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
 }
 type contentStartedDTO struct {
 	ItemID       string `json:"item_id"`

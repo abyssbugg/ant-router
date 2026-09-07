@@ -9,6 +9,7 @@ const (
 	CapabilityText             Capability = "text"
 	CapabilityImageInput       Capability = "image_input"
 	CapabilityTools            Capability = "tools"
+	CapabilityNamespaceTools   Capability = "namespace_tools"
 	CapabilityParallelTools    Capability = "parallel_tools"
 	CapabilityReasoningSummary Capability = "reasoning_summary"
 	CapabilityStructuredOutput Capability = "structured_output"
@@ -37,7 +38,7 @@ func NewCapabilitySet(values ...Capability) (CapabilitySet, error) {
 
 // Valid reports whether the capability is supported.
 func (c Capability) Valid() bool {
-	return oneOf(string(c), "text", "image_input", "tools", "parallel_tools", "reasoning_summary", "structured_output", "continuation")
+	return oneOf(string(c), "text", "image_input", "tools", "namespace_tools", "parallel_tools", "reasoning_summary", "structured_output", "continuation")
 }
 
 // Values returns a defensive sorted copy.
