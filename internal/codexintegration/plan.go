@@ -143,6 +143,7 @@ func planDigest(input PlanInput) string {
 		_, _ = hash.Write(size[:])
 		_, _ = hash.Write(value)
 	}
+	write([]byte("ant-router-codex-plan-v1"))
 	for _, value := range []string{string(input.Action), input.ProfilePath, input.CatalogPath, input.RouterctlPath, input.CodexVersion, input.CurrentProfile.SHA256, input.CurrentCatalog.SHA256, input.OwnershipGeneration} {
 		write([]byte(value))
 	}

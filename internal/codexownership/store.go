@@ -53,6 +53,15 @@ func generationID(input Input) string {
 }
 
 func (store *Store) Put(ctx context.Context, input Input) (Generation, error) {
+	generation, err := store.Stage(ctx, input)
+	if err != nil {
+		return Generation{}, err
+	}
+	return store.Commit(ctx, generation.ID)
+}
+
+// Stage durably writes an immutable generation without publishing it as current.
+func (store *Store) Stage(ctx context.Context, input Input) (Generation, error) {
 	if store == nil || ctx == nil || validateInput(input) != nil {
 		return Generation{}, errors.New("invalid Codex ownership input")
 	}
@@ -61,17 +70,18 @@ func (store *Store) Put(ctx context.Context, input Input) (Generation, error) {
 	}
 	input.CreatedAt = input.CreatedAt.UTC()
 	id := generationID(input)
-	previous := ""
-	if current, err := store.readManifest(ctx); err == nil {
-		if current.Current == id {
-			return store.Generation(ctx, id)
+	generationRoot := filepath.Join(store.root, "revisions", id)
+	if info, err := os.Lstat(generationRoot); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return Generation{}, errors.New("Codex ownership store unavailable")
 		}
-		previous = current.Current
+		if existing, readErr := store.Generation(ctx, id); readErr == nil {
+			return existing, nil
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return Generation{}, err
+		return Generation{}, errors.New("Codex ownership store unavailable")
 	}
 	revisions := filepath.Join(store.root, "revisions")
-	generationRoot := filepath.Join(revisions, id)
 	for _, dir := range []string{store.root, revisions, generationRoot} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return Generation{}, errors.New("Codex ownership store unavailable")
@@ -101,7 +111,34 @@ func (store *Store) Put(ctx context.Context, input Input) (Generation, error) {
 			return Generation{}, errors.New("Codex ownership store unavailable")
 		}
 	}
-	manifest := Manifest{SchemaVersion: 1, Current: id, Previous: previous, ProfilePath: input.ProfilePath, CatalogPath: input.CatalogPath}
+	return cloneGeneration(generation), nil
+}
+
+// Commit publishes a previously staged generation as current.
+func (store *Store) Commit(ctx context.Context, id string) (Generation, error) {
+	if store == nil || ctx == nil || !validID(id) {
+		return Generation{}, errors.New("invalid Codex ownership generation")
+	}
+	if err := ctx.Err(); err != nil {
+		return Generation{}, err
+	}
+	generation, err := store.Generation(ctx, id)
+	if err != nil {
+		return Generation{}, err
+	}
+	previous := ""
+	if current, err := store.readManifest(ctx); err == nil {
+		if current.Current == id {
+			return generation, nil
+		}
+		if current.ProfilePath != generation.ProfilePath || current.CatalogPath != generation.CatalogPath {
+			return Generation{}, errors.New("Codex ownership path conflict")
+		}
+		previous = current.Current
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Generation{}, err
+	}
+	manifest := Manifest{SchemaVersion: 1, Current: id, Previous: previous, ProfilePath: generation.ProfilePath, CatalogPath: generation.CatalogPath}
 	encoded, err := marshalJSON(manifest)
 	if err != nil {
 		return Generation{}, err

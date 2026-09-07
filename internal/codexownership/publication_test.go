@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -57,6 +58,71 @@ func TestStoreReportsCommittedManifestDurabilityFailure(t *testing.T) {
 	manifest, current, readErr := store.Current(context.Background())
 	if readErr != nil || manifest.Current != generation.ID || current.ID != generation.ID {
 		t.Fatalf("committed state = %#v, %#v, %v", manifest, current, readErr)
+	}
+}
+
+func TestStageRepairsPartialGenerationWithoutPublishing(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte("profile"), Catalog: []byte("catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(1, 0)}
+	id := generationID(input)
+	generationRoot := filepath.Join(root, "codex", "ant-router", "revisions", id)
+	if err := os.MkdirAll(generationRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(generationRoot, "profile.toml"), input.Profile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.Stage(context.Background(), input)
+	if err != nil || staged.ID != id || string(staged.Catalog) != "catalog" {
+		t.Fatalf("staged=%#v err=%v", staged, err)
+	}
+	if _, _, err := store.Current(context.Background()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial repair published ownership: %v", err)
+	}
+}
+
+func TestStageDoesNotPublishUntilCommit(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte("first-profile"), Catalog: []byte("first-catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(1, 0)}
+	first, err := store.Put(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInput := Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte("second-profile"), Catalog: []byte("second-catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(2, 0)}
+	staged, err := store.Stage(context.Background(), secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, current, err := store.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != first.ID || staged.ID == first.ID {
+		t.Fatalf("current=%s staged=%s", current.ID, staged.ID)
+	}
+	if _, err := store.Generation(context.Background(), staged.ID); err != nil {
+		t.Fatalf("staged generation unavailable: %v", err)
+	}
+	committed, err := store.Commit(context.Background(), staged.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.ID != staged.ID {
+		t.Fatalf("committed=%s staged=%s", committed.ID, staged.ID)
+	}
+	manifest, current, err := store.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != staged.ID || manifest.Previous != first.ID {
+		t.Fatalf("manifest=%#v current=%s", manifest, current.ID)
 	}
 }
 
