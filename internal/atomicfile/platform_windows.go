@@ -3,6 +3,7 @@
 package atomicfile
 
 import (
+	"os"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -35,5 +36,7 @@ func replaceFile(tempPath, targetPath string) error {
 	}
 	return nil
 }
+
+func removeFile(path string) error { return os.Remove(path) }
 
 func syncDirectory(string) error { return nil }
