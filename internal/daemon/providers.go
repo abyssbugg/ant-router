@@ -16,8 +16,10 @@ import (
 )
 
 type providerRuntime struct {
-	registry *execution.Registry
-	kinds    map[string]config.ProviderKind
+	registry         *execution.Registry
+	kinds            map[string]config.ProviderKind
+	codexMetadata    map[string]config.CodexModelConfig
+	configGeneration uint64
 }
 
 func buildProviderRuntime(configuration config.Config, source credential.Source) (*providerRuntime, error) {
@@ -29,6 +31,7 @@ func buildProviderRuntime(configuration config.Config, source credential.Source)
 	}
 	registrations := make([]execution.Registration, 0, len(configuration.Providers))
 	kinds := make(map[string]config.ProviderKind)
+	codexMetadata := make(map[string]config.CodexModelConfig)
 	for _, providerConfig := range configuration.Providers {
 		if !providerConfig.Enabled {
 			continue
@@ -39,12 +42,17 @@ func buildProviderRuntime(configuration config.Config, source credential.Source)
 		}
 		registrations = append(registrations, registration)
 		kinds[providerConfig.ID] = providerConfig.Kind
+		for _, modelConfig := range providerConfig.Models {
+			if modelConfig.Codex != nil && modelConfig.Codex.Enabled {
+				codexMetadata[modelConfig.Alias] = *modelConfig.Codex
+			}
+		}
 	}
 	registry, err := execution.NewRegistry(registrations)
 	if err != nil {
 		return nil, err
 	}
-	return &providerRuntime{registry: registry, kinds: kinds}, nil
+	return &providerRuntime{registry: registry, kinds: kinds, codexMetadata: codexMetadata}, nil
 }
 
 func buildProviderRegistration(providerConfig config.ProviderConfig, source credential.Source) (execution.Registration, error) {

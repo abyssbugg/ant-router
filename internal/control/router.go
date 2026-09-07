@@ -8,24 +8,26 @@ import (
 )
 
 type RouterOptions struct {
-	Build  buildinfo.Info
-	Status StatusProvider
-	Config ConfigService
-	Now    func() time.Time
+	Build        buildinfo.Info
+	Status       StatusProvider
+	Config       ConfigService
+	CodexCatalog CodexCatalogProvider
+	Now          func() time.Time
 }
 
 type Router struct {
-	build  buildinfo.Info
-	status StatusProvider
-	config ConfigService
-	now    func() time.Time
+	build        buildinfo.Info
+	status       StatusProvider
+	config       ConfigService
+	codexCatalog CodexCatalogProvider
+	now          func() time.Time
 }
 
 func NewRouter(options RouterOptions) (*Router, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	return &Router{build: options.Build, status: options.Status, config: options.Config, now: options.Now}, nil
+	return &Router{build: options.Build, status: options.Status, config: options.Config, codexCatalog: options.CodexCatalog, now: options.Now}, nil
 }
 
 func (r *Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -38,6 +40,8 @@ func (r *Router) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		handler = r.version
 	case "/v1/status":
 		handler = r.runtimeStatus
+	case "/v1/codex/catalog":
+		handler = r.codexCatalogCurrent
 	case "/v1/config":
 		handler = r.configCurrent
 	case "/v1/config/validate":
