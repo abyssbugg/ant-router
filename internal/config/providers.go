@@ -118,6 +118,40 @@ func normalizeProviders(c Config) Config {
 	return c
 }
 
+func fixedMockModelAliases() [7]string {
+	return [7]string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
+}
+
+func isFixedMockModelAlias(alias string) bool {
+	for _, known := range fixedMockModelAliases() {
+		if alias == known {
+			return true
+		}
+	}
+	return false
+}
+
+func validateMockCodexModels(models []ProviderModelConfig, path string) error {
+	seen := make(map[string]bool, len(models))
+	for index, model := range models {
+		prefix := fmt.Sprintf("%s[%d]", path, index)
+		if !isFixedMockModelAlias(model.Alias) || seen[model.Alias] {
+			return providerValidationError(prefix+".alias", "invalid mock model alias")
+		}
+		seen[model.Alias] = true
+		if model.Upstream != "" || len(model.Capabilities) != 0 || model.DefaultMaxOutputTokens != 0 || model.MaxOutputTokens != 0 {
+			return providerValidationError(prefix, "mock model only accepts Codex metadata")
+		}
+		if model.Codex == nil || !model.Codex.Enabled {
+			return providerValidationError(prefix+".codex", "enabled Codex metadata is required")
+		}
+		if err := validateCodexModel(model.Codex, prefix+".codex"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateProviders(c Config) error {
 	if len(c.Providers) > MaxProviders {
 		return providerValidationError("providers", "exceeds provider limit")
@@ -126,7 +160,7 @@ func validateProviders(c Config) error {
 	aliases := make(map[string]struct{})
 	for _, provider := range c.Providers {
 		if provider.Kind == ProviderKindMock {
-			for _, alias := range []string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"} {
+			for _, alias := range fixedMockModelAliases() {
 				aliases[alias] = struct{}{}
 			}
 		}
@@ -150,8 +184,8 @@ func validateProviders(c Config) error {
 			if provider.Credential != nil {
 				return providerValidationError(prefix+".credential", "mock provider does not accept credentials")
 			}
-			if len(provider.Models) != 0 {
-				return providerValidationError(prefix+".models", "mock provider uses its fixed model catalog")
+			if err := validateMockCodexModels(provider.Models, prefix+".models"); err != nil {
+				return err
 			}
 		case ProviderKindOpenAI, ProviderKindAnthropic:
 			if provider.Credential == nil {
