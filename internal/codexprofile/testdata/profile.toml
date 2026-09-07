@@ -1,0 +1,16 @@
+model_provider = 'ant-router'
+model_catalog_json = '/private/state/models.json'
+
+[model_providers]
+[model_providers.ant-router]
+name = 'Ant Router'
+base_url = 'http://127.0.0.1:8787/v1'
+wire_api = 'responses'
+request_max_retries = 0
+stream_max_retries = 0
+
+[model_providers.ant-router.auth]
+command = '/usr/local/bin/routerctl'
+args = ['--instance', 'default', '--state-dir', '/private/state', '--runtime-dir', '/private/run', 'codex', 'token']
+timeout_ms = 5000
+refresh_interval_ms = 300000
