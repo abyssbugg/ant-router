@@ -22,7 +22,7 @@ func TestCatalogIncludesVisionCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
+	want := []string{"mock/codex", "mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
 	if len(models) != len(want) {
 		t.Fatalf("model count=%d want=%d", len(models), len(want))
 	}

@@ -119,8 +119,8 @@ func normalizeProviders(c Config) Config {
 	return c
 }
 
-func fixedMockModelAliases() [7]string {
-	return [7]string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
+func fixedMockModelAliases() [8]string {
+	return [8]string{"mock/codex", "mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
 }
 
 func isFixedMockModelAlias(alias string) bool {

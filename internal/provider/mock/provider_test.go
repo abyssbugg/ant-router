@@ -23,7 +23,7 @@ func TestCatalogIsExactSortedAndCapabilityAware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
+	want := []string{"mock/codex", "mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
 	if len(models) != len(want) {
 		t.Fatalf("model count = %d", len(models))
 	}
@@ -32,14 +32,38 @@ func TestCatalogIsExactSortedAndCapabilityAware(t *testing.T) {
 			t.Fatalf("model[%d] = %q/%q", index, models[index].Provider(), models[index].ID())
 		}
 	}
-	if !models[1].Capabilities().Has(canonical.CapabilityStructuredOutput) || !models[2].Capabilities().Has(canonical.CapabilityReasoningSummary) || !models[5].Capabilities().Has(canonical.CapabilityTools) || !models[6].Capabilities().Has(canonical.CapabilityImageInput) {
+	if !models[0].Capabilities().Has(canonical.CapabilityNamespaceTools) || !models[0].Capabilities().Has(canonical.CapabilityParallelTools) || !models[2].Capabilities().Has(canonical.CapabilityStructuredOutput) || !models[3].Capabilities().Has(canonical.CapabilityReasoningSummary) || !models[6].Capabilities().Has(canonical.CapabilityTools) || !models[7].Capabilities().Has(canonical.CapabilityImageInput) {
 		t.Fatal("scenario capabilities are incomplete")
+	}
+}
+
+func TestCodexScenarioAcceptsNamespaceToolsAndReturnsText(t *testing.T) {
+	provider, _ := New(Options{IDs: &sequenceIDs{}, SlowDelay: time.Millisecond})
+	request := scenarioRequest(t, "mock/codex")
+	if !request.Capabilities().Has(canonical.CapabilityNamespaceTools) || !request.Capabilities().Has(canonical.CapabilityParallelTools) {
+		t.Fatal("Codex request capabilities missing")
+	}
+	source, err := provider.Execute(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := reduceSource(t, source)
+	if response.FinishReason() != canonical.FinishReason("stop") || len(response.Items()) != 1 {
+		t.Fatalf("response = %#v", response)
+	}
+	message, ok := response.Items()[0].Message()
+	if !ok || len(message.Content()) != 1 {
+		t.Fatalf("response item = %#v", response.Items()[0])
+	}
+	text, ok := message.Content()[0].Text()
+	if !ok || text.Text() != mockText {
+		t.Fatalf("response text = %#v", message.Content())
 	}
 }
 
 func TestSuccessfulScenariosProduceValidTerminalStreams(t *testing.T) {
 	provider, _ := New(Options{IDs: &sequenceIDs{}, SlowDelay: time.Millisecond})
-	for _, model := range []string{"mock/text", "mock/json", "mock/reasoning", "mock/tool", "mock/slow"} {
+	for _, model := range []string{"mock/codex", "mock/text", "mock/json", "mock/reasoning", "mock/tool", "mock/slow"} {
 		t.Run(model, func(t *testing.T) {
 			request := scenarioRequest(t, model)
 			source, err := provider.Execute(context.Background(), request)
@@ -148,10 +172,16 @@ func scenarioRequest(t *testing.T, model string) canonical.Request {
 	output, _ := canonical.NewOutputConstraints(canonical.OutputParams{Format: canonical.OutputFormat("text")})
 	params := canonical.RequestParams{Model: model, Input: []canonical.Item{item}, ToolChoice: choice, Output: output, Sampling: func() canonical.Sampling { value, _ := canonical.NewSampling(canonical.SamplingParams{}); return value }()}
 	params.ID, _ = ids.RequestID()
-	if model == "mock/tool" {
+	if model == "mock/tool" || model == "mock/codex" {
 		schema, _ := canonicaljson.Parse([]byte(`{"type":"object"}`), canonicaljson.DefaultLimits())
 		tool, _ := canonical.NewToolDefinition("Search", "", schema)
-		params.Tools = []canonical.ToolDefinition{tool}
+		if model == "mock/codex" {
+			namespace, _ := canonical.NewToolNamespace("clock", "", []canonical.ToolDefinition{tool})
+			params.Tools = []canonical.ToolDefinition{namespace}
+			params.Output, _ = canonical.NewOutputConstraints(canonical.OutputParams{Format: canonical.OutputFormat("text"), ParallelToolCalls: true})
+		} else {
+			params.Tools = []canonical.ToolDefinition{tool}
+		}
 	}
 	if model == "mock/json" {
 		params.Output, _ = canonical.NewOutputConstraints(canonical.OutputParams{Format: canonical.OutputFormat("json_object")})

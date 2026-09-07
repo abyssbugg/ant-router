@@ -123,6 +123,10 @@ func modelCatalog() ([]execution.Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	codex, err := canonical.NewCapabilitySet(canonical.CapabilityText, canonical.CapabilityTools, canonical.CapabilityNamespaceTools, canonical.CapabilityParallelTools)
+	if err != nil {
+		return nil, err
+	}
 	vision, err := canonical.NewCapabilitySet(canonical.CapabilityText, canonical.CapabilityImageInput)
 	if err != nil {
 		return nil, err
@@ -131,7 +135,7 @@ func modelCatalog() ([]execution.Model, error) {
 		id   string
 		caps canonical.CapabilitySet
 	}{
-		{"mock/disconnect", text}, {"mock/json", structured}, {"mock/reasoning", reasoning},
+		{"mock/codex", codex}, {"mock/disconnect", text}, {"mock/json", structured}, {"mock/reasoning", reasoning},
 		{"mock/slow", text}, {"mock/text", text}, {"mock/tool", tools}, {"mock/vision", vision},
 	}
 	models := make([]execution.Model, 0, len(specs))

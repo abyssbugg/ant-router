@@ -48,7 +48,7 @@ func TestBuildProviderRegistryOmitsUnavailableAndDisabledModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 7 || models[0].ID() != "mock/disconnect" || models[6].ID() != "mock/vision" {
+	if len(models) != 8 || models[0].ID() != "mock/codex" || models[7].ID() != "mock/vision" {
 		t.Fatalf("models = %#v", models)
 	}
 	statuses, err := runtime.summaries(context.Background())
@@ -81,7 +81,7 @@ func TestBuildProviderRegistryExposesAvailableOpenAIAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 8 || models[7].ID() != "openai/gpt-test" || models[7].Provider() != "openai-primary" {
+	if len(models) != 9 || models[8].ID() != "openai/gpt-test" || models[8].Provider() != "openai-primary" {
 		t.Fatalf("models = %#v", models)
 	}
 	statuses, err := runtime.summaries(context.Background())

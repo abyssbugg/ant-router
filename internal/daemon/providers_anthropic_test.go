@@ -30,7 +30,7 @@ func TestBuildProviderRuntimeOmitsMissingAnthropicCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 7 {
+	if len(models) != 8 {
 		t.Fatalf("models = %#v", models)
 	}
 	statuses, err := runtime.summaries(context.Background())
@@ -51,7 +51,7 @@ func TestBuildProviderRuntimeExposesAvailableAnthropicAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 8 || models[0].ID() != "anthropic/claude-test" || models[0].Provider() != "anthropic-primary" {
+	if len(models) != 9 || models[0].ID() != "anthropic/claude-test" || models[0].Provider() != "anthropic-primary" {
 		t.Fatalf("models = %#v", models)
 	}
 	statuses, err := runtime.summaries(context.Background())
@@ -76,7 +76,7 @@ func TestBuildProviderRuntimeExcludesDisabledAnthropicProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 7 || len(statuses) != 1 || statuses[0].ID != "mock" {
+	if len(models) != 8 || len(statuses) != 1 || statuses[0].ID != "mock" {
 		t.Fatalf("models=%#v statuses=%#v", models, statuses)
 	}
 }
