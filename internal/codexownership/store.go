@@ -234,16 +234,39 @@ func (store *Store) prune(ctx context.Context, manifest Manifest) error {
 		keep[manifest.Previous] = true
 	}
 	var candidates []Generation
-	for _, entry := range entries {
-		if !entry.IsDir() || !validID(entry.Name()) {
+	revisionsRoot := filepath.Join(store.root, "revisions")
+	removeStale := func(name string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(filepath.Join(revisionsRoot, name)); err != nil {
 			return errors.New("Codex ownership cleanup failed")
 		}
-		if keep[entry.Name()] {
+		return nil
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if keep[name] {
+			if !entry.IsDir() || !validID(name) {
+				return errors.New("Codex ownership cleanup failed")
+			}
 			continue
 		}
-		generation, err := store.Generation(ctx, entry.Name())
+		if !entry.IsDir() || !validID(name) {
+			if err := removeStale(name); err != nil {
+				return err
+			}
+			continue
+		}
+		generation, err := store.Generation(ctx, name)
 		if err != nil {
-			return errors.New("Codex ownership cleanup failed")
+			if contextErr := ctx.Err(); contextErr != nil {
+				return contextErr
+			}
+			if err := removeStale(name); err != nil {
+				return err
+			}
+			continue
 		}
 		candidates = append(candidates, generation)
 	}

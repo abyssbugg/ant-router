@@ -37,6 +37,34 @@ capabilities = ["text"]
 	}
 }
 
+func TestSchemaV3RejectsCodexMetadata(t *testing.T) {
+	_, err := Decode(strings.NewReader(`schema_version = 3
+[[providers]]
+id = "openai-primary"
+kind = "openai"
+enabled = true
+[providers.credential]
+source = "env"
+name = "OPENAI_API_KEY"
+[[providers.models]]
+alias = "openai/gpt-test"
+upstream = "gpt-test"
+capabilities = ["text"]
+[providers.models.codex]
+enabled = true
+display_name = "GPT Test"
+description = "Test"
+context_window = 128000
+effective_context_window_percent = 90
+priority = 10
+visibility = "list"
+`))
+	var configErr *Error
+	if !errors.As(err, &configErr) || configErr.Code != CodeUnknownField || configErr.Path != "providers[0].models[0].codex" {
+		t.Fatalf("error = %#v, want schema-v3 codex unknown field", err)
+	}
+}
+
 func TestSchemaV4RejectsCodexMetadata(t *testing.T) {
 	_, err := Decode(strings.NewReader(`schema_version = 4
 [[providers]]

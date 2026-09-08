@@ -16,8 +16,14 @@ func TestOperationalHintsAreValidatedAndNonsemantic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, _ := canonical.PortableDigest(base.Request)
-	second, _ := canonical.PortableDigest(withHints.Request)
+	first, err := canonical.PortableDigest(base.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := canonical.PortableDigest(withHints.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if first != second {
 		t.Fatal("operational hints changed canonical semantics")
 	}

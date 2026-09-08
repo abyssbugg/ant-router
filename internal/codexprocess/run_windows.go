@@ -11,6 +11,43 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const processCreationFlags = windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_SUSPENDED
+
+func resumeInitialThread(processID uint32) error {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(snapshot)
+	entry := windows.ThreadEntry32{Size: uint32(unsafe.Sizeof(windows.ThreadEntry32{}))}
+	if err := windows.Thread32First(snapshot, &entry); err != nil {
+		return err
+	}
+	for {
+		if entry.OwnerProcessID == processID {
+			thread, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, entry.ThreadID)
+			if err != nil {
+				return err
+			}
+			previous, resumeErr := windows.ResumeThread(thread)
+			closeErr := windows.CloseHandle(thread)
+			if resumeErr != nil {
+				return resumeErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			if previous == 0 {
+				return syscall.EINVAL
+			}
+			return nil
+		}
+		if err := windows.Thread32Next(snapshot, &entry); err != nil {
+			return err
+		}
+	}
+}
+
 func runCommand(ctx context.Context, command *exec.Cmd) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -25,11 +62,12 @@ func runCommand(ctx context.Context, command *exec.Cmd) error {
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
 		return err
 	}
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP}
+	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: processCreationFlags}
 	if err := command.Start(); err != nil {
 		return err
 	}
-	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(command.Process.Pid))
+	processID := uint32(command.Process.Pid)
+	process, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, processID)
 	if err != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
@@ -41,6 +79,16 @@ func runCommand(ctx context.Context, command *exec.Cmd) error {
 		_ = command.Process.Kill()
 		_ = command.Wait()
 		return assignErr
+	}
+	if err := ctx.Err(); err != nil {
+		_ = windows.TerminateJobObject(job, 1)
+		_ = command.Wait()
+		return err
+	}
+	if err := resumeInitialThread(processID); err != nil {
+		_ = windows.TerminateJobObject(job, 1)
+		_ = command.Wait()
+		return err
 	}
 	done := make(chan error, 1)
 	go func() { done <- command.Wait() }()

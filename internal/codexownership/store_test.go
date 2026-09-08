@@ -14,7 +14,10 @@ func TestStorePublishesCurrentAndPreviousGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.Put(context.Background(), Input{ProfilePath: "/home/user/.codex/ant-router.config.toml", CatalogPath: "/state/models.json", Profile: []byte("first-profile"), Catalog: []byte("first-catalog"), CodexVersion: "0.134.0", RouterctlPath: "/usr/bin/routerctl", CreatedAt: time.Unix(1, 0)})
+	firstInput := ownershipInput(t, "first-profile", 1)
+	firstInput.Catalog = []byte("first-catalog")
+	firstInput.CodexVersion = "0.134.0"
+	first, err := store.Put(context.Background(), firstInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +28,11 @@ func TestStorePublishesCurrentAndPreviousGenerations(t *testing.T) {
 	if current.Current != first.ID || current.Previous != "" || string(generation.Profile) != "first-profile" || string(generation.Catalog) != "first-catalog" {
 		t.Fatalf("first state = %#v, %#v", current, generation)
 	}
-	second, err := store.Put(context.Background(), Input{ProfilePath: current.ProfilePath, CatalogPath: current.CatalogPath, Profile: []byte("second-profile"), Catalog: []byte("second-catalog"), CodexVersion: "0.134.0", RouterctlPath: "/usr/bin/routerctl", CreatedAt: time.Unix(2, 0)})
+	secondInput := firstInput
+	secondInput.Profile = []byte("second-profile")
+	secondInput.Catalog = []byte("second-catalog")
+	secondInput.CreatedAt = time.Unix(2, 0)
+	second, err := store.Put(context.Background(), secondInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +59,8 @@ func TestStorePutIsIdempotentForIdenticalContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := Input{ProfilePath: "/home/user/.codex/ant-router.config.toml", CatalogPath: "/state/models.json", Profile: []byte("profile"), Catalog: []byte("catalog"), CodexVersion: "0.134.0", RouterctlPath: "/usr/bin/routerctl", CreatedAt: time.Unix(1, 0)}
+	input := ownershipInput(t, "profile", 1)
+	input.CodexVersion = "0.134.0"
 	first, err := store.Put(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +84,7 @@ func TestCurrentRejectsDuplicateManifestKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte("profile"), Catalog: []byte("catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(1, 0)}
+	input := ownershipInput(t, "profile", 1)
 	generation, err := store.Put(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
@@ -101,8 +109,11 @@ func TestStoreRetainsTenNewestGenerations(t *testing.T) {
 		t.Fatal(err)
 	}
 	var latest Manifest
+	input := ownershipInput(t, "initial", 1)
 	for index := 0; index < 12; index++ {
-		_, err := store.Put(context.Background(), Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte{byte(index + 1)}, Catalog: []byte("catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(int64(index+1), 0)})
+		input.Profile = []byte{byte(index + 1)}
+		input.CreatedAt = time.Unix(int64(index+1), 0)
+		_, err := store.Put(context.Background(), input)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +153,7 @@ func TestGenerationRejectsSymlinkedManagedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	generation, err := store.Put(context.Background(), ownershipInput("profile", 1))
+	generation, err := store.Put(context.Background(), ownershipInput(t, "profile", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,16 +173,47 @@ func TestGenerationRejectsSymlinkedManagedFile(t *testing.T) {
 	}
 }
 
+func TestStorePrunesCorruptStaleGeneration(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := ownershipInput(t, "first", 1)
+	if _, err := store.Put(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	corruptID := strings.Repeat("a", 64)
+	corruptRoot := filepath.Join(store.root, "revisions", corruptID)
+	if err := os.MkdirAll(corruptRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(corruptRoot, "generation.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input.Profile = []byte("second")
+	input.CreatedAt = time.Unix(2, 0)
+	if _, err := store.Put(context.Background(), input); err != nil {
+		t.Fatalf("corrupt stale revision blocked commit: %v", err)
+	}
+	if _, err := os.Lstat(corruptRoot); !os.IsNotExist(err) {
+		t.Fatalf("corrupt stale revision remains: %v", err)
+	}
+}
+
 func TestStoreRejectsInvalidInputWithoutLeakingBytes(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := t.TempDir()
+	profilePath := filepath.Join(root, "profile")
+	catalogPath := filepath.Join(root, "catalog")
 	tests := []Input{
 		{},
-		{ProfilePath: "relative", CatalogPath: "/catalog", Profile: []byte("secret")},
-		{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: make([]byte, MaxProfileBytes+1)},
-		{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte("ok"), Catalog: make([]byte, MaxCatalogBytes+1)},
+		{ProfilePath: "relative", CatalogPath: catalogPath, Profile: []byte("secret")},
+		{ProfilePath: profilePath, CatalogPath: catalogPath, Profile: make([]byte, MaxProfileBytes+1)},
+		{ProfilePath: profilePath, CatalogPath: catalogPath, Profile: []byte("ok"), Catalog: make([]byte, MaxCatalogBytes+1)},
 	}
 	for _, input := range tests {
 		if _, err := store.Put(context.Background(), input); err == nil {

@@ -13,8 +13,10 @@ import (
 	"github.com/abyssbugg/ant-router/internal/atomicfile"
 )
 
-func ownershipInput(profile string, created int64) Input {
-	return Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte(profile), Catalog: []byte("catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(created, 0)}
+func ownershipInput(t *testing.T, profile string, created int64) Input {
+	t.Helper()
+	root := t.TempDir()
+	return Input{ProfilePath: filepath.Join(root, "profile"), CatalogPath: filepath.Join(root, "catalog"), Profile: []byte(profile), Catalog: []byte("catalog"), CodexVersion: "0.153.4", RouterctlPath: filepath.Join(root, "routerctl"), CreatedAt: time.Unix(created, 0)}
 }
 
 func TestStorePublishesFilesInDeterministicManifestLastOrder(t *testing.T) {
@@ -28,7 +30,7 @@ func TestStorePublishesFilesInDeterministicManifestLastOrder(t *testing.T) {
 		names = append(names, filepath.Base(path))
 		return original(ctx, path, data, mode)
 	}
-	if _, err := store.Put(context.Background(), ownershipInput("profile", 1)); err != nil {
+	if _, err := store.Put(context.Background(), ownershipInput(t, "profile", 1)); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"profile.toml", "models.json", "generation.json", "ownership.json"}
@@ -51,7 +53,7 @@ func TestStoreReportsCommittedManifestDurabilityFailure(t *testing.T) {
 		}
 		return result, err
 	}
-	generation, err := store.Put(context.Background(), ownershipInput("committed", 1))
+	generation, err := store.Put(context.Background(), ownershipInput(t, "committed", 1))
 	if err == nil || generation.ID == "" || !Committed(err) {
 		t.Fatalf("put = %#v, %v", generation, err)
 	}
@@ -67,7 +69,7 @@ func TestStageRepairsPartialGenerationWithoutPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte("profile"), Catalog: []byte("catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(1, 0)}
+	input := ownershipInput(t, "profile", 1)
 	id := generationID(input)
 	generationRoot := filepath.Join(root, "codex", "ant-router", "revisions", id)
 	if err := os.MkdirAll(generationRoot, 0o700); err != nil {
@@ -90,12 +92,16 @@ func TestStageDoesNotPublishUntilCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstInput := Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte("first-profile"), Catalog: []byte("first-catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(1, 0)}
+	firstInput := ownershipInput(t, "first-profile", 1)
+	firstInput.Catalog = []byte("first-catalog")
 	first, err := store.Put(context.Background(), firstInput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondInput := Input{ProfilePath: "/profile", CatalogPath: "/catalog", Profile: []byte("second-profile"), Catalog: []byte("second-catalog"), CodexVersion: "0.153.4", RouterctlPath: "/routerctl", CreatedAt: time.Unix(2, 0)}
+	secondInput := firstInput
+	secondInput.Profile = []byte("second-profile")
+	secondInput.Catalog = []byte("second-catalog")
+	secondInput.CreatedAt = time.Unix(2, 0)
 	staged, err := store.Stage(context.Background(), secondInput)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +137,7 @@ func TestStoreFailureBeforeManifestPreservesCurrentGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.Put(context.Background(), ownershipInput("first", 1))
+	first, err := store.Put(context.Background(), ownershipInput(t, "first", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +148,7 @@ func TestStoreFailureBeforeManifestPreservesCurrentGeneration(t *testing.T) {
 		}
 		return original(ctx, path, data, mode)
 	}
-	if _, err := store.Put(context.Background(), ownershipInput("second", 2)); err == nil {
+	if _, err := store.Put(context.Background(), ownershipInput(t, "second", 2)); err == nil {
 		t.Fatal("expected publication failure")
 	}
 	manifest, current, err := store.Current(context.Background())

@@ -45,8 +45,17 @@ func TestCodexProcessHelper(t *testing.T) {
 	if len(args) > 0 && args[len(args)-1] == "sleep" {
 		time.Sleep(30 * time.Second)
 	}
+	if len(args) > 0 && args[len(args)-1] == "child-sleep" {
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
 	if len(args) >= 2 && args[len(args)-2] == "spawn-child" {
-		child := exec.Command("sleep", "30")
+		executable, err := os.Executable()
+		if err != nil {
+			os.Exit(91)
+		}
+		child := exec.Command(executable, "-test.run=TestCodexProcessHelper", "--", "child-sleep")
+		child.Env = append(os.Environ(), "ANT_ROUTER_CODEX_HELPER=1")
 		if err := child.Start(); err != nil {
 			os.Exit(91)
 		}

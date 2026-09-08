@@ -174,6 +174,9 @@ func Decode(r io.Reader) (Config, error) {
 				return Config{}, &Error{Code: CodeValidationFailed, Path: fmt.Sprintf("providers[%d].kind", i), Err: fmt.Errorf("provider kind is unavailable in schema version 3")}
 			}
 			for j, model := range provider.Models {
+				if model.Codex != nil {
+					return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].models[%d].codex", i, j), Err: fmt.Errorf("field is unavailable in schema version 3")}
+				}
 				if model.DefaultMaxOutputTokens != nil {
 					return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].models[%d].default_max_output_tokens", i, j), Err: fmt.Errorf("field is unavailable in schema version 3")}
 				}

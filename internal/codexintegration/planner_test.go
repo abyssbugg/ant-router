@@ -138,8 +138,8 @@ func TestPlannerRestorePublishesCatalogBeforeProfile(t *testing.T) {
 	}
 	first := publishPlan(t, planner, firstPlan, time.Unix(1, 0).UTC())
 	updatedInput := firstPlan.input
-	updatedInput.DesiredProfile = append(updatedInput.DesiredProfile, []byte("# v2\n")...)
-	updatedInput.DesiredCatalog = append(updatedInput.DesiredCatalog, []byte(" ")...)
+	updatedInput.DesiredProfile = append(append([]byte(nil), firstPlan.input.DesiredProfile...), []byte("# v2\n")...)
+	updatedInput.DesiredCatalog = append(append([]byte(nil), firstPlan.input.DesiredCatalog...), []byte(" ")...)
 	secondPlan, err := NewPlan(updatedInput)
 	if err != nil {
 		t.Fatal(err)

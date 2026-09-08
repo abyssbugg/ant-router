@@ -18,8 +18,14 @@ func TestClientMetadataIsValidatedAndNonsemantic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseDigest, _ := canonical.PortableDigest(base.Request)
-	metadataDigest, _ := canonical.PortableDigest(withMetadata.Request)
+	baseDigest, err := canonical.PortableDigest(base.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataDigest, err := canonical.PortableDigest(withMetadata.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if baseDigest != metadataDigest {
 		t.Fatal("client metadata changed canonical semantics")
 	}
