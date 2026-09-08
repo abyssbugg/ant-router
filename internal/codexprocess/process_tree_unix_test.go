@@ -26,8 +26,9 @@ func TestRunnerCancellationTerminatesDescendantProcess(t *testing.T) {
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(pidPath)
 		if err == nil {
-			pid, _ = strconv.Atoi(string(data))
-			if pid > 0 {
+			parsed, parseErr := strconv.Atoi(string(data))
+			if parseErr == nil && parsed > 0 {
+				pid = parsed
 				break
 			}
 		}

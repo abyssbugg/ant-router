@@ -59,7 +59,14 @@ func TestCodexProcessHelper(t *testing.T) {
 		if err := child.Start(); err != nil {
 			os.Exit(91)
 		}
-		if err := os.WriteFile(args[len(args)-1], []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+		pidPath := args[len(args)-1]
+		temporaryPath := pidPath + ".tmp"
+		if err := os.WriteFile(temporaryPath, []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+			_ = child.Process.Kill()
+			os.Exit(92)
+		}
+		if err := os.Rename(temporaryPath, pidPath); err != nil {
+			_ = os.Remove(temporaryPath)
 			_ = child.Process.Kill()
 			os.Exit(92)
 		}
