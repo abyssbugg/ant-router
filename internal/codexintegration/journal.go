@@ -38,7 +38,8 @@ func validPending(pending pendingTransaction) bool {
 	case ActionEnable:
 		return pending.TargetGeneration != "" && pending.TargetGeneration != pending.BaseGeneration
 	case ActionRestore:
-		return pending.TargetGeneration != "" && pending.BaseGeneration != "" && pending.TargetGeneration != pending.BaseGeneration
+		// Restore may republish the current owned generation after disable removed its files.
+		return pending.TargetGeneration != "" && pending.BaseGeneration != ""
 	case ActionDisable:
 		return pending.TargetGeneration == "" && pending.BaseGeneration != ""
 	default:

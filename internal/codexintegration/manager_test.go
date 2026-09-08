@@ -285,6 +285,76 @@ func TestManagerRejectsStaleProofWithoutReplacingForeignFile(t *testing.T) {
 	}
 }
 
+func TestManagerRestoresCurrentGenerationAfterDisable(t *testing.T) {
+	manager, planner := newTestManager(t)
+	enablePlan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := manager.Enable(context.Background(), enablePlan.Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	disablePlan, err := planner.PlanDisable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Disable(context.Background(), disablePlan.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	restorePlan, err := planner.PlanRestore(context.Background(), enabled.GenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Restore(context.Background(), enabled.GenerationID, restorePlan.Digest()); err != nil {
+		t.Fatalf("restore current generation after disable: %v", err)
+	}
+}
+
+func TestManagerRecoversCurrentGenerationRestoreAfterCommitFailure(t *testing.T) {
+	manager, planner := newTestManager(t)
+	enablePlan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := manager.Enable(context.Background(), enablePlan.Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	disablePlan, err := planner.PlanDisable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Disable(context.Background(), disablePlan.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	restorePlan, err := planner.PlanRestore(context.Background(), enabled.GenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := planner.ownership.(*codexownership.Store)
+	failing := &failOnceCommitStore{Store: base, fail: true}
+	recoveryManager, err := NewManager(planner, failing, func() time.Time { return time.Unix(12, 0).UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recoveryManager.Restore(context.Background(), enabled.GenerationID, restorePlan.Digest()); err == nil {
+		t.Fatal("restore commit failure not reported")
+	}
+	if err := recoveryManager.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for path, expected := range map[string][]byte{restorePlan.input.ProfilePath: restorePlan.Profile(), restorePlan.input.CatalogPath: restorePlan.Catalog()} {
+		actual, err := os.ReadFile(path)
+		if err != nil || string(actual) != string(expected) {
+			t.Fatalf("%s = %q, %v", path, actual, err)
+		}
+	}
+	if err := recoveryManager.Recover(context.Background()); err != nil {
+		t.Fatalf("idempotent recovery failed: %v", err)
+	}
+}
+
 func TestManagerRestoresPriorGenerationAndDisables(t *testing.T) {
 	manager, planner := newTestManager(t)
 	firstPlan, err := planner.PlanEnable(context.Background())
