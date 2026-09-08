@@ -259,7 +259,7 @@ func TestDaemonReportsMissingOpenAICredentialAndOmitsItsModels(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
 		t.Fatalf("decode models failed: %v", err)
 	}
-	if response.StatusCode != http.StatusOK || len(document.Data) != 7 {
+	if response.StatusCode != http.StatusOK || len(document.Data) != 8 {
 		t.Fatalf("models status/data = %d, %#v", response.StatusCode, document.Data)
 	}
 	for _, model := range document.Data {

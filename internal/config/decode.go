@@ -58,12 +58,24 @@ type wireCredential struct {
 }
 
 type wireProviderModel struct {
-	Alias                  *string   `toml:"alias"`
-	Upstream               *string   `toml:"upstream"`
-	Capabilities           *[]string `toml:"capabilities"`
-	DefaultMaxOutputTokens *int64    `toml:"default_max_output_tokens"`
-	MaxOutputTokens        *int64    `toml:"max_output_tokens"`
-	_                      struct{}  `toml:"" json:"-"`
+	Alias                  *string    `toml:"alias"`
+	Upstream               *string    `toml:"upstream"`
+	Capabilities           *[]string  `toml:"capabilities"`
+	DefaultMaxOutputTokens *int64     `toml:"default_max_output_tokens"`
+	MaxOutputTokens        *int64     `toml:"max_output_tokens"`
+	Codex                  *wireCodex `toml:"codex"`
+	_                      struct{}   `toml:"" json:"-"`
+}
+
+type wireCodex struct {
+	Enabled                       *bool    `toml:"enabled"`
+	DisplayName                   *string  `toml:"display_name"`
+	Description                   *string  `toml:"description"`
+	ContextWindow                 *int64   `toml:"context_window"`
+	EffectiveContextWindowPercent *int     `toml:"effective_context_window_percent"`
+	Priority                      *int     `toml:"priority"`
+	Visibility                    *string  `toml:"visibility"`
+	_                             struct{} `toml:"" json:"-"`
 }
 
 // Decode decodes a Config from a TOML reader with strict validation.
@@ -162,6 +174,9 @@ func Decode(r io.Reader) (Config, error) {
 				return Config{}, &Error{Code: CodeValidationFailed, Path: fmt.Sprintf("providers[%d].kind", i), Err: fmt.Errorf("provider kind is unavailable in schema version 3")}
 			}
 			for j, model := range provider.Models {
+				if model.Codex != nil {
+					return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].models[%d].codex", i, j), Err: fmt.Errorf("field is unavailable in schema version 3")}
+				}
 				if model.DefaultMaxOutputTokens != nil {
 					return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].models[%d].default_max_output_tokens", i, j), Err: fmt.Errorf("field is unavailable in schema version 3")}
 				}
@@ -170,9 +185,20 @@ func Decode(r io.Reader) (Config, error) {
 				}
 			}
 		}
-	case SchemaVersion:
+	case AnthropicSchemaVersion:
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 4")}
+		}
+		for i, provider := range wire.Providers {
+			for j, model := range provider.Models {
+				if model.Codex != nil {
+					return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].models[%d].codex", i, j), Err: fmt.Errorf("field is unavailable in schema version 4")}
+				}
+			}
+		}
+	case SchemaVersion:
+		if wire.MockProvider != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 5")}
 		}
 	default:
 		return Config{}, &Error{Code: CodeUnsupportedSchema, Path: "schema_version", Err: fmt.Errorf("unsupported schema version %d", *wire.SchemaVersion)}
@@ -221,7 +247,7 @@ func Decode(r io.Reader) (Config, error) {
 	if *wire.SchemaVersion == PreviousSchemaVersion && wire.MockProvider != nil && wire.MockProvider.Enabled != nil && *wire.MockProvider.Enabled {
 		cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 	}
-	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == SchemaVersion {
+	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == SchemaVersion {
 		if wire.Providers != nil {
 			cfg.Providers = make([]ProviderConfig, len(wire.Providers))
 		}
@@ -263,6 +289,31 @@ func Decode(r io.Reader) (Config, error) {
 				}
 				if model.MaxOutputTokens != nil {
 					converted.Models[j].MaxOutputTokens = *model.MaxOutputTokens
+				}
+				if model.Codex != nil {
+					codex := &CodexModelConfig{}
+					if model.Codex.Enabled != nil {
+						codex.Enabled = *model.Codex.Enabled
+					}
+					if model.Codex.DisplayName != nil {
+						codex.DisplayName = *model.Codex.DisplayName
+					}
+					if model.Codex.Description != nil {
+						codex.Description = *model.Codex.Description
+					}
+					if model.Codex.ContextWindow != nil {
+						codex.ContextWindow = *model.Codex.ContextWindow
+					}
+					if model.Codex.EffectiveContextWindowPercent != nil {
+						codex.EffectiveContextWindowPercent = *model.Codex.EffectiveContextWindowPercent
+					}
+					if model.Codex.Priority != nil {
+						codex.Priority = *model.Codex.Priority
+					}
+					if model.Codex.Visibility != nil {
+						codex.Visibility = CodexVisibility(*model.Codex.Visibility)
+					}
+					converted.Models[j].Codex = codex
 				}
 			}
 			cfg.Providers[i] = converted

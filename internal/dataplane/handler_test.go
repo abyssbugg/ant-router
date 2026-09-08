@@ -77,7 +77,7 @@ func TestModelsReturnsExactMockCatalog(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
+	want := []string{"mock/codex", "mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
 	if body.Object != "list" || len(body.Data) != len(want) {
 		t.Fatalf("models = %#v", body)
 	}

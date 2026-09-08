@@ -31,7 +31,7 @@ func encodeEventData(event Event) (json.RawMessage, error) {
 		return marshalCodec(continuationUpdatedDTO{Continuation: *encoded}, MaxOrdinaryEventBytes)
 	case EventType("item_started"):
 		payload, _ := event.ItemStarted()
-		return marshalCodec(itemStartedDTO{Index: payload.Index(), ID: payload.ID().String(), ItemType: string(payload.Type()), Role: string(payload.Role()), CallID: payload.CallID().String(), Name: payload.Name()}, MaxOrdinaryEventBytes)
+		return marshalCodec(itemStartedDTO{Index: payload.Index(), ID: payload.ID().String(), ItemType: string(payload.Type()), Role: string(payload.Role()), CallID: payload.CallID().String(), Namespace: payload.Namespace(), Name: payload.Name()}, MaxOrdinaryEventBytes)
 	case EventType("content_started"):
 		payload, _ := event.ContentStarted()
 		return marshalCodec(contentStartedDTO{ItemID: payload.ItemID().String(), ContentIndex: payload.Index(), ContentType: string(payload.Type())}, MaxOrdinaryEventBytes)

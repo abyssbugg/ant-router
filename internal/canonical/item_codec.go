@@ -24,7 +24,7 @@ func encodeItem(item Item) (json.RawMessage, error) {
 		return marshalCodec(messageDTO{Type: "message", ID: value.ID().String(), Role: string(value.Role()), Content: content}, MaxRequestBytes)
 	case ItemType("tool_call"):
 		value, _ := item.ToolCall()
-		return marshalCodec(toolCallDTO{Type: "tool_call", ID: value.ID().String(), CallID: value.CallID().String(), Name: value.Name(), Arguments: json.RawMessage(value.Arguments().Bytes())}, MaxRequestBytes)
+		return marshalCodec(toolCallDTO{Type: "tool_call", ID: value.ID().String(), CallID: value.CallID().String(), Namespace: value.Namespace(), Name: value.Name(), Arguments: json.RawMessage(value.Arguments().Bytes())}, MaxRequestBytes)
 	case ItemType("tool_result"):
 		value, _ := item.ToolResult()
 		content := make([]json.RawMessage, 0, len(value.Content()))
@@ -93,7 +93,12 @@ func decodeItem(data []byte) (Item, error) {
 		if err != nil {
 			return Item{}, codecError(CodeInvalidJSON, "tool_call.arguments")
 		}
-		value, err := NewToolCall(id, callID, dto.Name, arguments)
+		var value ToolCall
+		if dto.Namespace == "" {
+			value, err = NewToolCall(id, callID, dto.Name, arguments)
+		} else {
+			value, err = NewNamespacedToolCall(id, callID, dto.Namespace, dto.Name, arguments)
+		}
 		if err != nil {
 			return Item{}, err
 		}

@@ -104,6 +104,17 @@ func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
 	return response, nil
 }
 
+func (c *Client) CodexCatalog(ctx context.Context) (CodexCatalogResponse, error) {
+	var response CodexCatalogResponse
+	if err := c.requestWithLimit(ctx, http.MethodGet, "/v1/codex/catalog", nil, &response, MaxCodexCatalogResponseBytes); err != nil {
+		return CodexCatalogResponse{}, err
+	}
+	if err := validateCodexCatalogResponse(response); err != nil {
+		return CodexCatalogResponse{}, &ClientError{Kind: ClientErrorProtocol, Err: err}
+	}
+	return response, nil
+}
+
 func (c *Client) CurrentConfig(ctx context.Context) (ConfigCurrentResponse, error) {
 	var response ConfigCurrentResponse
 	if err := c.request(ctx, http.MethodGet, "/v1/config", nil, &response); err != nil {
@@ -168,6 +179,10 @@ func (c *Client) RollbackConfig(ctx context.Context) (ConfigMutationResponse, er
 func (c *Client) CloseIdleConnections() { c.transport.CloseIdleConnections() }
 
 func (c *Client) request(ctx context.Context, method, path string, requestBody []byte, destination any) error {
+	return c.requestWithLimit(ctx, method, path, requestBody, destination, c.maxResponseBody)
+}
+
+func (c *Client) requestWithLimit(ctx context.Context, method, path string, requestBody []byte, destination any, maxResponseBytes int64) error {
 	requestContext, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	token, err := c.tokenSource.Token(requestContext)
@@ -212,7 +227,7 @@ func (c *Client) request(ctx context.Context, method, path string, requestBody [
 		closeErr := response.Body.Close()
 		return &ClientError{Kind: ClientErrorProtocol, Status: response.StatusCode, RequestID: response.Header.Get(RequestIDHeader), Err: errors.Join(errors.New("response content type is invalid"), closeErr)}
 	}
-	data, readErr := io.ReadAll(io.LimitReader(response.Body, c.maxResponseBody+1))
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	closeErr := response.Body.Close()
 	if readErr != nil {
 		if kind := contextErrorKind(requestContext); kind != "" {
@@ -223,7 +238,7 @@ func (c *Client) request(ctx context.Context, method, path string, requestBody [
 	if closeErr != nil {
 		return &ClientError{Kind: ClientErrorProtocol, Status: response.StatusCode, Err: closeErr}
 	}
-	if int64(len(data)) > c.maxResponseBody {
+	if int64(len(data)) > maxResponseBytes {
 		return &ClientError{Kind: ClientErrorProtocol, Status: response.StatusCode, Err: errors.New("response body is too large")}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

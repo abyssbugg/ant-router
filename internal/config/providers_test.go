@@ -25,10 +25,10 @@ func validOpenAIProvider(id, alias string) ProviderConfig {
 	}
 }
 
-func TestDefaultUsesSchemaV4WithoutProviders(t *testing.T) {
+func TestDefaultUsesSchemaV5WithoutProviders(t *testing.T) {
 	cfg := Default()
-	if cfg.SchemaVersion != 4 {
-		t.Fatalf("schema version = %d, want 4", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 5 {
+		t.Fatalf("schema version = %d, want 5", cfg.SchemaVersion)
 	}
 	if len(cfg.Providers) != 0 {
 		t.Fatalf("providers = %#v, want none", cfg.Providers)
@@ -54,6 +54,36 @@ capabilities = ["text", "tools"]
 	}
 	if len(cfg.Providers) != 1 || !reflect.DeepEqual(cfg.Providers[0], validOpenAIProvider("openai-primary", "openai/gpt-test")) {
 		t.Fatalf("providers = %#v", cfg.Providers)
+	}
+}
+
+func TestHostedWebSearchCapabilityRequiresTools(t *testing.T) {
+	cfg := Default()
+	cfg.DataPlane.Enabled = true
+	provider := validOpenAIProvider("openai-primary", "openai/gpt-test")
+	provider.Models[0].Capabilities = []string{"hosted_web_search", "text", "tools"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("hosted search capability rejected: %v", err)
+	}
+	cfg.Providers[0].Models[0].Capabilities = []string{"hosted_web_search", "text"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("hosted search without tools accepted")
+	}
+}
+
+func TestNamespaceToolsCapabilityRequiresTools(t *testing.T) {
+	cfg := Default()
+	cfg.DataPlane.Enabled = true
+	provider := validOpenAIProvider("openai-primary", "openai/gpt-test")
+	provider.Models[0].Capabilities = []string{"namespace_tools", "text", "tools"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("namespace capability rejected: %v", err)
+	}
+	cfg.Providers[0].Models[0].Capabilities = []string{"namespace_tools", "text"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("namespace capability without tools accepted")
 	}
 }
 

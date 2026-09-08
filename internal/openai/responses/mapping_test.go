@@ -2,10 +2,41 @@ package responses
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 )
+
+func TestDecodeAcceptsCompletedMessageIdentity(t *testing.T) {
+	parsed, err := Decode(strings.NewReader(`{"model":"mock/codex","input":[{"type":"message","id":"msg_upstream","status":"completed","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`), &sequenceIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Request.Input()) != 1 {
+		t.Fatalf("input = %#v", parsed.Request.Input())
+	}
+}
+
+func TestDecodeAcceptsNullReasoningSummary(t *testing.T) {
+	parsed, err := Decode(strings.NewReader(`{"model":"mock/codex","input":"hi","reasoning":{"summary":null}}`), &sequenceIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Request.ReasoningSummary() != canonical.ReasoningSummaryNone {
+		t.Fatalf("summary = %q", parsed.Request.ReasoningSummary())
+	}
+}
+
+func TestDecodeAcceptsExplicitNoReasoningSummary(t *testing.T) {
+	parsed, err := Decode(strings.NewReader(`{"model":"mock/codex","input":"hi","reasoning":{"summary":"none"}}`), &sequenceIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Request.ReasoningSummary() != canonical.ReasoningSummaryNone {
+		t.Fatalf("summary = %q", parsed.Request.ReasoningSummary())
+	}
+}
 
 func TestDecodeMapsEasyInputMessage(t *testing.T) {
 	parsed, err := Decode(bytes.NewBufferString(`{"model":"mock/text","input":[{"role":"user","content":"hello"}]}`), &sequenceIDs{})
@@ -97,7 +128,7 @@ func TestDecodeRejectsRecursiveUnknownAndInvalidReferences(t *testing.T) {
 		{"invalid image URL", `{"model":"mock/text","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"http://example.com/a.png"}]}]}`, "invalid_field", "input[0].content[0].image_url"},
 		{"forward result", `{"model":"mock/tool","input":[{"type":"function_call_output","call_id":"missing","output":"x"}]}`, "invalid_field", "input[0].call_id"},
 		{"duplicate external call", `{"model":"mock/tool","input":[{"type":"function_call","call_id":"same","name":"Search","arguments":"{}"},{"type":"function_call","call_id":"same","name":"Search","arguments":"{}"}],"tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}]}`, "invalid_field", "input[1].call_id"},
-		{"unsupported tool type", `{"model":"mock/text","input":"x","tools":[{"type":"web_search"}]}`, "unsupported_field", "tools[0].type"},
+		{"unsupported tool type", `{"model":"mock/text","input":"x","tools":[{"type":"future_tool"}]}`, "unsupported_field", "tools[0].type"},
 		{"undeclared call", `{"model":"mock/tool","input":[{"type":"function_call","call_id":"one","name":"Other","arguments":"{}"}],"tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}]}`, "invalid_field", "input[0].name"},
 		{"duplicate output", `{"model":"mock/tool","input":[{"type":"function_call","call_id":"one","name":"Search","arguments":"{}"},{"type":"function_call_output","call_id":"one","output":"a"},{"type":"function_call_output","call_id":"one","output":"b"}],"tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}]}`, "invalid_field", "input[2].call_id"},
 		{"undeclared specific choice", `{"model":"mock/tool","input":"x","tools":[{"type":"function","name":"Search","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"Other"}}`, "invalid_field", "tool_choice.name"},

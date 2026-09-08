@@ -112,17 +112,40 @@ func NewRequest(params RequestParams) (Request, error) {
 
 func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice ToolChoice, output OutputConstraints) error {
 	toolNames := make(map[string]struct{}, len(tools))
+	topLevelNames := make(map[string]struct{}, len(tools))
+	totalFunctions := 0
+	totalDescriptionBytes := 0
 	for _, tool := range tools {
+		totalDescriptionBytes += len(tool.Description())
+		if totalDescriptionBytes > MaxTotalToolDescriptionBytes {
+			return requestError(CodeLimitExceeded, "request.tools")
+		}
 		if !tool.Valid() {
 			return requestError(CodeInvalidInvariant, "request.tools")
 		}
-		if _, exists := toolNames[tool.Name()]; exists {
+		if _, exists := topLevelNames[tool.Name()]; exists {
 			return requestError(CodeInvalidInvariant, "request.tools")
 		}
-		toolNames[tool.Name()] = struct{}{}
+		topLevelNames[tool.Name()] = struct{}{}
+		if tool.Kind() == ToolDefinitionKindNamespace {
+			for _, child := range tool.Tools() {
+				totalDescriptionBytes += len(child.Description())
+				if totalDescriptionBytes > MaxTotalToolDescriptionBytes {
+					return requestError(CodeLimitExceeded, "request.tools")
+				}
+				totalFunctions++
+				toolNames[toolIdentity(tool.Name(), child.Name())] = struct{}{}
+			}
+		} else if tool.Kind() == ToolDefinitionKindFunction {
+			totalFunctions++
+			toolNames[toolIdentity("", tool.Name())] = struct{}{}
+		}
+	}
+	if totalFunctions > MaxTotalToolFunctions {
+		return requestError(CodeLimitExceeded, "request.tools")
 	}
 	if choice.Kind() == ToolChoiceKind("specific") {
-		if _, exists := toolNames[choice.Name()]; !exists {
+		if _, exists := toolNames[toolIdentity(choice.Namespace(), choice.Name())]; !exists {
 			return requestError(CodeInvalidInvariant, "request.tool_choice")
 		}
 	}
@@ -142,7 +165,7 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 		switch item.Type() {
 		case ItemType("tool_call"):
 			call, _ := item.ToolCall()
-			if _, declared := toolNames[call.Name()]; !declared {
+			if _, declared := toolNames[toolIdentity(call.Namespace(), call.Name())]; !declared {
 				return requestError(CodeInvalidInvariant, "request.input")
 			}
 			if _, duplicate := callIDs[call.CallID()]; duplicate {
@@ -158,6 +181,8 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 	}
 	return nil
 }
+
+func toolIdentity(namespace, name string) string { return namespace + "\x00" + name }
 
 func computeCapabilities(input []Item, tools []ToolDefinition, output OutputConstraints, continuation *Continuation, reasoningSummary ReasoningSummaryMode) (CapabilitySet, error) {
 	var values []Capability
@@ -190,6 +215,14 @@ func computeCapabilities(input []Item, tools []ToolDefinition, output OutputCons
 	}
 	if len(tools) > 0 {
 		values = append(values, CapabilityTools)
+		for _, tool := range tools {
+			if tool.Kind() == ToolDefinitionKindNamespace {
+				values = append(values, CapabilityNamespaceTools)
+			}
+			if tool.Kind() == ToolDefinitionKindWebSearch {
+				values = append(values, CapabilityHostedWebSearch)
+			}
+		}
 	}
 	if output.ParallelToolCalls() {
 		values = append(values, CapabilityParallelTools)

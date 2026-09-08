@@ -30,6 +30,24 @@ func TestMachineReconstructsJSONContent(t *testing.T) {
 	}
 }
 
+func TestMachineReconstructsNamespacedToolArguments(t *testing.T) {
+	b := newStreamBuilder(t, DefaultMachineOptions())
+	itemID, callID := streamItemID(t, 9), streamCallID(t, 9)
+	start, _ := canonical.NewItemStartedEvent(b.nextEventID(), b.responseID, b.sequence, canonical.ItemStartParams{Index: 0, ID: itemID, Type: canonical.ItemType("tool_call"), CallID: callID, Namespace: "clock", Name: "curr_time"})
+	b.sequence++
+	b.mustAccept(start)
+	delta, _ := canonical.NewToolArgumentsDeltaEvent(b.nextEventID(), b.responseID, b.sequence, itemID, `{}`)
+	b.sequence++
+	b.mustAccept(delta)
+	arguments, _ := canonicaljson.Parse([]byte(`{}`), canonicaljson.DefaultLimits())
+	call, _ := canonical.NewNamespacedToolCall(itemID, callID, "clock", "curr_time", arguments)
+	item, _ := canonical.NewToolCallItem(call)
+	completed, _ := canonical.NewItemCompletedEvent(b.nextEventID(), b.responseID, b.sequence, 0, item)
+	if _, err := b.machine.Accept(completed); err != nil {
+		t.Fatalf("namespaced completion failed: %v", err)
+	}
+}
+
 func TestMachineReconstructsToolArguments(t *testing.T) {
 	b := newStreamBuilder(t, DefaultMachineOptions())
 	itemID := streamItemID(t, 1)

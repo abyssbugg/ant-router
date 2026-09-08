@@ -20,6 +20,7 @@ var (
 type ServerOptions struct {
 	Build             buildinfo.Info
 	Config            ConfigService
+	CodexCatalog      CodexCatalogProvider
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -66,7 +67,7 @@ func NewServer(listener net.Listener, verifier TokenVerifier, status StatusProvi
 	if options.ReadHeaderTimeout <= 0 || options.ReadTimeout <= 0 || options.WriteTimeout <= 0 || options.IdleTimeout <= 0 || options.ShutdownTimeout <= 0 || options.MaxHeaderBytes <= 0 || options.MaxConnections <= 0 {
 		return nil, errors.New("control server options are invalid")
 	}
-	router, err := NewRouter(RouterOptions{Build: options.Build, Status: status, Config: options.Config})
+	router, err := NewRouter(RouterOptions{Build: options.Build, Status: status, Config: options.Config, CodexCatalog: options.CodexCatalog})
 	if err != nil {
 		return nil, err
 	}

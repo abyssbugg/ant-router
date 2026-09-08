@@ -39,11 +39,12 @@ type CredentialRef struct {
 
 // ProviderModelConfig maps a public model alias to a provider model.
 type ProviderModelConfig struct {
-	Alias                  string   `toml:"alias"`
-	Upstream               string   `toml:"upstream"`
-	Capabilities           []string `toml:"capabilities"`
-	DefaultMaxOutputTokens int64    `toml:"default_max_output_tokens,omitempty"`
-	MaxOutputTokens        int64    `toml:"max_output_tokens,omitempty"`
+	Alias                  string            `toml:"alias"`
+	Upstream               string            `toml:"upstream"`
+	Capabilities           []string          `toml:"capabilities"`
+	DefaultMaxOutputTokens int64             `toml:"default_max_output_tokens,omitempty"`
+	MaxOutputTokens        int64             `toml:"max_output_tokens,omitempty"`
+	Codex                  *CodexModelConfig `toml:"codex,omitempty"`
 }
 
 // ProviderConfig defines one provider instance and its public models.
@@ -63,6 +64,8 @@ var (
 var knownProviderCapabilities = map[string]struct{}{
 	"continuation":      {},
 	"image_input":       {},
+	"namespace_tools":   {},
+	"hosted_web_search": {},
 	"parallel_tools":    {},
 	"reasoning_summary": {},
 	"structured_output": {},
@@ -87,6 +90,10 @@ func (c Config) clone() Config {
 		for j := range c.Providers[i].Models {
 			cloned.Providers[i].Models[j] = c.Providers[i].Models[j]
 			cloned.Providers[i].Models[j].Capabilities = append([]string(nil), c.Providers[i].Models[j].Capabilities...)
+			if c.Providers[i].Models[j].Codex != nil {
+				codex := *c.Providers[i].Models[j].Codex
+				cloned.Providers[i].Models[j].Codex = &codex
+			}
 		}
 	}
 	return cloned
@@ -113,6 +120,40 @@ func normalizeProviders(c Config) Config {
 	return c
 }
 
+func fixedMockModelAliases() [8]string {
+	return [8]string{"mock/codex", "mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"}
+}
+
+func isFixedMockModelAlias(alias string) bool {
+	for _, known := range fixedMockModelAliases() {
+		if alias == known {
+			return true
+		}
+	}
+	return false
+}
+
+func validateMockCodexModels(models []ProviderModelConfig, path string) error {
+	seen := make(map[string]bool, len(models))
+	for index, model := range models {
+		prefix := fmt.Sprintf("%s[%d]", path, index)
+		if !isFixedMockModelAlias(model.Alias) || seen[model.Alias] {
+			return providerValidationError(prefix+".alias", "invalid mock model alias")
+		}
+		seen[model.Alias] = true
+		if model.Upstream != "" || len(model.Capabilities) != 0 || model.DefaultMaxOutputTokens != 0 || model.MaxOutputTokens != 0 {
+			return providerValidationError(prefix, "mock model only accepts Codex metadata")
+		}
+		if model.Codex == nil || !model.Codex.Enabled {
+			return providerValidationError(prefix+".codex", "enabled Codex metadata is required")
+		}
+		if err := validateCodexModel(model.Codex, prefix+".codex"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateProviders(c Config) error {
 	if len(c.Providers) > MaxProviders {
 		return providerValidationError("providers", "exceeds provider limit")
@@ -121,7 +162,7 @@ func validateProviders(c Config) error {
 	aliases := make(map[string]struct{})
 	for _, provider := range c.Providers {
 		if provider.Kind == ProviderKindMock {
-			for _, alias := range []string{"mock/disconnect", "mock/json", "mock/reasoning", "mock/slow", "mock/text", "mock/tool", "mock/vision"} {
+			for _, alias := range fixedMockModelAliases() {
 				aliases[alias] = struct{}{}
 			}
 		}
@@ -145,8 +186,8 @@ func validateProviders(c Config) error {
 			if provider.Credential != nil {
 				return providerValidationError(prefix+".credential", "mock provider does not accept credentials")
 			}
-			if len(provider.Models) != 0 {
-				return providerValidationError(prefix+".models", "mock provider uses its fixed model catalog")
+			if err := validateMockCodexModels(provider.Models, prefix+".models"); err != nil {
+				return err
 			}
 		case ProviderKindOpenAI, ProviderKindAnthropic:
 			if provider.Credential == nil {
@@ -178,6 +219,8 @@ func validateProviders(c Config) error {
 				}
 				hasText := false
 				hasTools := false
+				namespaceIndex := -1
+				hostedSearchIndex := -1
 				parallelIndex := -1
 				for k, capability := range model.Capabilities {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, k)
@@ -192,13 +235,30 @@ func validateProviders(c Config) error {
 					}
 					hasText = hasText || capability == "text"
 					hasTools = hasTools || capability == "tools"
+					if capability == "namespace_tools" {
+						namespaceIndex = k
+					}
+					if capability == "hosted_web_search" {
+						hostedSearchIndex = k
+					}
 					if capability == "parallel_tools" {
 						parallelIndex = k
 					}
 				}
+				if hostedSearchIndex >= 0 && !hasTools {
+					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, hostedSearchIndex)
+					return providerValidationError(path, "hosted web search requires tools capability")
+				}
+				if namespaceIndex >= 0 && !hasTools {
+					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, namespaceIndex)
+					return providerValidationError(path, "namespace tools requires tools capability")
+				}
 				if parallelIndex >= 0 && !hasTools {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, parallelIndex)
 					return providerValidationError(path, "parallel tools requires tools capability")
+				}
+				if err := validateCodexModel(model.Codex, modelPrefix+".codex"); err != nil {
+					return err
 				}
 				if provider.Kind == ProviderKindAnthropic {
 					if !hasText {

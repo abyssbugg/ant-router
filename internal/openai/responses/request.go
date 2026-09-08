@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
@@ -54,7 +55,9 @@ type wireRequest struct {
 	Store              json.RawMessage `json:"store"`
 	Include            json.RawMessage `json:"include"`
 	ServiceTier        json.RawMessage `json:"service_tier"`
+	PromptCacheKey     json.RawMessage `json:"prompt_cache_key"`
 	Metadata           json.RawMessage `json:"metadata"`
+	ClientMetadata     json.RawMessage `json:"client_metadata"`
 }
 
 var allowedRequestFields = map[string]struct{}{
@@ -62,6 +65,8 @@ var allowedRequestFields = map[string]struct{}{
 	"parallel_tool_calls": {}, "text": {}, "reasoning": {}, "temperature": {},
 	"top_p": {}, "max_output_tokens": {}, "stream": {}, "previous_response_id": {},
 	"background": {}, "store": {}, "include": {}, "service_tier": {}, "metadata": {},
+	"prompt_cache_key": {},
+	"client_metadata":  {},
 }
 
 // Decode strictly decodes one Responses request without continuation affinity.
@@ -119,12 +124,20 @@ func decode(reader io.Reader, ids IDGenerator, resolver AffinityResolver) (Parse
 		{path: "background", raw: wire.Background},
 		{path: "metadata", raw: wire.Metadata},
 		{path: "previous_response_id", raw: wire.PreviousResponseID},
-		{path: "service_tier", raw: wire.ServiceTier},
 	}
 	for _, field := range unsupported {
 		if len(field.raw) != 0 {
 			return ParsedRequest{}, newError(CodeUnsupportedField, field.path, errors.New("field is unsupported"))
 		}
+	}
+	if err := validateOperationalString(wire.PromptCacheKey, "prompt_cache_key"); err != nil {
+		return ParsedRequest{}, err
+	}
+	if err := validateOperationalString(wire.ServiceTier, "service_tier"); err != nil {
+		return ParsedRequest{}, err
+	}
+	if err := validateClientMetadata(wire.ClientMetadata); err != nil {
+		return ParsedRequest{}, err
 	}
 	if err := decodeStatelessControls(wire.Store, wire.Include); err != nil {
 		return ParsedRequest{}, err
@@ -278,6 +291,60 @@ func decodeStatelessControls(store, include json.RawMessage) error {
 		seen[value] = struct{}{}
 	}
 	return nil
+}
+
+const maxOperationalHintBytes = 1024
+
+func validateOperationalString(raw json.RawMessage, path string) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" || len(value) > maxOperationalHintBytes || containsControl(value) {
+		return newError(CodeInvalidField, path, errors.New("operational hint is invalid"))
+	}
+	return nil
+}
+
+const (
+	maxClientMetadataBytes      = 64 << 10
+	maxClientMetadataEntries    = 32
+	maxClientMetadataKeyBytes   = 256
+	maxClientMetadataValueBytes = 8 << 10
+)
+
+func validateClientMetadata(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	if len(raw) > maxClientMetadataBytes {
+		return newError(CodeLimitExceeded, "client_metadata", errors.New("client metadata exceeds limit"))
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
+		return newError(CodeInvalidField, "client_metadata", errors.New("client metadata is invalid"))
+	}
+	if len(metadata) > maxClientMetadataEntries {
+		return newError(CodeLimitExceeded, "client_metadata", errors.New("client metadata exceeds limit"))
+	}
+	for key, value := range metadata {
+		if key == "" || len(key) > maxClientMetadataKeyBytes || containsControl(key) {
+			return newError(CodeInvalidField, "client_metadata", errors.New("client metadata is invalid"))
+		}
+		if len(value) > maxClientMetadataValueBytes || containsControl(value) {
+			return newError(CodeInvalidField, "client_metadata", errors.New("client metadata is invalid"))
+		}
+	}
+	return nil
+}
+
+func containsControl(value string) bool {
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func nilAffinityResolver(resolver AffinityResolver) bool {

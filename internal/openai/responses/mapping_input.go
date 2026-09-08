@@ -103,7 +103,10 @@ func decodeInput(raw json.RawMessage, ids IDGenerator, tools []canonical.ToolDef
 }
 
 func decodeMessage(fields map[string]json.RawMessage, ids IDGenerator, path string) (canonical.Item, error) {
-	if err := rejectFields(fields, path, "type", "role", "content"); err != nil {
+	if err := rejectFields(fields, path, "type", "id", "status", "role", "content"); err != nil {
+		return canonical.Item{}, err
+	}
+	if err := validateReplayMetadata(fields, path); err != nil {
 		return canonical.Item{}, err
 	}
 	roleValue, err := requiredString(fields, "role", path+".role")

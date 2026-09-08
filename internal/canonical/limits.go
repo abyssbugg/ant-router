@@ -15,10 +15,16 @@ const (
 	MaxJSONDepth = 64
 	// MaxTools limits tool definitions in one request.
 	MaxTools = 128
-	// MaxToolNameBytes limits a portable tool name.
+	// MaxNamespaceTools limits direct functions inside one namespace.
+	MaxNamespaceTools = 128
+	// MaxTotalToolFunctions limits all direct and namespaced functions in one request.
+	MaxTotalToolFunctions = 256
+	// MaxToolNameBytes limits a portable function or namespace name.
 	MaxToolNameBytes = 64
-	// MaxToolDescriptionBytes limits one UTF-8 tool description.
-	MaxToolDescriptionBytes = 4096
+	// MaxToolDescriptionBytes limits one UTF-8 function or namespace description.
+	MaxToolDescriptionBytes = 16 << 10
+	// MaxTotalToolDescriptionBytes limits all tool documentation in one request.
+	MaxTotalToolDescriptionBytes = 4 << 20
 	// MaxModelNameBytes limits a provider-neutral model name.
 	MaxModelNameBytes = 256
 	// MaxProviderNamespaceBytes limits a continuation provider namespace.

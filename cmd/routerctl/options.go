@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"flag"
 	"io"
@@ -9,22 +10,24 @@ import (
 var errUsage = errors.New("usage error")
 
 const (
-	maxCLIArguments      = 16
+	maxCLIArguments      = 128
 	maxCLIArgumentLength = 4096
 )
 
 type cliOptions struct {
-	Instance    string
-	StateRoot   string
-	RuntimeRoot string
-	JSON        bool
+	Instance, StateRoot, RuntimeRoot string
+	CodexHome, CodexBin              string
+	AllowUntestedCodex               bool
+	JSON                             bool
 }
 
 type cliCommand struct {
-	Name      string
-	Action    string
-	Input     string
-	ShowToken bool
+	Name              string
+	Action            string
+	Input             string
+	ShowToken         bool
+	Proof, Generation string
+	Args              []string
 }
 
 func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
@@ -42,6 +45,9 @@ func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
 	flags.StringVar(&options.Instance, "instance", "", "named daemon instance")
 	flags.StringVar(&options.StateRoot, "state-dir", "", "persistent state root")
 	flags.StringVar(&options.RuntimeRoot, "runtime-dir", "", "local runtime root")
+	flags.StringVar(&options.CodexHome, "codex-home", "", "isolated Codex home")
+	flags.StringVar(&options.CodexBin, "codex-bin", "", "Codex executable")
+	flags.BoolVar(&options.AllowUntestedCodex, "allow-untested-codex", false, "allow an untested newer Codex version")
 	flags.BoolVar(&options.JSON, "json", false, "emit JSON output")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -70,6 +76,10 @@ func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
 			}
 			command.ShowToken = true
 		}
+	case "codex":
+		if err := parseCodexCommand(remaining, &command); err != nil {
+			return options, cliCommand{}, err
+		}
 	case "config":
 		if len(remaining) < 2 {
 			return options, cliCommand{}, errUsage
@@ -92,4 +102,66 @@ func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
 		return options, cliCommand{}, errUsage
 	}
 	return options, command, nil
+}
+
+func parseCodexCommand(arguments []string, command *cliCommand) error {
+	if len(arguments) < 2 {
+		return errUsage
+	}
+	action := arguments[1]
+	switch action {
+	case "token", "status", "doctor":
+		if len(arguments) != 2 {
+			return errUsage
+		}
+		command.Action = action
+	case "plan":
+		if len(arguments) < 3 {
+			return errUsage
+		}
+		switch arguments[2] {
+		case "enable", "disable":
+			if len(arguments) != 3 {
+				return errUsage
+			}
+			command.Action = "plan-" + arguments[2]
+		case "restore":
+			if len(arguments) != 5 || arguments[3] != "--generation" || !validCLIProof(arguments[4]) {
+				return errUsage
+			}
+			command.Action, command.Generation = "plan-restore", arguments[4]
+		default:
+			return errUsage
+		}
+	case "enable", "disable":
+		if len(arguments) != 4 || arguments[2] != "--plan" || !validCLIProof(arguments[3]) {
+			return errUsage
+		}
+		command.Action, command.Proof = action, arguments[3]
+	case "restore":
+		if len(arguments) != 6 || arguments[2] != "--generation" || !validCLIProof(arguments[3]) || arguments[4] != "--plan" || !validCLIProof(arguments[5]) {
+			return errUsage
+		}
+		command.Action, command.Generation, command.Proof = action, arguments[3], arguments[5]
+	case "run":
+		values := arguments[2:]
+		if len(values) > 0 && values[0] == "--" {
+			values = values[1:]
+		}
+		if len(values) == 0 {
+			return errUsage
+		}
+		command.Action, command.Args = action, append([]string(nil), values...)
+	default:
+		return errUsage
+	}
+	return nil
+}
+
+func validCLIProof(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }

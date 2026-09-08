@@ -32,7 +32,7 @@ func buildScript(ids IDGenerator, request canonical.Request) ([]canonical.Event,
 		return builder.events, finalErr, nil
 	}
 	switch request.Model() {
-	case "mock/text", "mock/slow":
+	case "mock/codex", "mock/text", "mock/slow":
 		err = builder.addText(mockText)
 	case "mock/json":
 		err = builder.addJSON(`{}`)

@@ -18,15 +18,24 @@ type requestDTO struct {
 }
 
 type toolDTO struct {
-	Name              string          `json:"name"`
-	Description       string          `json:"description"`
-	InputSchema       json.RawMessage `json:"input_schema"`
-	SchemaEnforcement string          `json:"schema_enforcement"`
+	Type               string          `json:"type,omitempty"`
+	Name               string          `json:"name"`
+	Description        string          `json:"description"`
+	InputSchema        json.RawMessage `json:"input_schema,omitempty"`
+	SchemaEnforcement  string          `json:"schema_enforcement,omitempty"`
+	Tools              []toolDTO       `json:"tools,omitempty"`
+	ExternalWebAccess  *bool           `json:"external_web_access,omitempty"`
+	IndexedWebAccess   *bool           `json:"indexed_web_access,omitempty"`
+	Filters            json.RawMessage `json:"filters,omitempty"`
+	UserLocation       json.RawMessage `json:"user_location,omitempty"`
+	SearchContextSize  string          `json:"search_context_size,omitempty"`
+	SearchContentTypes []string        `json:"search_content_types,omitempty"`
 }
 
 type toolChoiceDTO struct {
-	Type string `json:"type"`
-	Name string `json:"name,omitempty"`
+	Type      string `json:"type"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
 }
 
 type outputDTO struct {
@@ -61,6 +70,7 @@ type toolCallDTO struct {
 	Type      string          `json:"type"`
 	ID        string          `json:"id"`
 	CallID    string          `json:"call_id"`
+	Namespace string          `json:"namespace,omitempty"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
 }

@@ -85,14 +85,17 @@ func New(options Options) (*Daemon, error) {
 		credentialSource = credential.NewEnvSource(nil)
 	}
 	configuration := config.Default()
+	var configGeneration uint64
 	if snapshot, ok := manager.Current(); ok {
 		configuration = snapshot.Config()
+		configGeneration = snapshot.Generation()
 	}
 	providers, err := buildProviderRuntime(configuration, credentialSource)
 	if err != nil {
 		_ = listener.Close()
 		return nil, err
 	}
+	providers.configGeneration = configGeneration
 	dataPlaneListen := options.DataPlaneListen
 	if dataPlaneListen == nil {
 		dataPlaneListen = dataplane.ListenLoopback
@@ -124,6 +127,7 @@ func New(options Options) (*Daemon, error) {
 	serverOptions := control.DefaultServerOptions()
 	serverOptions.Build = options.Build
 	serverOptions.Config = service
+	serverOptions.CodexCatalog = daemon
 	serverOptions.ShutdownTimeout = shutdownTimeout
 	server, err := control.NewServer(listener, token, daemon, serverOptions)
 	if err != nil {
@@ -193,6 +197,10 @@ func (d *Daemon) shutdownDataPlane(ctx context.Context) error {
 		return nil
 	}
 	return d.dataPlane.server.Shutdown(ctx)
+}
+
+func (d *Daemon) CodexCatalog(ctx context.Context) (control.CodexCatalog, error) {
+	return d.providers.codexCatalog(ctx)
 }
 
 func (d *Daemon) Status(ctx context.Context) (control.RuntimeStatus, error) {

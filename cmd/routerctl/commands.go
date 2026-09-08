@@ -7,12 +7,14 @@ import (
 	"io"
 
 	"github.com/abyssbugg/ant-router/internal/buildinfo"
+	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
 type controlClient interface {
 	Status(context.Context) (control.StatusResponse, error)
+	CodexCatalog(context.Context) (control.CodexCatalogResponse, error)
 	CurrentConfig(context.Context) (control.ConfigCurrentResponse, error)
 	ValidateConfig(context.Context, []byte) (control.ConfigValidateResponse, error)
 	ApplyConfig(context.Context, []byte, control.ConfigValidateResponse) (control.ConfigMutationResponse, error)
@@ -48,6 +50,8 @@ func execute(ctx context.Context, options cliOptions, command cliCommand, stdin 
 				}
 			}
 		}
+	case "codex":
+		return executeCodex(ctx, options, command, stdin, stdout, stderr, client)
 	case "config":
 		switch command.Action {
 		case "current":
@@ -137,10 +141,19 @@ func describeCLIError(err error) cliErrorDetail {
 		code, message = "authentication", "authentication failed"
 	case ExitValidation:
 		code, message = "validation", "configuration is invalid"
+		if errors.Is(err, codexintegration.ErrInvalid) {
+			message = "Codex integration request is invalid"
+		}
 	case ExitConflict:
 		code, message = "conflict", "configuration changed; validate again"
+		if errors.Is(err, codexintegration.ErrConflict) {
+			message = "Codex integration changed; plan again"
+		}
 	case ExitUnavailable:
 		code, message = "unavailable", "configuration unavailable"
+		if errors.Is(err, codexintegration.ErrUnavailable) {
+			message = "Codex integration is unavailable"
+		}
 		if errors.Is(err, errDataPlaneUnavailable) {
 			message = "data plane is unavailable"
 		}

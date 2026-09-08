@@ -60,7 +60,7 @@ func reconstructItem(state *itemState, final canonical.Item) (canonical.Item, in
 		return item, 0, nil
 	case canonical.ItemType("tool_call"):
 		finalCall, ok := final.ToolCall()
-		if !ok || finalCall.CallID() != state.callID || finalCall.Name() != state.name || len(state.contents) != 0 {
+		if !ok || finalCall.CallID() != state.callID || finalCall.Namespace() != state.namespace || finalCall.Name() != state.name || len(state.contents) != 0 {
 			return canonical.Item{}, 0, eventStateError(CodeCompletionMismatch, "event.item_completed")
 		}
 		arguments := finalCall.Arguments()
@@ -74,7 +74,13 @@ func reconstructItem(state *itemState, final canonical.Item) (canonical.Item, in
 		} else {
 			atomicBytes = len(arguments.Bytes())
 		}
-		call, err := canonical.NewToolCall(state.id, state.callID, state.name, arguments)
+		var call canonical.ToolCall
+		var err error
+		if state.namespace == "" {
+			call, err = canonical.NewToolCall(state.id, state.callID, state.name, arguments)
+		} else {
+			call, err = canonical.NewNamespacedToolCall(state.id, state.callID, state.namespace, state.name, arguments)
+		}
 		if err != nil {
 			return canonical.Item{}, 0, err
 		}
