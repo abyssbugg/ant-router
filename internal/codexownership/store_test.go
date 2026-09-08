@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -140,8 +141,8 @@ func TestStoreRetainsTenNewestGenerations(t *testing.T) {
 func TestNewStoreRejectsSymlinkedRoot(t *testing.T) {
 	realRoot := t.TempDir()
 	link := filepath.Join(t.TempDir(), "state-link")
-	if err := os.Symlink(realRoot, link); err != nil {
-		t.Fatal(err)
+	if !makeStoreSymlink(t, realRoot, link) {
+		t.Skip("symlink creation is unavailable")
 	}
 	if _, err := NewStore(link); err == nil {
 		t.Fatal("symlinked root accepted")
@@ -165,12 +166,23 @@ func TestGenerationRejectsSymlinkedManagedFile(t *testing.T) {
 	if err := os.WriteFile(secretPath, []byte("secret-material"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(secretPath, profilePath); err != nil {
-		t.Fatal(err)
+	if !makeStoreSymlink(t, secretPath, profilePath) {
+		t.Skip("symlink creation is unavailable")
 	}
 	if _, err := store.Generation(context.Background(), generation.ID); err == nil || strings.Contains(err.Error(), "secret-material") {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func makeStoreSymlink(t *testing.T, target, link string) bool {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			return false
+		}
+		t.Fatal(err)
+	}
+	return true
 }
 
 func TestStorePrunesCorruptStaleGeneration(t *testing.T) {
