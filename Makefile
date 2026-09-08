@@ -116,7 +116,7 @@ canonical-fuzz:
 	$(GO) test ./internal/canonicaljson -run=^$$ -fuzz=FuzzParseRoundTrip -fuzztime=$(FUZZ_TIME)
 	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzParseRequestID -fuzztime=$(FUZZ_TIME)
 	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzRemoteImageURL -fuzztime=$(FUZZ_TIME)
-	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzToolName -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/canonical -run=^$$ -fuzz=^FuzzToolName$$ -fuzztime=$(FUZZ_TIME)
 	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzTextDelta -fuzztime=$(FUZZ_TIME)
 	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzContinuation -fuzztime=$(FUZZ_TIME)
 	$(GO) test ./internal/canonical -run=^$$ -fuzz=FuzzDecodeRequest -fuzztime=$(FUZZ_TIME)

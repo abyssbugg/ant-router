@@ -100,11 +100,12 @@ func TestRunnerVersion(t *testing.T) {
 
 func TestRunnerUsesDirectProfileArgumentsAndIsolatedHome(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	result, err := helperRunner(t).Run(context.Background(), RunOptions{CodexHome: "/private/codex", Profile: "ant-router", Args: []string{"exec", "hello;whoami"}, Stdout: &stdout, Stderr: &stderr})
+	codexHome := t.TempDir()
+	result, err := helperRunner(t).Run(context.Background(), RunOptions{CodexHome: codexHome, Profile: "ant-router", Args: []string{"exec", "hello;whoami"}, Stdout: &stdout, Stderr: &stderr})
 	if err != nil || result.ExitCode != 0 {
 		t.Fatalf("run = %#v, %v", result, err)
 	}
-	want := "HOME=/private/codex ARGS=--profile|ant-router|exec|hello;whoami"
+	want := "HOME=" + codexHome + " ARGS=--profile|ant-router|exec|hello;whoami"
 	if stdout.String() != want || stderr.Len() != 0 {
 		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
@@ -113,14 +114,15 @@ func TestRunnerUsesDirectProfileArgumentsAndIsolatedHome(t *testing.T) {
 func TestRunnerCancellationStopsCodex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err := helperRunner(t).Run(ctx, RunOptions{CodexHome: "/private/codex", Profile: "ant-router", Args: []string{"sleep"}})
+	_, err := helperRunner(t).Run(ctx, RunOptions{CodexHome: t.TempDir(), Profile: "ant-router", Args: []string{"sleep"}})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestRunnerRejectsInvalidRunOptions(t *testing.T) {
-	for _, options := range []RunOptions{{CodexHome: "relative", Profile: "ant-router"}, {CodexHome: "/private/codex", Profile: "../bad"}, {CodexHome: "/private/codex", Profile: ""}} {
+	validHome := t.TempDir()
+	for _, options := range []RunOptions{{CodexHome: "relative", Profile: "ant-router"}, {CodexHome: validHome, Profile: "../bad"}, {CodexHome: validHome, Profile: ""}} {
 		if _, err := helperRunner(t).Run(context.Background(), options); err == nil {
 			t.Fatalf("accepted %#v", options)
 		}
@@ -129,14 +131,14 @@ func TestRunnerRejectsInvalidRunOptions(t *testing.T) {
 
 func TestRunnerPreservesStdin(t *testing.T) {
 	var stdout bytes.Buffer
-	result, err := helperRunner(t).Run(context.Background(), RunOptions{CodexHome: "/private/codex", Profile: "ant-router", Args: []string{"stdin"}, Stdin: strings.NewReader("hello"), Stdout: &stdout})
+	result, err := helperRunner(t).Run(context.Background(), RunOptions{CodexHome: t.TempDir(), Profile: "ant-router", Args: []string{"stdin"}, Stdin: strings.NewReader("hello"), Stdout: &stdout})
 	if err != nil || result.ExitCode != 0 || stdout.String() != "STDIN=hello" {
 		t.Fatalf("run=%#v output=%q error=%v", result, stdout.String(), err)
 	}
 }
 
 func TestRunnerReturnsCodexExitCode(t *testing.T) {
-	result, err := helperRunner(t).Run(context.Background(), RunOptions{CodexHome: "/private/codex", Profile: "ant-router", Args: []string{"exit7"}})
+	result, err := helperRunner(t).Run(context.Background(), RunOptions{CodexHome: t.TempDir(), Profile: "ant-router", Args: []string{"exit7"}})
 	if err != nil || result.ExitCode != 7 {
 		t.Fatalf("run = %#v, %v", result, err)
 	}

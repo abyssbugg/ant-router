@@ -258,6 +258,11 @@ func TestManagerRecoverRejectsCorruptPendingWithoutMutation(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"schema_version":1,"schema_version":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := manager.clearPending(); err != nil {
+			t.Errorf("clear pending journal: %v", err)
+		}
+	})
 	if err := manager.Recover(context.Background()); err == nil {
 		t.Fatal("corrupt pending accepted")
 	}

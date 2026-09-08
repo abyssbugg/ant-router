@@ -11,6 +11,7 @@ func TestGenerateMatchesGoldenCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
 	got, err := Generate([]Projection{projection("openai/gpt-test", 10, "text", "image_input", "reasoning_summary")})
 	if err != nil {
 		t.Fatal(err)

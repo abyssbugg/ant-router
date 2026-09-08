@@ -2,6 +2,8 @@ package codexprofile
 
 import (
 	"bytes"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -9,16 +11,24 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+func testAbsolutePath(value string) string {
+	if runtime.GOOS != "windows" {
+		return value
+	}
+	return filepath.Join(`C:\`, filepath.FromSlash(strings.TrimPrefix(value, "/")))
+}
+
 func validOptions() Options {
-	return Options{BaseURL: "http://127.0.0.1:8787/v1", CatalogPath: "/private/state/models.json", RouterctlPath: "/usr/local/bin/routerctl", Instance: "default", StateRoot: "/private/state", RuntimeRoot: "/private/run"}
+	return Options{BaseURL: "http://127.0.0.1:8787/v1", CatalogPath: testAbsolutePath("/private/state/models.json"), RouterctlPath: testAbsolutePath("/usr/local/bin/routerctl"), Instance: "default", StateRoot: testAbsolutePath("/private/state"), RuntimeRoot: testAbsolutePath("/private/run")}
 }
 
 func TestRenderProducesDeterministicOfficialProfile(t *testing.T) {
-	first, err := Render(validOptions())
+	options := validOptions()
+	first, err := Render(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Render(validOptions())
+	second, err := Render(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,11 +39,11 @@ func TestRenderProducesDeterministicOfficialProfile(t *testing.T) {
 	if err := toml.Unmarshal(first, &decoded); err != nil {
 		t.Fatalf("invalid TOML: %v", err)
 	}
-	if decoded["model_provider"] != "ant-router" || decoded["model_catalog_json"] != "/private/state/models.json" {
+	if decoded["model_provider"] != "ant-router" || decoded["model_catalog_json"] != options.CatalogPath {
 		t.Fatalf("profile = %#v", decoded)
 	}
 	text := string(first)
-	for _, required := range []string{"[model_providers.ant-router]", "wire_api = 'responses'", "request_max_retries = 0", "stream_max_retries = 0", "[model_providers.ant-router.auth]", "command = '/usr/local/bin/routerctl'", "'codex', 'token'"} {
+	for _, required := range []string{"[model_providers.ant-router]", "wire_api = 'responses'", "request_max_retries = 0", "stream_max_retries = 0", "[model_providers.ant-router.auth]", "'codex', 'token'"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("missing %q in %s", required, text)
 		}
@@ -42,6 +52,9 @@ func TestRenderProducesDeterministicOfficialProfile(t *testing.T) {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("profile contains %q", forbidden)
 		}
+	}
+	if !strings.Contains(text, options.RouterctlPath) {
+		t.Fatalf("profile does not contain command path")
 	}
 }
 
@@ -56,7 +69,8 @@ func TestRenderRejectsInvalidPorts(t *testing.T) {
 }
 
 func TestRenderIncludesExactCommandAuth(t *testing.T) {
-	encoded, err := Render(validOptions())
+	options := validOptions()
+	encoded, err := Render(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +88,8 @@ func TestRenderIncludesExactCommandAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	auth := decoded.ModelProviders[ProviderID].Auth
-	want := []string{"--instance", "default", "--state-dir", "/private/state", "--runtime-dir", "/private/run", "codex", "token"}
-	if auth.Command != "/usr/local/bin/routerctl" || !slices.Equal(auth.Args, want) || auth.TimeoutMS != 5000 || auth.RefreshIntervalMS != 300000 {
+	want := []string{"--instance", "default", "--state-dir", options.StateRoot, "--runtime-dir", options.RuntimeRoot, "codex", "token"}
+	if auth.Command != options.RouterctlPath || !slices.Equal(auth.Args, want) || auth.TimeoutMS != 5000 || auth.RefreshIntervalMS != 300000 {
 		t.Fatalf("auth = %#v", auth)
 	}
 }

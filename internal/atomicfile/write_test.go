@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func TestWriteCreatesAndReplacesFile(t *testing.T) {
 	if err != nil || string(got) != "second" {
 		t.Fatalf("content = %q, %v", got, err)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("mode = %v, %v", info, err)
 	}
 }
