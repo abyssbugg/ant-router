@@ -21,8 +21,10 @@ const (
 	MaxTotalToolFunctions = 256
 	// MaxToolNameBytes limits a portable function or namespace name.
 	MaxToolNameBytes = 64
-	// MaxToolDescriptionBytes limits one UTF-8 tool description.
-	MaxToolDescriptionBytes = 4096
+	// MaxToolDescriptionBytes limits one UTF-8 function or namespace description.
+	MaxToolDescriptionBytes = 16 << 10
+	// MaxTotalToolDescriptionBytes limits all tool documentation in one request.
+	MaxTotalToolDescriptionBytes = 4 << 20
 	// MaxModelNameBytes limits a provider-neutral model name.
 	MaxModelNameBytes = 256
 	// MaxProviderNamespaceBytes limits a continuation provider namespace.

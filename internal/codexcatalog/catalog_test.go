@@ -114,6 +114,13 @@ func TestGenerateRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestGenerateAcceptsNamespaceToolsCapability(t *testing.T) {
+	value := projection("mock/codex", 1, "namespace_tools", "text", "tools")
+	if _, err := Generate([]Projection{value}); err != nil {
+		t.Fatalf("namespace capability rejected: %v", err)
+	}
+}
+
 func TestGenerateRejectsUnknownCapabilities(t *testing.T) {
 	input := projection("openai/gpt-test", 1, "text", "future_secret")
 	_, err := Generate([]Projection{input})

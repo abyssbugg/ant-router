@@ -57,6 +57,21 @@ capabilities = ["text", "tools"]
 	}
 }
 
+func TestHostedWebSearchCapabilityRequiresTools(t *testing.T) {
+	cfg := Default()
+	cfg.DataPlane.Enabled = true
+	provider := validOpenAIProvider("openai-primary", "openai/gpt-test")
+	provider.Models[0].Capabilities = []string{"hosted_web_search", "text", "tools"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("hosted search capability rejected: %v", err)
+	}
+	cfg.Providers[0].Models[0].Capabilities = []string{"hosted_web_search", "text"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("hosted search without tools accepted")
+	}
+}
+
 func TestNamespaceToolsCapabilityRequiresTools(t *testing.T) {
 	cfg := Default()
 	cfg.DataPlane.Enabled = true

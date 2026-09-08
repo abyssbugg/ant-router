@@ -2,6 +2,7 @@ package canonical
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
@@ -18,6 +19,76 @@ func testNamespaceFunction(t *testing.T, name string) ToolDefinition {
 		t.Fatal(err)
 	}
 	return tool
+}
+
+func TestHostedWebSearchOptionsRoundTripAndImmutability(t *testing.T) {
+	external, indexed := true, false
+	filters, _ := canonicaljson.Parse([]byte(`{"allowed_domains":["example.com"]}`), canonicaljson.DefaultLimits())
+	location, _ := canonicaljson.Parse([]byte(`{"country":"US"}`), canonicaljson.DefaultLimits())
+	contentTypes := []string{"text", "news"}
+	options, err := NewHostedWebSearchOptions(HostedWebSearchOptionsParams{ExternalWebAccess: &external, IndexedWebAccess: &indexed, Filters: filters, UserLocation: location, SearchContextSize: HostedSearchContextMedium, SearchContentTypes: contentTypes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentTypes[0] = "changed"
+	tool, err := NewHostedWebSearchToolWithOptions(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tool.WebSearchOptions().SearchContentTypes(); len(got) != 2 || got[0] != "text" {
+		t.Fatal("hosted options were not immutable")
+	}
+	message, _ := NewMessage(testItemID(t, 19), Role("user"), []ContentBlock{testTextBlock(t, "hello")})
+	item, _ := NewMessageItem(message)
+	request, err := NewRequest(RequestParams{ID: testRequestID(t, 19), Model: "model", Input: []Item{item}, Tools: []ToolDefinition{tool}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeRequest(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decoded.Tools()[0].WebSearchOptions()
+	if external, set := got.ExternalWebAccess(); !set || !external {
+		t.Fatal("external access lost")
+	}
+	if indexed, set := got.IndexedWebAccess(); !set || indexed {
+		t.Fatal("indexed access lost")
+	}
+	if got.SearchContextSize() != HostedSearchContextMedium || len(got.SearchContentTypes()) != 2 || string(got.Filters().Bytes()) != `{"allowed_domains":["example.com"]}` || string(got.UserLocation().Bytes()) != `{"country":"US"}` {
+		t.Fatalf("hosted options lost: %s", encoded)
+	}
+}
+
+func TestHostedWebSearchDeclarationRoundTrip(t *testing.T) {
+	tool := NewHostedWebSearchTool()
+	if !tool.Valid() || tool.Kind() != ToolDefinitionKindWebSearch {
+		t.Fatal("hosted web search invalid")
+	}
+	message, _ := NewMessage(testItemID(t, 20), Role("user"), []ContentBlock{testTextBlock(t, "hello")})
+	item, _ := NewMessageItem(message)
+	request, err := NewRequest(RequestParams{ID: testRequestID(t, 20), Model: "model", Input: []Item{item}, Tools: []ToolDefinition{tool}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !request.Capabilities().Has(CapabilityHostedWebSearch) {
+		t.Fatal("hosted web search capability missing")
+	}
+	encoded, err := EncodeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeRequest(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Tools()) != 1 || decoded.Tools()[0].Kind() != ToolDefinitionKindWebSearch {
+		t.Fatalf("web search round trip failed: %s", encoded)
+	}
 }
 
 func TestToolNamespaceIsImmutableAndFunctionOnly(t *testing.T) {
@@ -108,6 +179,17 @@ func TestNamespacedToolItemStartEventRoundTrip(t *testing.T) {
 	}
 }
 
+func TestToolNamespaceAcceptsCurrentCodexDescriptionSize(t *testing.T) {
+	schema, _ := canonicaljson.Parse([]byte(`{"type":"object"}`), canonicaljson.DefaultLimits())
+	child, err := NewToolDefinition("child", strings.Repeat("d", 4337), schema)
+	if err != nil {
+		t.Fatalf("current Codex description rejected: %v", err)
+	}
+	if _, err := NewToolNamespace("namespace", "", []ToolDefinition{child}); err != nil {
+		t.Fatalf("namespace rejected: %v", err)
+	}
+}
+
 func TestToolNamespaceRejectsMalformedDefinitions(t *testing.T) {
 	child := testNamespaceFunction(t, "child")
 	for _, tc := range []struct {
@@ -129,6 +211,31 @@ func TestToolNamespaceRejectsMalformedDefinitions(t *testing.T) {
 func TestNamespaceFieldsRejectedOnNonToolEvents(t *testing.T) {
 	if _, err := NewItemStartedEvent(testEventID(t, 25), testResponseID(t, 25), 0, ItemStartParams{Index: 0, ID: testItemID(t, 25), Type: ItemType("message"), Role: Role("assistant"), Namespace: "clock"}); err == nil {
 		t.Fatal("message namespace accepted")
+	}
+}
+
+func TestRequestRejectsAggregateToolDescriptionLimit(t *testing.T) {
+	schema, _ := canonicaljson.Parse([]byte(`{"type":"object"}`), canonicaljson.DefaultLimits())
+	tools := make([]ToolDefinition, 0, 2)
+	for namespaceIndex := 0; namespaceIndex < 2; namespaceIndex++ {
+		children := make([]ToolDefinition, 0, MaxNamespaceTools)
+		for childIndex := 0; childIndex < MaxNamespaceTools; childIndex++ {
+			child, err := NewToolDefinition(fmt.Sprintf("tool%d_%d", namespaceIndex, childIndex), strings.Repeat("d", MaxToolDescriptionBytes), schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			children = append(children, child)
+		}
+		namespace, err := NewToolNamespace(fmt.Sprintf("ns%d", namespaceIndex), "x", children)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tools = append(tools, namespace)
+	}
+	message, _ := NewMessage(testItemID(t, 27), Role("user"), []ContentBlock{testTextBlock(t, "hello")})
+	item, _ := NewMessageItem(message)
+	if _, err := NewRequest(RequestParams{ID: testRequestID(t, 27), Model: "model", Input: []Item{item}, Tools: tools}); err == nil {
+		t.Fatal("aggregate description limit accepted")
 	}
 }
 

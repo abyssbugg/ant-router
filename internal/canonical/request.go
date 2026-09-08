@@ -114,7 +114,12 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 	toolNames := make(map[string]struct{}, len(tools))
 	topLevelNames := make(map[string]struct{}, len(tools))
 	totalFunctions := 0
+	totalDescriptionBytes := 0
 	for _, tool := range tools {
+		totalDescriptionBytes += len(tool.Description())
+		if totalDescriptionBytes > MaxTotalToolDescriptionBytes {
+			return requestError(CodeLimitExceeded, "request.tools")
+		}
 		if !tool.Valid() {
 			return requestError(CodeInvalidInvariant, "request.tools")
 		}
@@ -124,10 +129,14 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 		topLevelNames[tool.Name()] = struct{}{}
 		if tool.Kind() == ToolDefinitionKindNamespace {
 			for _, child := range tool.Tools() {
+				totalDescriptionBytes += len(child.Description())
+				if totalDescriptionBytes > MaxTotalToolDescriptionBytes {
+					return requestError(CodeLimitExceeded, "request.tools")
+				}
 				totalFunctions++
 				toolNames[toolIdentity(tool.Name(), child.Name())] = struct{}{}
 			}
-		} else {
+		} else if tool.Kind() == ToolDefinitionKindFunction {
 			totalFunctions++
 			toolNames[toolIdentity("", tool.Name())] = struct{}{}
 		}
@@ -209,7 +218,9 @@ func computeCapabilities(input []Item, tools []ToolDefinition, output OutputCons
 		for _, tool := range tools {
 			if tool.Kind() == ToolDefinitionKindNamespace {
 				values = append(values, CapabilityNamespaceTools)
-				break
+			}
+			if tool.Kind() == ToolDefinitionKindWebSearch {
+				values = append(values, CapabilityHostedWebSearch)
 			}
 		}
 	}

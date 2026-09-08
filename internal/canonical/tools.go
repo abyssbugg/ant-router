@@ -13,11 +13,12 @@ type ToolDefinitionKind string
 const (
 	ToolDefinitionKindFunction  ToolDefinitionKind = "function"
 	ToolDefinitionKindNamespace ToolDefinitionKind = "namespace"
+	ToolDefinitionKindWebSearch ToolDefinitionKind = "web_search"
 )
 
 // Valid reports whether the definition kind is supported.
 func (k ToolDefinitionKind) Valid() bool {
-	return k == ToolDefinitionKindFunction || k == ToolDefinitionKindNamespace
+	return k == ToolDefinitionKindFunction || k == ToolDefinitionKindNamespace || k == ToolDefinitionKindWebSearch
 }
 
 // ToolDefinition describes a portable direct function or function-only namespace.
@@ -28,6 +29,7 @@ type ToolDefinition struct {
 	inputSchema canonicaljson.Value
 	enforcement SchemaEnforcement
 	tools       []ToolDefinition
+	webSearch   HostedWebSearchOptions
 }
 
 // NewToolDefinition validates a tool name, description, and object schema using best-effort enforcement.
@@ -63,6 +65,20 @@ func NewToolDefinitionWithEnforcement(name, description string, schema canonical
 		return ToolDefinition{}, itemError(CodeInvalidInvariant, "tool.schema_enforcement")
 	}
 	return ToolDefinition{kind: ToolDefinitionKindFunction, name: name, description: description, inputSchema: schema, enforcement: enforcement}, nil
+}
+
+// NewHostedWebSearchTool constructs the provider-hosted web-search declaration.
+func NewHostedWebSearchTool() ToolDefinition {
+	options, _ := NewHostedWebSearchOptions(HostedWebSearchOptionsParams{})
+	return ToolDefinition{kind: ToolDefinitionKindWebSearch, name: "web_search", webSearch: options}
+}
+
+// NewHostedWebSearchToolWithOptions constructs a validated provider-hosted web-search declaration.
+func NewHostedWebSearchToolWithOptions(options HostedWebSearchOptions) (ToolDefinition, error) {
+	if !options.Valid() {
+		return ToolDefinition{}, itemError(CodeInvalidInvariant, "tool.web_search")
+	}
+	return ToolDefinition{kind: ToolDefinitionKindWebSearch, name: "web_search", webSearch: options}, nil
 }
 
 // NewToolNamespace validates and defensively copies an ordered function-only namespace.
@@ -119,6 +135,9 @@ func (t ToolDefinition) InputSchema() canonicaljson.Value { return t.inputSchema
 // Enforcement returns the function schema enforcement mode.
 func (t ToolDefinition) Enforcement() SchemaEnforcement { return t.enforcement }
 
+// WebSearchOptions returns immutable hosted-search options.
+func (t ToolDefinition) WebSearchOptions() HostedWebSearchOptions { return t.webSearch }
+
 // Tools returns a defensive ordered copy of namespace children.
 func (t ToolDefinition) Tools() []ToolDefinition { return append([]ToolDefinition(nil), t.tools...) }
 
@@ -130,6 +149,8 @@ func (t ToolDefinition) Valid() bool {
 	switch t.Kind() {
 	case ToolDefinitionKindFunction:
 		return len(t.tools) == 0 && t.inputSchema.IsObject() && len(t.inputSchema.Bytes()) <= MaxToolSchemaBytes && t.enforcement.Valid()
+	case ToolDefinitionKindWebSearch:
+		return t.name == "web_search" && t.description == "" && len(t.tools) == 0 && t.inputSchema.Kind() == canonicaljson.KindInvalid && t.enforcement == "" && t.webSearch.Valid()
 	case ToolDefinitionKindNamespace:
 		if len(t.tools) == 0 || len(t.tools) > MaxNamespaceTools || t.inputSchema.Kind() != canonicaljson.KindInvalid || t.enforcement != "" {
 			return false

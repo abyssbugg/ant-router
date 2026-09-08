@@ -65,6 +65,7 @@ var knownProviderCapabilities = map[string]struct{}{
 	"continuation":      {},
 	"image_input":       {},
 	"namespace_tools":   {},
+	"hosted_web_search": {},
 	"parallel_tools":    {},
 	"reasoning_summary": {},
 	"structured_output": {},
@@ -219,6 +220,7 @@ func validateProviders(c Config) error {
 				hasText := false
 				hasTools := false
 				namespaceIndex := -1
+				hostedSearchIndex := -1
 				parallelIndex := -1
 				for k, capability := range model.Capabilities {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, k)
@@ -236,9 +238,16 @@ func validateProviders(c Config) error {
 					if capability == "namespace_tools" {
 						namespaceIndex = k
 					}
+					if capability == "hosted_web_search" {
+						hostedSearchIndex = k
+					}
 					if capability == "parallel_tools" {
 						parallelIndex = k
 					}
+				}
+				if hostedSearchIndex >= 0 && !hasTools {
+					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, hostedSearchIndex)
+					return providerValidationError(path, "hosted web search requires tools capability")
 				}
 				if namespaceIndex >= 0 && !hasTools {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, namespaceIndex)

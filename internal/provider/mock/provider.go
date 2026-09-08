@@ -123,7 +123,7 @@ func modelCatalog() ([]execution.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	codex, err := canonical.NewCapabilitySet(canonical.CapabilityText, canonical.CapabilityTools, canonical.CapabilityNamespaceTools, canonical.CapabilityParallelTools)
+	codex, err := canonical.NewCapabilitySet(canonical.CapabilityText, canonical.CapabilityTools, canonical.CapabilityNamespaceTools, canonical.CapabilityHostedWebSearch, canonical.CapabilityParallelTools)
 	if err != nil {
 		return nil, err
 	}

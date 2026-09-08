@@ -42,6 +42,8 @@ func decodeTools(raw json.RawMessage) ([]canonical.ToolDefinition, error) {
 			tool, err = decodeFunction(value, path)
 		case "namespace":
 			tool, err = decodeNamespace(value, path)
+		case "web_search":
+			tool, err = decodeHostedWebSearch(value, path)
 		default:
 			return nil, newError(CodeUnsupportedField, path+".type", errors.New("tool type is unsupported"))
 		}
@@ -160,6 +162,57 @@ func decodeNamespace(raw json.RawMessage, path string) (canonical.ToolDefinition
 		return canonical.ToolDefinition{}, newError(CodeInvalidField, path, errors.New("namespace is invalid"))
 	}
 	return namespace, nil
+}
+
+func decodeHostedWebSearch(raw json.RawMessage, path string) (canonical.ToolDefinition, error) {
+	fields, err := strictObject(raw, path, "type", "external_web_access", "indexed_web_access", "filters", "user_location", "search_context_size", "search_content_types")
+	if err != nil {
+		return canonical.ToolDefinition{}, err
+	}
+	var params canonical.HostedWebSearchOptionsParams
+	if value, ok := fields["external_web_access"]; ok {
+		var parsed bool
+		if json.Unmarshal(value, &parsed) != nil {
+			return canonical.ToolDefinition{}, newError(CodeInvalidField, path+".external_web_access", errors.New("field is invalid"))
+		}
+		params.ExternalWebAccess = &parsed
+	}
+	if value, ok := fields["indexed_web_access"]; ok {
+		var parsed bool
+		if json.Unmarshal(value, &parsed) != nil {
+			return canonical.ToolDefinition{}, newError(CodeInvalidField, path+".indexed_web_access", errors.New("field is invalid"))
+		}
+		params.IndexedWebAccess = &parsed
+	}
+	if value, ok := fields["filters"]; ok {
+		params.Filters, err = canonicaljson.Parse(value, canonicaljson.Limits{MaximumBytes: canonical.MaxHostedSearchOptionsBytes, MaximumDepth: canonical.MaxJSONDepth})
+		if err != nil || !params.Filters.IsObject() {
+			return canonical.ToolDefinition{}, newError(CodeInvalidField, path+".filters", errors.New("field is invalid"))
+		}
+	}
+	if value, ok := fields["user_location"]; ok {
+		params.UserLocation, err = canonicaljson.Parse(value, canonicaljson.Limits{MaximumBytes: canonical.MaxHostedSearchOptionsBytes, MaximumDepth: canonical.MaxJSONDepth})
+		if err != nil || !params.UserLocation.IsObject() {
+			return canonical.ToolDefinition{}, newError(CodeInvalidField, path+".user_location", errors.New("field is invalid"))
+		}
+	}
+	if value, ok := fields["search_context_size"]; ok {
+		var parsed string
+		if json.Unmarshal(value, &parsed) != nil {
+			return canonical.ToolDefinition{}, newError(CodeInvalidField, path+".search_context_size", errors.New("field is invalid"))
+		}
+		params.SearchContextSize = canonical.HostedSearchContextSize(parsed)
+	}
+	if value, ok := fields["search_content_types"]; ok {
+		if json.Unmarshal(value, &params.SearchContentTypes) != nil {
+			return canonical.ToolDefinition{}, newError(CodeInvalidField, path+".search_content_types", errors.New("field is invalid"))
+		}
+	}
+	options, err := canonical.NewHostedWebSearchOptions(params)
+	if err != nil {
+		return canonical.ToolDefinition{}, newError(CodeInvalidField, path, errors.New("web search options are invalid"))
+	}
+	return canonical.NewHostedWebSearchToolWithOptions(options)
 }
 
 func decodeToolChoice(raw json.RawMessage, tools []canonical.ToolDefinition) (canonical.ToolChoice, error) {
@@ -286,12 +339,16 @@ func decodeReasoning(raw json.RawMessage) (canonical.ReasoningSummaryMode, error
 	if err != nil {
 		return "", err
 	}
+	rawSummary, ok := fields["summary"]
+	if !ok || string(rawSummary) == "null" {
+		return canonical.ReasoningSummaryNone, nil
+	}
 	summary, err := requiredString(fields, "summary", "reasoning.summary")
 	if err != nil {
 		return "", err
 	}
 	mode := canonical.ReasoningSummaryMode(summary)
-	if mode != canonical.ReasoningSummaryAuto && mode != canonical.ReasoningSummaryConcise && mode != canonical.ReasoningSummaryDetailed {
+	if mode != canonical.ReasoningSummaryNone && mode != canonical.ReasoningSummaryAuto && mode != canonical.ReasoningSummaryConcise && mode != canonical.ReasoningSummaryDetailed {
 		return "", newError(CodeInvalidField, "reasoning.summary", errors.New("reasoning summary is invalid"))
 	}
 	return mode, nil
