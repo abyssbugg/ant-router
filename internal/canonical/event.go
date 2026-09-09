@@ -17,6 +17,8 @@ type Event struct {
 	argumentsDelta       ToolArgumentsDeltaPayload
 	customInputDelta     CustomInputDeltaPayload
 	customInputCompleted CustomInputCompletedPayload
+	hostedSearchStatus   HostedSearchStatusPayload
+	urlCitationAdded     URLCitationAddedPayload
 	contentCompleted     ContentCompletedPayload
 	itemCompleted        ItemCompletedPayload
 	usageUpdated         UsageUpdatedPayload
@@ -52,6 +54,10 @@ func (e Event) Valid() bool {
 		return e.customInputDelta.Valid()
 	case EventType("custom_input_completed"):
 		return e.customInputCompleted.Valid()
+	case EventType("hosted_search_status"):
+		return e.hostedSearchStatus.Valid()
+	case EventType("url_citation_added"):
+		return e.urlCitationAdded.Valid()
 	case EventType("content_completed"):
 		return e.contentCompleted.Valid()
 	case EventType("item_completed"):
@@ -95,6 +101,12 @@ func (e Event) CustomInputDelta() (CustomInputDeltaPayload, bool) {
 }
 func (e Event) CustomInputCompleted() (CustomInputCompletedPayload, bool) {
 	return e.customInputCompleted, e.kind == EventType("custom_input_completed")
+}
+func (e Event) HostedSearchStatus() (HostedSearchStatusPayload, bool) {
+	return e.hostedSearchStatus, e.kind == EventType("hosted_search_status")
+}
+func (e Event) URLCitationAdded() (URLCitationAddedPayload, bool) {
+	return e.urlCitationAdded, e.kind == EventType("url_citation_added")
 }
 func (e Event) ContentCompleted() (ContentCompletedPayload, bool) {
 	return e.contentCompleted, e.kind == EventType("content_completed")

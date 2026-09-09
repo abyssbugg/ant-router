@@ -27,43 +27,52 @@ func NewResponseStartedEvent(id EventID, responseID ResponseID, sequence uint64,
 
 // ItemStartParams contains metadata needed to begin one output item.
 type ItemStartParams struct {
-	Index     int
-	ID        ItemID
-	Type      ItemType
-	Role      Role
-	CallID    ToolCallID
-	Namespace string
-	Name      string
+	Index        int
+	ID           ItemID
+	Type         ItemType
+	Role         Role
+	CallID       ToolCallID
+	Namespace    string
+	Name         string
+	SearchStatus HostedSearchStatus
+	SearchAction HostedSearchAction
 }
 
 type ItemStartedPayload struct {
-	index     int
-	id        ItemID
-	kind      ItemType
-	role      Role
-	callID    ToolCallID
-	namespace string
-	name      string
+	index        int
+	id           ItemID
+	kind         ItemType
+	role         Role
+	callID       ToolCallID
+	namespace    string
+	name         string
+	searchStatus HostedSearchStatus
+	searchAction HostedSearchAction
 }
 
-func (p ItemStartedPayload) Index() int         { return p.index }
-func (p ItemStartedPayload) ID() ItemID         { return p.id }
-func (p ItemStartedPayload) Type() ItemType     { return p.kind }
-func (p ItemStartedPayload) Role() Role         { return p.role }
-func (p ItemStartedPayload) CallID() ToolCallID { return p.callID }
-func (p ItemStartedPayload) Namespace() string  { return p.namespace }
-func (p ItemStartedPayload) Name() string       { return p.name }
+func (p ItemStartedPayload) Index() int                       { return p.index }
+func (p ItemStartedPayload) ID() ItemID                       { return p.id }
+func (p ItemStartedPayload) Type() ItemType                   { return p.kind }
+func (p ItemStartedPayload) Role() Role                       { return p.role }
+func (p ItemStartedPayload) CallID() ToolCallID               { return p.callID }
+func (p ItemStartedPayload) Namespace() string                { return p.namespace }
+func (p ItemStartedPayload) Name() string                     { return p.name }
+func (p ItemStartedPayload) SearchStatus() HostedSearchStatus { return p.searchStatus }
+func (p ItemStartedPayload) SearchAction() HostedSearchAction { return p.searchAction }
 func (p ItemStartedPayload) Valid() bool {
 	if p.index < 0 || p.index >= MaxResponseItems || !p.id.Valid() {
 		return false
 	}
+	hasSearchMetadata := p.searchStatus.Valid() || p.searchAction.Valid()
 	switch p.kind {
 	case ItemType("message"):
-		return p.role == Role("assistant") && !p.callID.Valid() && p.namespace == "" && p.name == ""
+		return p.role == Role("assistant") && !p.callID.Valid() && p.namespace == "" && p.name == "" && !hasSearchMetadata
 	case ItemType("tool_call"), ItemType("custom_tool_call"):
-		return p.role == "" && p.callID.Valid() && (p.namespace == "" || validToolName(p.namespace)) && validToolName(p.name)
+		return p.role == "" && p.callID.Valid() && (p.namespace == "" || validToolName(p.namespace)) && validToolName(p.name) && !hasSearchMetadata
+	case ItemType("hosted_search_call"):
+		return p.role == "" && !p.callID.Valid() && p.namespace == "" && p.name == "" && p.searchStatus.Valid() && !p.searchStatus.Terminal() && p.searchAction.Valid()
 	case ItemType("reasoning_summary"):
-		return p.role == "" && !p.callID.Valid() && p.namespace == "" && p.name == ""
+		return p.role == "" && !p.callID.Valid() && p.namespace == "" && p.name == "" && !hasSearchMetadata
 	default:
 		return false
 	}
@@ -74,7 +83,7 @@ func NewItemStartedEvent(id EventID, responseID ResponseID, sequence uint64, par
 	if err != nil {
 		return Event{}, err
 	}
-	payload := ItemStartedPayload{index: params.Index, id: params.ID, kind: params.Type, role: params.Role, callID: params.CallID, namespace: params.Namespace, name: params.Name}
+	payload := ItemStartedPayload{index: params.Index, id: params.ID, kind: params.Type, role: params.Role, callID: params.CallID, namespace: params.Namespace, name: params.Name, searchStatus: params.SearchStatus, searchAction: params.SearchAction}
 	if !payload.Valid() {
 		return Event{}, eventError(CodeInvalidInvariant, "event.item_started")
 	}

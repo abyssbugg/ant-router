@@ -115,6 +115,7 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 	topLevelNames := make(map[string]struct{}, len(tools))
 	totalCallableTools := 0
 	totalDescriptionBytes := 0
+	hasHostedSearchTool := false
 	for _, tool := range tools {
 		totalDescriptionBytes += len(tool.Description())
 		if totalDescriptionBytes > MaxTotalToolDescriptionBytes {
@@ -139,6 +140,8 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 		} else if tool.Kind() == ToolDefinitionKindFunction || tool.Kind() == ToolDefinitionKindCustom {
 			totalCallableTools++
 			toolKinds[toolIdentity("", tool.Name())] = tool.Kind()
+		} else if tool.Kind() == ToolDefinitionKindWebSearch {
+			hasHostedSearchTool = true
 		}
 	}
 	if totalCallableTools > MaxTotalToolFunctions {
@@ -181,6 +184,10 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 				return requestError(CodeInvalidInvariant, "request.input")
 			}
 			callIDs[call.CallID()] = struct{}{}
+		case ItemType("hosted_search_call"):
+			if !hasHostedSearchTool {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
 		case ItemType("tool_result"):
 			result, _ := item.ToolResult()
 			if _, exists := callIDs[result.CallID()]; !exists {
@@ -218,6 +225,8 @@ func computeCapabilities(input []Item, tools []ToolDefinition, output OutputCons
 			if call.Namespace() != "" {
 				values = append(values, CapabilityNamespaceTools)
 			}
+		case ItemType("hosted_search_call"):
+			values = append(values, CapabilityTools, CapabilityHostedWebSearch)
 		case ItemType("tool_result"):
 			values = append(values, CapabilityTools)
 			result, _ := item.ToolResult()
