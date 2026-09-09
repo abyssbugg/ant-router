@@ -22,7 +22,7 @@ type Projection struct {
 
 func validCapability(value string) bool {
 	switch value {
-	case "text", "image_input", "tools", "namespace_tools", "hosted_web_search", "parallel_tools", "structured_output", "reasoning_summary", "continuation":
+	case "text", "image_input", "tools", "namespace_tools", "custom_tools", "hosted_web_search", "parallel_tools", "structured_output", "reasoning_summary", "continuation":
 		return true
 	default:
 		return false

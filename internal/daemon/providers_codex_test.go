@@ -15,6 +15,7 @@ func codexProviderRegistryConfig() config.Config {
 		return &config.CodexModelConfig{Enabled: true, DisplayName: name, Description: name + " routed through Ant Router", ContextWindow: 32768, EffectiveContextWindowPercent: 90, Priority: priority, Visibility: config.CodexVisibilityList}
 	}
 	configuration.Providers[0].Models = []config.ProviderModelConfig{{Alias: "mock/text", Codex: metadata("Mock Text", 10)}}
+	configuration.Providers[1].Models[0].Capabilities = []string{"custom_tools", "hosted_web_search", "namespace_tools", "parallel_tools", "text", "tools"}
 	configuration.Providers[1].Models[0].Codex = metadata("OpenAI Test", 20)
 	return configuration
 }

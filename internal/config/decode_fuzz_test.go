@@ -11,6 +11,8 @@ func FuzzDecodeCanonicalRoundTrip(f *testing.F) {
 	f.Add([]byte("schema_version = 1\n[daemon]\nshutdown_timeout = \"30s\"\n"))
 	f.Add([]byte("not valid TOML"))
 	f.Add([]byte("schema_version = 2\n"))
+	f.Add([]byte("schema_version = 5\n"))
+	f.Add([]byte("schema_version = 6\n"))
 
 	f.Fuzz(func(t *testing.T, source []byte) {
 		cfg, err := Decode(bytes.NewReader(source))

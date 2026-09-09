@@ -196,7 +196,7 @@ shutdown_timeout = "30s"
 	// Verify config is loaded correctly
 	cfg := cand.Config()
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("SchemaVersion = %d, want 5", cfg.SchemaVersion)
+		t.Errorf("SchemaVersion = %d, want 6", cfg.SchemaVersion)
 	}
 }
 

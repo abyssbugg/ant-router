@@ -2,6 +2,13 @@ package canonical
 
 import "testing"
 
+func TestCustomToolsCapability(t *testing.T) {
+	set, err := NewCapabilitySet(CapabilityCustomTools)
+	if err != nil || !set.Valid() || !set.Has(CapabilityCustomTools) {
+		t.Fatalf("custom tools capability = %#v, %v", set, err)
+	}
+}
+
 func TestCapabilitySet(t *testing.T) {
 	set, err := NewCapabilitySet(CapabilityTools, CapabilityText, CapabilityTools, CapabilityImageInput)
 	if err != nil || !set.Valid() || !set.Has(CapabilityTools) || set.Has(CapabilityContinuation) {

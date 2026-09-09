@@ -15,6 +15,7 @@ func validCodexMetadata() *CodexModelConfig {
 func configWithCodexMetadata() Config {
 	cfg := Default()
 	provider := validOpenAIProvider("openai-primary", "openai/gpt-test")
+	provider.Models[0].Capabilities = []string{"custom_tools", "hosted_web_search", "namespace_tools", "parallel_tools", "text", "tools"}
 	provider.Models[0].Codex = validCodexMetadata()
 	cfg.Providers = []ProviderConfig{provider}
 	return cfg
