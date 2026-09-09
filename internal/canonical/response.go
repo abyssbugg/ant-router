@@ -99,13 +99,22 @@ func (r Response) validate() error {
 			return responseError(CodeInvalidInvariant, "response.items")
 		}
 		itemIDs[item.ID()] = struct{}{}
-		if item.Type() == ItemType("tool_call") {
+		var callID ToolCallID
+		switch item.Type() {
+		case ItemType("tool_call"):
 			hasToolCall = true
 			call, _ := item.ToolCall()
-			if _, duplicate := callIDs[call.CallID()]; duplicate {
+			callID = call.CallID()
+		case ItemType("custom_tool_call"):
+			hasToolCall = true
+			call, _ := item.CustomToolCall()
+			callID = call.CallID()
+		}
+		if callID.Valid() {
+			if _, duplicate := callIDs[callID]; duplicate {
 				return responseError(CodeInvalidInvariant, "response.items")
 			}
-			callIDs[call.CallID()] = struct{}{}
+			callIDs[callID] = struct{}{}
 		}
 	}
 	if (r.finishReason == FinishReason("tool_call")) != hasToolCall {

@@ -111,7 +111,7 @@ func NewRequest(params RequestParams) (Request, error) {
 }
 
 func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice ToolChoice, output OutputConstraints) error {
-	toolNames := make(map[string]struct{}, len(tools))
+	toolKinds := make(map[string]ToolDefinitionKind, len(tools))
 	topLevelNames := make(map[string]struct{}, len(tools))
 	totalCallableTools := 0
 	totalDescriptionBytes := 0
@@ -134,18 +134,18 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 					return requestError(CodeLimitExceeded, "request.tools")
 				}
 				totalCallableTools++
-				toolNames[toolIdentity(tool.Name(), child.Name())] = struct{}{}
+				toolKinds[toolIdentity(tool.Name(), child.Name())] = child.Kind()
 			}
 		} else if tool.Kind() == ToolDefinitionKindFunction || tool.Kind() == ToolDefinitionKindCustom {
 			totalCallableTools++
-			toolNames[toolIdentity("", tool.Name())] = struct{}{}
+			toolKinds[toolIdentity("", tool.Name())] = tool.Kind()
 		}
 	}
 	if totalCallableTools > MaxTotalToolFunctions {
 		return requestError(CodeLimitExceeded, "request.tools")
 	}
 	if choice.Kind() == ToolChoiceKind("specific") {
-		if _, exists := toolNames[toolIdentity(choice.Namespace(), choice.Name())]; !exists {
+		if _, exists := toolKinds[toolIdentity(choice.Namespace(), choice.Name())]; !exists {
 			return requestError(CodeInvalidInvariant, "request.tool_choice")
 		}
 	}
@@ -165,7 +165,16 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 		switch item.Type() {
 		case ItemType("tool_call"):
 			call, _ := item.ToolCall()
-			if _, declared := toolNames[toolIdentity(call.Namespace(), call.Name())]; !declared {
+			if declaredKind, declared := toolKinds[toolIdentity(call.Namespace(), call.Name())]; !declared || declaredKind != ToolDefinitionKindFunction {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
+			if _, duplicate := callIDs[call.CallID()]; duplicate {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
+			callIDs[call.CallID()] = struct{}{}
+		case ItemType("custom_tool_call"):
+			call, _ := item.CustomToolCall()
+			if declaredKind, declared := toolKinds[toolIdentity(call.Namespace(), call.Name())]; !declared || declaredKind != ToolDefinitionKindCustom {
 				return requestError(CodeInvalidInvariant, "request.input")
 			}
 			if _, duplicate := callIDs[call.CallID()]; duplicate {
@@ -199,6 +208,16 @@ func computeCapabilities(input []Item, tools []ToolDefinition, output OutputCons
 			}
 		case ItemType("tool_call"):
 			values = append(values, CapabilityTools)
+			call, _ := item.ToolCall()
+			if call.Namespace() != "" {
+				values = append(values, CapabilityNamespaceTools)
+			}
+		case ItemType("custom_tool_call"):
+			values = append(values, CapabilityTools, CapabilityCustomTools)
+			call, _ := item.CustomToolCall()
+			if call.Namespace() != "" {
+				values = append(values, CapabilityNamespaceTools)
+			}
 		case ItemType("tool_result"):
 			values = append(values, CapabilityTools)
 			result, _ := item.ToolResult()

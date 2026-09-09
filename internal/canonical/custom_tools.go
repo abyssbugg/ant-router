@@ -61,7 +61,7 @@ func NewCustomGrammarFormat(syntax CustomGrammarSyntax, definition string) (Cust
 	if len(definition) > MaxCustomGrammarBytes {
 		return CustomToolFormat{}, itemError(CodeLimitExceeded, "custom_tool.format.definition")
 	}
-	if !validCustomGrammarCharacters(definition) {
+	if !validCustomTextCharacters(definition) {
 		return CustomToolFormat{}, itemError(CodeInvalidInvariant, "custom_tool.format.definition")
 	}
 	return CustomToolFormat{kind: CustomToolFormatKindGrammar, syntax: syntax, definition: definition}, nil
@@ -82,7 +82,7 @@ func (f CustomToolFormat) Valid() bool {
 	case CustomToolFormatKindText:
 		return f.syntax == "" && f.definition == ""
 	case CustomToolFormatKindGrammar:
-		return f.syntax.Valid() && utf8.ValidString(f.definition) && len(f.definition) > 0 && len(f.definition) <= MaxCustomGrammarBytes && validCustomGrammarCharacters(f.definition)
+		return f.syntax.Valid() && utf8.ValidString(f.definition) && len(f.definition) > 0 && len(f.definition) <= MaxCustomGrammarBytes && validCustomTextCharacters(f.definition)
 	default:
 		return false
 	}
@@ -114,8 +114,8 @@ func NewCustomToolWithFormat(name, description string, format CustomToolFormat) 
 	return ToolDefinition{kind: ToolDefinitionKindCustom, name: name, description: description, customFormat: format}, nil
 }
 
-func validCustomGrammarCharacters(definition string) bool {
-	for _, character := range definition {
+func validCustomTextCharacters(value string) bool {
+	for _, character := range value {
 		if unicode.IsControl(character) && character != '\t' && character != '\n' && character != '\r' {
 			return false
 		}

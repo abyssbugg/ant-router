@@ -37,6 +37,8 @@ const (
 	MaxToolSchemaBytes = 256 << 10
 	// MaxCustomGrammarBytes limits one custom-tool grammar definition.
 	MaxCustomGrammarBytes = 256 << 10
+	// MaxCustomToolInputBytes limits one completed custom-tool input.
+	MaxCustomToolInputBytes = 2 << 20
 	// MaxInlineImageBytes limits one inline image payload.
 	MaxInlineImageBytes = 20 << 20
 	// MaxImageURLBytes limits one remote image URL.

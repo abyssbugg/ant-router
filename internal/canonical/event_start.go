@@ -60,7 +60,7 @@ func (p ItemStartedPayload) Valid() bool {
 	switch p.kind {
 	case ItemType("message"):
 		return p.role == Role("assistant") && !p.callID.Valid() && p.namespace == "" && p.name == ""
-	case ItemType("tool_call"):
+	case ItemType("tool_call"), ItemType("custom_tool_call"):
 		return p.role == "" && p.callID.Valid() && (p.namespace == "" || validToolName(p.namespace)) && validToolName(p.name)
 	case ItemType("reasoning_summary"):
 		return p.role == "" && !p.callID.Valid() && p.namespace == "" && p.name == ""

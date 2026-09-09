@@ -4,23 +4,25 @@ import "errors"
 
 // Event is an immutable stateless canonical stream event.
 type Event struct {
-	id                  EventID
-	responseID          ResponseID
-	sequence            uint64
-	kind                EventType
-	responseStarted     ResponseStartedPayload
-	continuationUpdated ContinuationUpdatedPayload
-	itemStarted         ItemStartedPayload
-	contentStarted      ContentStartedPayload
-	textDelta           DeltaPayload
-	jsonDelta           DeltaPayload
-	argumentsDelta      ToolArgumentsDeltaPayload
-	contentCompleted    ContentCompletedPayload
-	itemCompleted       ItemCompletedPayload
-	usageUpdated        UsageUpdatedPayload
-	completed           ResponseCompletedPayload
-	failed              ResponseFailedPayload
-	cancelled           ResponseCancelledPayload
+	id                   EventID
+	responseID           ResponseID
+	sequence             uint64
+	kind                 EventType
+	responseStarted      ResponseStartedPayload
+	continuationUpdated  ContinuationUpdatedPayload
+	itemStarted          ItemStartedPayload
+	contentStarted       ContentStartedPayload
+	textDelta            DeltaPayload
+	jsonDelta            DeltaPayload
+	argumentsDelta       ToolArgumentsDeltaPayload
+	customInputDelta     CustomInputDeltaPayload
+	customInputCompleted CustomInputCompletedPayload
+	contentCompleted     ContentCompletedPayload
+	itemCompleted        ItemCompletedPayload
+	usageUpdated         UsageUpdatedPayload
+	completed            ResponseCompletedPayload
+	failed               ResponseFailedPayload
+	cancelled            ResponseCancelledPayload
 }
 
 func (e Event) ID() EventID            { return e.id }
@@ -46,6 +48,10 @@ func (e Event) Valid() bool {
 		return e.jsonDelta.Valid()
 	case EventType("tool_arguments_delta"):
 		return e.argumentsDelta.Valid()
+	case EventType("custom_input_delta"):
+		return e.customInputDelta.Valid()
+	case EventType("custom_input_completed"):
+		return e.customInputCompleted.Valid()
 	case EventType("content_completed"):
 		return e.contentCompleted.Valid()
 	case EventType("item_completed"):
@@ -83,6 +89,12 @@ func (e Event) JSONDelta() (DeltaPayload, bool) {
 }
 func (e Event) ToolArgumentsDelta() (ToolArgumentsDeltaPayload, bool) {
 	return e.argumentsDelta, e.kind == EventType("tool_arguments_delta")
+}
+func (e Event) CustomInputDelta() (CustomInputDeltaPayload, bool) {
+	return e.customInputDelta, e.kind == EventType("custom_input_delta")
+}
+func (e Event) CustomInputCompleted() (CustomInputCompletedPayload, bool) {
+	return e.customInputCompleted, e.kind == EventType("custom_input_completed")
 }
 func (e Event) ContentCompleted() (ContentCompletedPayload, bool) {
 	return e.contentCompleted, e.kind == EventType("content_completed")
