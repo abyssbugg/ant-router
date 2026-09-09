@@ -113,7 +113,7 @@ func NewRequest(params RequestParams) (Request, error) {
 func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice ToolChoice, output OutputConstraints) error {
 	toolNames := make(map[string]struct{}, len(tools))
 	topLevelNames := make(map[string]struct{}, len(tools))
-	totalFunctions := 0
+	totalCallableTools := 0
 	totalDescriptionBytes := 0
 	for _, tool := range tools {
 		totalDescriptionBytes += len(tool.Description())
@@ -133,15 +133,15 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 				if totalDescriptionBytes > MaxTotalToolDescriptionBytes {
 					return requestError(CodeLimitExceeded, "request.tools")
 				}
-				totalFunctions++
+				totalCallableTools++
 				toolNames[toolIdentity(tool.Name(), child.Name())] = struct{}{}
 			}
-		} else if tool.Kind() == ToolDefinitionKindFunction {
-			totalFunctions++
+		} else if tool.Kind() == ToolDefinitionKindFunction || tool.Kind() == ToolDefinitionKindCustom {
+			totalCallableTools++
 			toolNames[toolIdentity("", tool.Name())] = struct{}{}
 		}
 	}
-	if totalFunctions > MaxTotalToolFunctions {
+	if totalCallableTools > MaxTotalToolFunctions {
 		return requestError(CodeLimitExceeded, "request.tools")
 	}
 	if choice.Kind() == ToolChoiceKind("specific") {
@@ -216,8 +216,16 @@ func computeCapabilities(input []Item, tools []ToolDefinition, output OutputCons
 	if len(tools) > 0 {
 		values = append(values, CapabilityTools)
 		for _, tool := range tools {
+			if tool.Kind() == ToolDefinitionKindCustom {
+				values = append(values, CapabilityCustomTools)
+			}
 			if tool.Kind() == ToolDefinitionKindNamespace {
 				values = append(values, CapabilityNamespaceTools)
+				for _, child := range tool.Tools() {
+					if child.Kind() == ToolDefinitionKindCustom {
+						values = append(values, CapabilityCustomTools)
+					}
+				}
 			}
 			if tool.Kind() == ToolDefinitionKindWebSearch {
 				values = append(values, CapabilityHostedWebSearch)

@@ -7,29 +7,31 @@ import (
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 )
 
-// ToolDefinitionKind identifies a direct function or a namespace of functions.
+// ToolDefinitionKind identifies a function, custom tool, namespace, or hosted tool.
 type ToolDefinitionKind string
 
 const (
 	ToolDefinitionKindFunction  ToolDefinitionKind = "function"
+	ToolDefinitionKindCustom    ToolDefinitionKind = "custom"
 	ToolDefinitionKindNamespace ToolDefinitionKind = "namespace"
 	ToolDefinitionKindWebSearch ToolDefinitionKind = "web_search"
 )
 
 // Valid reports whether the definition kind is supported.
 func (k ToolDefinitionKind) Valid() bool {
-	return k == ToolDefinitionKindFunction || k == ToolDefinitionKindNamespace || k == ToolDefinitionKindWebSearch
+	return k == ToolDefinitionKindFunction || k == ToolDefinitionKindCustom || k == ToolDefinitionKindNamespace || k == ToolDefinitionKindWebSearch
 }
 
-// ToolDefinition describes a portable direct function or function-only namespace.
+// ToolDefinition describes a portable function, custom tool, namespace, or hosted tool.
 type ToolDefinition struct {
-	kind        ToolDefinitionKind
-	name        string
-	description string
-	inputSchema canonicaljson.Value
-	enforcement SchemaEnforcement
-	tools       []ToolDefinition
-	webSearch   HostedWebSearchOptions
+	kind         ToolDefinitionKind
+	name         string
+	description  string
+	inputSchema  canonicaljson.Value
+	enforcement  SchemaEnforcement
+	tools        []ToolDefinition
+	customFormat CustomToolFormat
+	webSearch    HostedWebSearchOptions
 }
 
 // NewToolDefinition validates a tool name, description, and object schema using best-effort enforcement.
@@ -81,7 +83,7 @@ func NewHostedWebSearchToolWithOptions(options HostedWebSearchOptions) (ToolDefi
 	return ToolDefinition{kind: ToolDefinitionKindWebSearch, name: "web_search", webSearch: options}, nil
 }
 
-// NewToolNamespace validates and defensively copies an ordered function-only namespace.
+// NewToolNamespace validates and defensively copies an ordered function/custom namespace.
 func NewToolNamespace(name, description string, tools []ToolDefinition) (ToolDefinition, error) {
 	if !validToolName(name) {
 		code := CodeInvalidInvariant
@@ -104,7 +106,7 @@ func NewToolNamespace(name, description string, tools []ToolDefinition) (ToolDef
 	}
 	seen := make(map[string]struct{}, len(tools))
 	for _, tool := range tools {
-		if !tool.Valid() || tool.Kind() != ToolDefinitionKindFunction {
+		if !tool.Valid() || (tool.Kind() != ToolDefinitionKindFunction && tool.Kind() != ToolDefinitionKindCustom) {
 			return ToolDefinition{}, itemError(CodeInvalidInvariant, "tool.tools")
 		}
 		if _, exists := seen[tool.Name()]; exists {
@@ -115,7 +117,7 @@ func NewToolNamespace(name, description string, tools []ToolDefinition) (ToolDef
 	return ToolDefinition{kind: ToolDefinitionKindNamespace, name: name, description: description, tools: append([]ToolDefinition(nil), tools...)}, nil
 }
 
-// Kind returns whether this definition is a direct function or namespace.
+// Kind returns this definition discriminator.
 func (t ToolDefinition) Kind() ToolDefinitionKind {
 	if t.kind == "" && t.name != "" {
 		return ToolDefinitionKindFunction
@@ -123,7 +125,7 @@ func (t ToolDefinition) Kind() ToolDefinitionKind {
 	return t.kind
 }
 
-// Name returns the portable function or namespace name.
+// Name returns the portable function, custom tool, or namespace name.
 func (t ToolDefinition) Name() string { return t.name }
 
 // Description returns the optional UTF-8 description.
@@ -134,6 +136,9 @@ func (t ToolDefinition) InputSchema() canonicaljson.Value { return t.inputSchema
 
 // Enforcement returns the function schema enforcement mode.
 func (t ToolDefinition) Enforcement() SchemaEnforcement { return t.enforcement }
+
+// CustomFormat returns the immutable custom-tool input format.
+func (t ToolDefinition) CustomFormat() CustomToolFormat { return t.customFormat }
 
 // WebSearchOptions returns immutable hosted-search options.
 func (t ToolDefinition) WebSearchOptions() HostedWebSearchOptions { return t.webSearch }
@@ -148,16 +153,18 @@ func (t ToolDefinition) Valid() bool {
 	}
 	switch t.Kind() {
 	case ToolDefinitionKindFunction:
-		return len(t.tools) == 0 && t.inputSchema.IsObject() && len(t.inputSchema.Bytes()) <= MaxToolSchemaBytes && t.enforcement.Valid()
+		return len(t.tools) == 0 && !t.customFormat.Valid() && t.inputSchema.IsObject() && len(t.inputSchema.Bytes()) <= MaxToolSchemaBytes && t.enforcement.Valid()
+	case ToolDefinitionKindCustom:
+		return len(t.tools) == 0 && t.customFormat.Valid() && t.inputSchema.Kind() == canonicaljson.KindInvalid && t.enforcement == ""
 	case ToolDefinitionKindWebSearch:
-		return t.name == "web_search" && t.description == "" && len(t.tools) == 0 && t.inputSchema.Kind() == canonicaljson.KindInvalid && t.enforcement == "" && t.webSearch.Valid()
+		return t.name == "web_search" && t.description == "" && len(t.tools) == 0 && !t.customFormat.Valid() && t.inputSchema.Kind() == canonicaljson.KindInvalid && t.enforcement == "" && t.webSearch.Valid()
 	case ToolDefinitionKindNamespace:
-		if len(t.tools) == 0 || len(t.tools) > MaxNamespaceTools || t.inputSchema.Kind() != canonicaljson.KindInvalid || t.enforcement != "" {
+		if len(t.tools) == 0 || len(t.tools) > MaxNamespaceTools || t.customFormat.Valid() || t.inputSchema.Kind() != canonicaljson.KindInvalid || t.enforcement != "" {
 			return false
 		}
 		seen := make(map[string]struct{}, len(t.tools))
 		for _, tool := range t.tools {
-			if !tool.Valid() || tool.Kind() != ToolDefinitionKindFunction {
+			if !tool.Valid() || (tool.Kind() != ToolDefinitionKindFunction && tool.Kind() != ToolDefinitionKindCustom) {
 				return false
 			}
 			if _, ok := seen[tool.Name()]; ok {
