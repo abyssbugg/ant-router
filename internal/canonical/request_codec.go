@@ -58,7 +58,7 @@ func DecodeRequest(data []byte) (Request, error) {
 	if err := strictDecode(prepared, &dto); err != nil {
 		return Request{}, err
 	}
-	if dto.Version != ProtocolVersion {
+	if !validProtocolVersion(dto.Version) {
 		return Request{}, codecError(CodeInvalidVersion, "version")
 	}
 	id, err := ParseRequestID(dto.ID)
@@ -67,7 +67,7 @@ func DecodeRequest(data []byte) (Request, error) {
 	}
 	input := make([]Item, 0, len(dto.Input))
 	for _, raw := range dto.Input {
-		item, err := decodeItem(raw)
+		item, err := decodeItem(raw, dto.Version)
 		if err != nil {
 			return Request{}, err
 		}
@@ -75,7 +75,7 @@ func DecodeRequest(data []byte) (Request, error) {
 	}
 	tools := make([]ToolDefinition, 0, len(dto.Tools))
 	for _, raw := range dto.Tools {
-		tool, err := decodeTool(raw)
+		tool, err := decodeTool(raw, dto.Version)
 		if err != nil {
 			return Request{}, err
 		}

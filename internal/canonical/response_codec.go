@@ -64,7 +64,7 @@ func DecodeResponse(data []byte) (Response, error) {
 	if err := strictDecode(prepared, &dto); err != nil {
 		return Response{}, err
 	}
-	if dto.Version != ProtocolVersion {
+	if !validProtocolVersion(dto.Version) {
 		return Response{}, codecError(CodeInvalidVersion, "version")
 	}
 	id, err := ParseResponseID(dto.ID)
@@ -73,7 +73,7 @@ func DecodeResponse(data []byte) (Response, error) {
 	}
 	items := make([]Item, 0, len(dto.Items))
 	for _, raw := range dto.Items {
-		item, err := decodeItem(raw)
+		item, err := decodeItem(raw, dto.Version)
 		if err != nil {
 			return Response{}, err
 		}

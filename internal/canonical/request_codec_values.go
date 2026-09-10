@@ -24,6 +24,9 @@ func encodeTool(value ToolDefinition) toolDTO {
 		}
 		return dto
 	}
+	if value.Kind() == ToolDefinitionKindCustom {
+		return toolDTO{Type: string(ToolDefinitionKindCustom), Name: value.Name(), Description: value.Description(), CustomFormat: encodeCustomToolFormat(value.CustomFormat())}
+	}
 	if value.Kind() == ToolDefinitionKindNamespace {
 		children := value.Tools()
 		encoded := make([]toolDTO, 0, len(children))
@@ -35,9 +38,13 @@ func encodeTool(value ToolDefinition) toolDTO {
 	return toolDTO{Name: value.Name(), Description: value.Description(), InputSchema: json.RawMessage(value.InputSchema().Bytes()), SchemaEnforcement: string(value.Enforcement())}
 }
 
-func decodeTool(dto toolDTO) (ToolDefinition, error) {
+func toolDTOHasHostedFields(dto toolDTO) bool {
+	return dto.ExternalWebAccess != nil || dto.IndexedWebAccess != nil || len(dto.Filters) != 0 || len(dto.UserLocation) != 0 || dto.SearchContextSize != "" || len(dto.SearchContentTypes) != 0
+}
+
+func decodeTool(dto toolDTO, version string) (ToolDefinition, error) {
 	if dto.Type == string(ToolDefinitionKindWebSearch) {
-		if dto.Name != "web_search" || dto.Description != "" || len(dto.InputSchema) != 0 || dto.SchemaEnforcement != "" || len(dto.Tools) != 0 {
+		if dto.Name != "web_search" || dto.Description != "" || len(dto.InputSchema) != 0 || dto.SchemaEnforcement != "" || len(dto.Tools) != 0 || dto.CustomFormat != nil {
 			return ToolDefinition{}, codecError(CodeInvalidInvariant, "tool")
 		}
 		filters, err := decodeOptionalHostedObject(dto.Filters)
@@ -54,8 +61,18 @@ func decodeTool(dto toolDTO) (ToolDefinition, error) {
 		}
 		return NewHostedWebSearchToolWithOptions(options)
 	}
+	if dto.Type == string(ToolDefinitionKindCustom) {
+		if version != ProtocolVersion || len(dto.InputSchema) != 0 || dto.SchemaEnforcement != "" || len(dto.Tools) != 0 || toolDTOHasHostedFields(dto) {
+			return ToolDefinition{}, codecError(CodeInvalidVariant, "tool.type")
+		}
+		format, err := decodeCustomToolFormat(dto.CustomFormat)
+		if err != nil {
+			return ToolDefinition{}, err
+		}
+		return NewCustomToolWithFormat(dto.Name, dto.Description, format)
+	}
 	if dto.Type == string(ToolDefinitionKindNamespace) {
-		if len(dto.InputSchema) != 0 || dto.SchemaEnforcement != "" {
+		if len(dto.InputSchema) != 0 || dto.SchemaEnforcement != "" || dto.CustomFormat != nil || toolDTOHasHostedFields(dto) {
 			return ToolDefinition{}, codecError(CodeInvalidInvariant, "tool")
 		}
 		children := make([]ToolDefinition, 0, len(dto.Tools))
@@ -63,7 +80,7 @@ func decodeTool(dto toolDTO) (ToolDefinition, error) {
 			if childDTO.Type == string(ToolDefinitionKindNamespace) || len(childDTO.Tools) != 0 {
 				return ToolDefinition{}, codecError(CodeInvalidInvariant, "tool.tools")
 			}
-			child, err := decodeTool(childDTO)
+			child, err := decodeTool(childDTO, version)
 			if err != nil {
 				return ToolDefinition{}, err
 			}
@@ -71,7 +88,7 @@ func decodeTool(dto toolDTO) (ToolDefinition, error) {
 		}
 		return NewToolNamespace(dto.Name, dto.Description, children)
 	}
-	if dto.Type != "" && dto.Type != string(ToolDefinitionKindFunction) || len(dto.Tools) != 0 {
+	if dto.Type != "" && dto.Type != string(ToolDefinitionKindFunction) || len(dto.Tools) != 0 || dto.CustomFormat != nil || toolDTOHasHostedFields(dto) {
 		return ToolDefinition{}, codecError(CodeInvalidInvariant, "tool.type")
 	}
 	schema, err := canonicaljson.Parse(dto.InputSchema, canonicaljson.Limits{MaximumBytes: MaxToolSchemaBytes, MaximumDepth: MaxJSONDepth})

@@ -18,18 +18,25 @@ type requestDTO struct {
 }
 
 type toolDTO struct {
-	Type               string          `json:"type,omitempty"`
-	Name               string          `json:"name"`
-	Description        string          `json:"description"`
-	InputSchema        json.RawMessage `json:"input_schema,omitempty"`
-	SchemaEnforcement  string          `json:"schema_enforcement,omitempty"`
-	Tools              []toolDTO       `json:"tools,omitempty"`
-	ExternalWebAccess  *bool           `json:"external_web_access,omitempty"`
-	IndexedWebAccess   *bool           `json:"indexed_web_access,omitempty"`
-	Filters            json.RawMessage `json:"filters,omitempty"`
-	UserLocation       json.RawMessage `json:"user_location,omitempty"`
-	SearchContextSize  string          `json:"search_context_size,omitempty"`
-	SearchContentTypes []string        `json:"search_content_types,omitempty"`
+	Type               string               `json:"type,omitempty"`
+	Name               string               `json:"name"`
+	Description        string               `json:"description"`
+	InputSchema        json.RawMessage      `json:"input_schema,omitempty"`
+	SchemaEnforcement  string               `json:"schema_enforcement,omitempty"`
+	Tools              []toolDTO            `json:"tools,omitempty"`
+	CustomFormat       *customToolFormatDTO `json:"custom_format,omitempty"`
+	ExternalWebAccess  *bool                `json:"external_web_access,omitempty"`
+	IndexedWebAccess   *bool                `json:"indexed_web_access,omitempty"`
+	Filters            json.RawMessage      `json:"filters,omitempty"`
+	UserLocation       json.RawMessage      `json:"user_location,omitempty"`
+	SearchContextSize  string               `json:"search_context_size,omitempty"`
+	SearchContentTypes []string             `json:"search_content_types,omitempty"`
+}
+
+type customToolFormatDTO struct {
+	Type       string `json:"type"`
+	Syntax     string `json:"syntax,omitempty"`
+	Definition string `json:"definition,omitempty"`
 }
 
 type toolChoiceDTO struct {
@@ -75,6 +82,30 @@ type toolCallDTO struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+type customToolCallDTO struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	CallID    string `json:"call_id"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Input     string `json:"input"`
+}
+
+type hostedSearchCallDTO struct {
+	Type   string                `json:"type"`
+	ID     string                `json:"id"`
+	Status string                `json:"status"`
+	Action hostedSearchActionDTO `json:"action"`
+}
+
+type hostedSearchActionDTO struct {
+	Type    string   `json:"type"`
+	Queries []string `json:"queries,omitempty"`
+	Sources []string `json:"sources,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Pattern string   `json:"pattern,omitempty"`
+}
+
 type toolResultDTO struct {
 	Type    string            `json:"type"`
 	ID      string            `json:"id"`
@@ -90,8 +121,16 @@ type reasoningDTO struct {
 }
 
 type textContentDTO struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type      string           `json:"type"`
+	Text      string           `json:"text"`
+	Citations []urlCitationDTO `json:"citations,omitempty"`
+}
+
+type urlCitationDTO struct {
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
+	Title      string `json:"title"`
+	URL        string `json:"url"`
 }
 
 type imageContentDTO struct {

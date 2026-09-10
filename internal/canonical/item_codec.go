@@ -25,6 +25,12 @@ func encodeItem(item Item) (json.RawMessage, error) {
 	case ItemType("tool_call"):
 		value, _ := item.ToolCall()
 		return marshalCodec(toolCallDTO{Type: "tool_call", ID: value.ID().String(), CallID: value.CallID().String(), Namespace: value.Namespace(), Name: value.Name(), Arguments: json.RawMessage(value.Arguments().Bytes())}, MaxRequestBytes)
+	case ItemType("custom_tool_call"):
+		value, _ := item.CustomToolCall()
+		return marshalCodec(customToolCallDTO{Type: "custom_tool_call", ID: value.ID().String(), CallID: value.CallID().String(), Namespace: value.Namespace(), Name: value.Name(), Input: value.Input()}, MaxRequestBytes)
+	case ItemType("hosted_search_call"):
+		value, _ := item.HostedSearchCall()
+		return marshalCodec(hostedSearchCallDTO{Type: "hosted_search_call", ID: value.ID().String(), Status: string(value.Status()), Action: encodeHostedSearchAction(value.Action())}, MaxRequestBytes)
 	case ItemType("tool_result"):
 		value, _ := item.ToolResult()
 		content := make([]json.RawMessage, 0, len(value.Content()))
@@ -48,7 +54,7 @@ func encodeItem(item Item) (json.RawMessage, error) {
 	}
 }
 
-func decodeItem(data []byte) (Item, error) {
+func decodeItem(data []byte, version string) (Item, error) {
 	kind, err := discriminator(data)
 	if err != nil {
 		return Item{}, err
@@ -65,7 +71,7 @@ func decodeItem(data []byte) (Item, error) {
 		}
 		content := make([]ContentBlock, 0, len(dto.Content))
 		for _, raw := range dto.Content {
-			block, err := decodeContent(raw)
+			block, err := decodeContent(raw, version)
 			if err != nil {
 				return Item{}, err
 			}
@@ -103,6 +109,53 @@ func decodeItem(data []byte) (Item, error) {
 			return Item{}, err
 		}
 		return NewToolCallItem(value)
+	case "custom_tool_call":
+		if version != ProtocolVersion {
+			return Item{}, codecError(CodeInvalidVariant, "item.type")
+		}
+		var dto customToolCallDTO
+		if err := strictDecode(data, &dto); err != nil {
+			return Item{}, err
+		}
+		id, err := ParseItemID(dto.ID)
+		if err != nil {
+			return Item{}, err
+		}
+		callID, err := ParseToolCallID(dto.CallID)
+		if err != nil {
+			return Item{}, err
+		}
+		var value CustomToolCall
+		if dto.Namespace == "" {
+			value, err = NewCustomToolCall(id, callID, dto.Name, dto.Input)
+		} else {
+			value, err = NewNamespacedCustomToolCall(id, callID, dto.Namespace, dto.Name, dto.Input)
+		}
+		if err != nil {
+			return Item{}, err
+		}
+		return NewCustomToolCallItem(value)
+	case "hosted_search_call":
+		if version != ProtocolVersion {
+			return Item{}, codecError(CodeInvalidVariant, "item.type")
+		}
+		var dto hostedSearchCallDTO
+		if err := strictDecode(data, &dto); err != nil {
+			return Item{}, err
+		}
+		id, err := ParseItemID(dto.ID)
+		if err != nil {
+			return Item{}, err
+		}
+		action, err := decodeHostedSearchAction(dto.Action)
+		if err != nil {
+			return Item{}, err
+		}
+		value, err := NewHostedSearchCall(id, HostedSearchStatus(dto.Status), action)
+		if err != nil {
+			return Item{}, err
+		}
+		return NewHostedSearchCallItem(value)
 	case "tool_result":
 		var dto toolResultDTO
 		if err := strictDecode(data, &dto); err != nil {
@@ -118,7 +171,7 @@ func decodeItem(data []byte) (Item, error) {
 		}
 		content := make([]ContentBlock, 0, len(dto.Content))
 		for _, raw := range dto.Content {
-			block, err := decodeContent(raw)
+			block, err := decodeContent(raw, version)
 			if err != nil {
 				return Item{}, err
 			}

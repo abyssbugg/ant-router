@@ -89,7 +89,7 @@ func TestRequestCodecStrictRejections(t *testing.T) {
 	}{
 		{"duplicate", []byte(`{"version":"1","version":"1"}`), CodeDuplicateKey},
 		{"unknown top", insertBeforeFinalBrace(valid, `,"extra":true`), CodeUnknownField},
-		{"version", bytes.Replace(valid, []byte(`"version":"1"`), []byte(`"version":"2"`), 1), CodeInvalidVersion},
+		{"version", bytes.Replace(valid, []byte(`"version":"2"`), []byte(`"version":"3"`), 1), CodeInvalidVersion},
 		{"item discriminator", bytes.Replace(valid, []byte(`"type":"message"`), []byte(`"type":"unknown"`), 1), CodeInvalidVariant},
 		{"unknown item", bytes.Replace(valid, []byte(`"role":"user"`), []byte(`"role":"user","extra":true`), 1), CodeUnknownField},
 		{"bad continuation base64", bytes.Replace(valid, []byte(`"data":"AQID"`), []byte(`"data":"***"`), 1), CodeInvalidInvariant},
