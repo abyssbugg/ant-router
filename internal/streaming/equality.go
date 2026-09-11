@@ -14,7 +14,7 @@ func contentEqual(left, right canonical.ContentBlock) bool {
 	case canonical.ContentType("text"):
 		first, ok1 := left.Text()
 		second, ok2 := right.Text()
-		return ok1 && ok2 && first.Text() == second.Text()
+		return ok1 && ok2 && textContentEqual(first, second)
 	case canonical.ContentType("json"):
 		first, ok1 := left.JSON()
 		second, ok2 := right.JSON()
@@ -53,6 +53,14 @@ func itemEqual(left, right canonical.Item) bool {
 		first, ok1 := left.ToolCall()
 		second, ok2 := right.ToolCall()
 		return ok1 && ok2 && first.CallID() == second.CallID() && first.Namespace() == second.Namespace() && first.Name() == second.Name() && first.Arguments().Equal(second.Arguments())
+	case canonical.ItemType("custom_tool_call"):
+		first, ok1 := left.CustomToolCall()
+		second, ok2 := right.CustomToolCall()
+		return ok1 && ok2 && first.CallID() == second.CallID() && first.Namespace() == second.Namespace() && first.Name() == second.Name() && first.Input() == second.Input()
+	case canonical.ItemType("hosted_search_call"):
+		first, ok1 := left.HostedSearchCall()
+		second, ok2 := right.HostedSearchCall()
+		return ok1 && ok2 && first.Status() == second.Status() && hostedSearchActionEqual(first.Action(), second.Action())
 	case canonical.ItemType("reasoning_summary"):
 		first, ok1 := left.ReasoningSummary()
 		second, ok2 := right.ReasoningSummary()
@@ -64,7 +72,7 @@ func itemEqual(left, right canonical.Item) bool {
 			return false
 		}
 		for i := range a {
-			if a[i].Text() != b[i].Text() {
+			if !textContentEqual(a[i], b[i]) {
 				return false
 			}
 		}
@@ -90,7 +98,7 @@ func contentSize(content canonical.ContentBlock) int {
 	switch content.Type() {
 	case canonical.ContentType("text"):
 		value, _ := content.Text()
-		return len(value.Text())
+		return len(value.Text()) + citationSliceSize(value.Citations())
 	case canonical.ContentType("json"):
 		value, _ := content.JSON()
 		return len(value.Value().Bytes())

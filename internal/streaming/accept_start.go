@@ -27,7 +27,7 @@ func (m *Machine) acceptContentStarted(event canonical.Event) error {
 		return m.error(CodeInvalidContentState, "event.content_started")
 	}
 	item, exists := m.items[payload.ItemID()]
-	if !exists || item.completed || item.kind == canonical.ItemType("tool_call") {
+	if !exists || item.completed || item.kind == canonical.ItemType("tool_call") || item.kind == canonical.ItemType("custom_tool_call") || item.kind == canonical.ItemType("hosted_search_call") {
 		return m.error(CodeInvalidContentState, "event.content_started.item_id")
 	}
 	if payload.Index() < 0 || payload.Index() >= m.options.MaxOpenContentPerItem {
