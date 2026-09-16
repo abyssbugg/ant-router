@@ -50,9 +50,18 @@ func TestMachineReconstructsCitedText(t *testing.T) {
 	terminal, _ := canonical.NewResponseCompletedEvent(b.nextEventID(), b.responseID, b.sequence, canonical.FinishReason("stop"), canonical.Usage{}, []canonical.ItemID{itemID})
 	responseTransition := b.mustAccept(terminal)
 	response, ok := responseTransition.Response()
-	messageValue, _ := response.Items()[0].Message()
-	textValue, _ := messageValue.Content()[0].Text()
-	if !ok || len(textValue.Citations()) != 1 || textValue.Citations()[0].URL() != "https://example.com" {
+	if !ok || len(response.Items()) == 0 {
+		t.Fatalf("terminal transition response = %#v, %v", response, ok)
+	}
+	messageValue, messageOK := response.Items()[0].Message()
+	if !messageOK || len(messageValue.Content()) == 0 {
+		t.Fatalf("first item message = %#v, %v", messageValue, messageOK)
+	}
+	textValue, textOK := messageValue.Content()[0].Text()
+	if !textOK {
+		t.Fatalf("first content block text ok = %v, block = %#v", textOK, messageValue.Content()[0])
+	}
+	if len(textValue.Citations()) != 1 || textValue.Citations()[0].URL() != "https://example.com" {
 		t.Fatalf("cited response = %#v, %v", response, ok)
 	}
 }
@@ -116,6 +125,40 @@ func TestMachineAtomicCitedTextRespectsResponseLimit(t *testing.T) {
 			t.Fatalf("limit code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
 		}
 	})
+}
+
+func TestMachineAtomicCitedCompletionIsSemantic(t *testing.T) {
+	b := newStreamBuilder(t, DefaultMachineOptions())
+	itemID := streamItemID(t, 56)
+	startTextContent(t, b, itemID)
+	citation, _ := canonical.NewURLCitationAddedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, 0, testCitation(t))
+	b.sequence++
+	b.mustAccept(citation)
+	// No deltas streamed: the completion itself carries the final text and
+	// the matching citation, so the empty buffer stays semantic.
+	text, _ := canonical.NewTextContentWithCitations("final text", []canonical.URLCitation{testCitation(t)})
+	block, _ := canonical.NewTextBlock(text)
+	contentDone, _ := canonical.NewContentCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, 0, block)
+	b.sequence++
+	transition := b.mustAccept(contentDone)
+	if !transition.SemanticOutput() {
+		t.Fatalf("atomic cited completion transition = %#v", transition)
+	}
+	// A completion whose citations do not match the streamed citation is
+	// rejected transactionally rather than counted as semantic output.
+	mismatchBuilder := newStreamBuilder(t, DefaultMachineOptions())
+	mismatchID := streamItemID(t, 57)
+	startTextContent(t, mismatchBuilder, mismatchID)
+	mismatchCitation, _ := canonical.NewURLCitationAddedEvent(mismatchBuilder.nextEventID(), mismatchBuilder.responseID, mismatchBuilder.sequence, mismatchID, 0, testCitation(t))
+	mismatchBuilder.sequence++
+	mismatchBuilder.mustAccept(mismatchCitation)
+	plainText, _ := canonical.NewTextContent("final text")
+	plainBlock, _ := canonical.NewTextBlock(plainText)
+	mismatchDone, _ := canonical.NewContentCompletedEvent(mismatchBuilder.nextEventID(), mismatchBuilder.responseID, mismatchBuilder.sequence, mismatchID, 0, plainBlock)
+	before := mismatchBuilder.machine.Snapshot()
+	if _, err := mismatchBuilder.machine.Accept(mismatchDone); codeOfStream(err) != CodeCompletionMismatch || mismatchBuilder.machine.Snapshot() != before {
+		t.Fatalf("unmatched completion code=%q snapshot=%#v", codeOfStream(err), mismatchBuilder.machine.Snapshot())
+	}
 }
 
 func TestMachineCitationMetadataCountsTowardResponseLimit(t *testing.T) {

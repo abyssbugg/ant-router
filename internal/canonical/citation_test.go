@@ -37,11 +37,18 @@ func TestURLCitationRejectsInvalid(t *testing.T) {
 		func() error { _, err := NewURLCitation(0, 2, "title", "http://example.com"); return err },
 		func() error { _, err := NewURLCitation(0, 2, "title", "https://user@example.com"); return err },
 		func() error { _, err := NewURLCitation(0, 2, "title", "https://example.com/\x00"); return err },
+		func() error {
+			_, err := NewURLCitation(0, 2, "title", "https://example.com/"+strings.Repeat("p", MaxHostedSearchURLBytes))
+			return err
+		},
 	}
 	for index, makeError := range tests {
 		if err := makeError(); err == nil {
 			t.Fatalf("invalid citation %d accepted", index)
 		}
+	}
+	if err := tests[len(tests)-1](); err == nil || codeOfCanonical(err) != CodeLimitExceeded {
+		t.Fatalf("over-limit URL error = %v", err)
 	}
 }
 

@@ -50,16 +50,20 @@ func protocolV2Response(t *testing.T, citationURL string) Response {
 
 func protocolV2Events(t *testing.T) []Event {
 	t.Helper()
-	eventID := testEventID(t, 126)
 	responseID := testResponseID(t, 126)
 	itemID := testItemID(t, 126)
 	action := testSearchAction(t)
-	started, _ := NewItemStartedEvent(eventID, responseID, 0, ItemStartParams{Index: 0, ID: itemID, Type: ItemType("hosted_search_call"), SearchStatus: HostedSearchStatusInProgress, SearchAction: action})
-	searching, _ := NewHostedSearchStatusEvent(eventID, responseID, 1, itemID, HostedSearchStatusSearching)
+	// Each event in the fixture must carry a unique ID, mirroring the
+	// duplicate-ID rejection the streaming machine enforces.
+	unique := func(sequence uint64) EventID {
+		return testEventID(t, byte(126+sequence))
+	}
+	started, _ := NewItemStartedEvent(unique(0), responseID, 0, ItemStartParams{Index: 0, ID: itemID, Type: ItemType("hosted_search_call"), SearchStatus: HostedSearchStatusInProgress, SearchAction: action})
+	searching, _ := NewHostedSearchStatusEvent(unique(1), responseID, 1, itemID, HostedSearchStatusSearching)
 	citation, _ := NewURLCitation(0, 4, "Example", "https://example.com")
-	cited, _ := NewURLCitationAddedEvent(eventID, responseID, 2, itemID, 0, citation)
-	customDelta, _ := NewCustomInputDeltaEvent(eventID, responseID, 3, itemID, "patch")
-	customDone, _ := NewCustomInputCompletedEvent(eventID, responseID, 4, itemID, "patch")
+	cited, _ := NewURLCitationAddedEvent(unique(2), responseID, 2, itemID, 0, citation)
+	customDelta, _ := NewCustomInputDeltaEvent(unique(3), responseID, 3, itemID, "patch")
+	customDone, _ := NewCustomInputCompletedEvent(unique(4), responseID, 4, itemID, "patch")
 	return []Event{started, searching, cited, customDelta, customDone}
 }
 

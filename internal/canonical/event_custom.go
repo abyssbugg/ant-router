@@ -11,7 +11,7 @@ type CustomInputDeltaPayload struct {
 func (p CustomInputDeltaPayload) ItemID() ItemID { return p.itemID }
 func (p CustomInputDeltaPayload) Delta() string  { return p.delta }
 func (p CustomInputDeltaPayload) Valid() bool {
-	return p.itemID.Valid() && p.delta != "" && utf8.ValidString(p.delta) && len(p.delta) <= MaxOrdinaryEventBytes && validCustomTextCharacters(p.delta)
+	return p.itemID.Valid() && p.delta != "" && utf8.ValidString(p.delta) && !deltaExceedsWireLimit(p.delta) && validCustomTextCharacters(p.delta)
 }
 
 // NewCustomInputDeltaEvent validates one freeform custom-tool input fragment.
@@ -25,7 +25,7 @@ func NewCustomInputDeltaEvent(id EventID, responseID ResponseID, sequence uint64
 		code := CodeInvalidInvariant
 		if !utf8.ValidString(delta) {
 			code = CodeInvalidUTF8
-		} else if len(delta) > MaxOrdinaryEventBytes {
+		} else if deltaExceedsWireLimit(delta) {
 			code = CodeLimitExceeded
 		}
 		return Event{}, eventError(code, "event.custom_input_delta")
