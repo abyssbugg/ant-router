@@ -154,25 +154,45 @@ Do not re-brainstorm or re-plan an already approved design after an interruption
 
 ---
 
-## 4. Select tools and skills deliberately
+## 4. Capabilities: Plugins, Skills, and Tools
 
-Before execution, identify the capabilities the task needs:
+Before execution, identify the capabilities the task needs. They are organized, in order, as **Plugins**, **Skills**, and **Tools**.
+
+### 4.1 Plugins
 
 | Capability | Use for |
 |---|---|
-| **Skills** | Required procedures such as brainstorming, TDD, systematic debugging, verification, and review |
-| **MCPs** | Sequential reasoning, current documentation, external systems, and specialized services |
-| **Subagents** | Independent research or bounded, non-overlapping leaf work |
-| **ByteRover** | Permanent protocols, accepted decisions, patterns, and project memory |
-| **Task tool** | Current scope, ownership, dependencies, and progress |
-| **Workspace tools** | Precise file reads and edits; prefer them over shell-based file mutation |
-| **Commands** | Targeted reproduction, tests, builds, and evidence gathering |
+| **Plugins** | Bundled capability packages that group related skills, commands, and context for a domain (for example, a review or language toolchain plugin). Prefer a maintained plugin over hand-assembling its parts. |
 
-Load every applicable skill before acting. Prefer purpose-built tools over raw shell commands, but do not invoke tools reflexively or without a clear purpose.
+### 4.2 Skills
+
+| Capability | Use for |
+|---|---|
+| **Skills** | Required procedures such as brainstorming, TDD, systematic debugging, verification, and review. Load every applicable skill before acting. |
+
+### 4.3 Tools
+
+| Capability | Use for |
+|---|---|
+| **ByteRover** | Permanent protocols, accepted decisions, patterns, and project memory. ByteRover remains a **mandatory query-before-work source** (Sections 0 and 2). It is accessed through its MCP integration when available; when the MCP capability is unavailable, its skill/CLI fallback is used. Either way, the query gate applies and unavailability must be reported, not silently bypassed. |
+| **Task tool** | Current scope, ownership, dependencies, and progress. |
+| **Workspace tools** | Precise file reads and edits; prefer them over shell-based file mutation. |
+| **Commands** | Targeted reproduction, tests, builds, and evidence gathering. |
+
+Prefer purpose-built tools over raw shell commands, but do not invoke tools reflexively or without a clear purpose.
+
+## 5. Model Context Protocol (MCP)
+
+MCP servers expose specialized capabilities — sequential reasoning, current documentation, external systems, and other services — as tools and resources.
+
+- Prefer the relevant MCP tool over shell-command fallbacks when both can accomplish the task.
+- Use the **Sequential Thinking MCP** for every non-trivial task before touching implementation (see Section 3).
+- If a required MCP capability is unavailable, report it and follow the same stop-and-ask rule defined for ByteRover in Section 2; do not silently substitute assumptions or stale recollection.
+- Do not invoke MCP tools reflexively or without a clear purpose.
 
 ---
 
-## 5. Understand and reproduce before changing
+## 6. Understand and reproduce before changing
 
 The first deliverable in an unfamiliar area is comprehension:
 
@@ -187,7 +207,7 @@ Never patch symptoms or stack a workaround on top of an unknown defect. A genuin
 
 ---
 
-## 6. Test-driven development is mandatory
+## 7. Test-driven development is mandatory
 
 For features, fixes, refactors, and behavior changes:
 
@@ -202,7 +222,7 @@ Do not write production behavior before a failing test. Do not weaken assertions
 
 ---
 
-## 7. Git and commit safety
+## 8. Git and commit safety
 
 - Inspect `git status` before and after a scoped change.
 - Never overwrite, revert, or include unrelated user work.
@@ -214,7 +234,7 @@ Do not write production behavior before a failing test. Do not weaken assertions
 
 ---
 
-## 8. Ant Router architecture
+## 9. Ant Router architecture
 
 Ant Router is a Go module (`github.com/abyssbugg/ant-router`) with two command surfaces and strongly validated internal boundaries:
 
@@ -236,7 +256,7 @@ Platform-specific behavior must preserve Unix and Windows implementations and co
 
 ---
 
-## 9. Verification commands
+## 10. Verification commands
 
 Start narrow and expand according to impact:
 
@@ -273,7 +293,7 @@ Use fault, fuzz, golden, stress, race, SDK-compatibility, cross-build, and end-t
 
 ---
 
-## 10. Review and completion gates
+## 11. Review and completion gates
 
 Before claiming a task complete:
 
@@ -293,7 +313,7 @@ A review agent's `PASS` is not evidence by itself. The controller must verify it
 
 ---
 
-## 11. Standard workflow
+## 12. Standard workflow
 
 ```text
 1. Protocol check          → interruption recovery if required; otherwise normal flow

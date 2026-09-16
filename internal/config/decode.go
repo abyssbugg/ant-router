@@ -225,6 +225,10 @@ func Decode(r io.Reader) (Config, error) {
 		if err := rejectProviderCapabilityBeforeVersion(wire.Providers, "custom_tools", CodexSchemaVersion); err != nil {
 			return Config{}, err
 		}
+		// Schema version 5 predates the written Codex capability baseline,
+		// so its valid payloads never carry all six capabilities. Mark the
+		// config so normalization migrates Codex-enabled models to v6.
+		cfg.v5Migrated = true
 	case SchemaVersion:
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 6")}

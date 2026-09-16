@@ -74,6 +74,100 @@ var knownProviderCapabilities = map[string]struct{}{
 	"tools":             {},
 }
 
+// codexBaselineCapabilities is the complete written baseline required by
+// Codex-enabled OpenAI models under schema version 6.
+var codexBaselineCapabilities = []string{"custom_tools", "hosted_web_search", "namespace_tools", "parallel_tools", "text", "tools"}
+
+// v5KnownProviderCapabilities is the capability set known to schema
+// version 5. It excludes custom_tools, which was introduced in v6.
+var v5KnownProviderCapabilities = map[string]struct{}{
+	"continuation":      {},
+	"image_input":       {},
+	"namespace_tools":   {},
+	"hosted_web_search": {},
+	"parallel_tools":    {},
+	"reasoning_summary": {},
+	"structured_output": {},
+	"text":              {},
+	"tools":             {},
+}
+
+// v5LegalCapabilities reports whether a capability list could have been
+// written under schema version 5 rules: non-empty, all entries known,
+// no duplicates, and hosted_web_search, namespace_tools, and
+// parallel_tools each requiring the tools capability as-written.
+// Migration may only complete capability sets that were legal v5
+// documents; illegal sets are left untouched so validation rejects
+// them with the original v5-era errors.
+func v5LegalCapabilities(capabilities []string) bool {
+	if len(capabilities) == 0 {
+		return false
+	}
+	hasTools := false
+	requiresTools := false
+	seen := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		if _, known := v5KnownProviderCapabilities[capability]; !known {
+			return false
+		}
+		if _, duplicate := seen[capability]; duplicate {
+			return false
+		}
+		seen[capability] = struct{}{}
+		switch capability {
+		case "tools":
+			hasTools = true
+		case "hosted_web_search", "namespace_tools", "parallel_tools":
+			requiresTools = true
+		}
+	}
+	return !requiresTools || hasTools
+}
+
+// completeV5CodexBaselines migrates schema version 5 providers to the
+// schema version 6 Codex capability baseline. Version 5 predates the
+// written baseline, so its legal Codex-enabled models are completed
+// rather than rejected. Models whose capability sets were invalid as
+// v5 documents are left untouched and rejected by validation with the
+// v5-era errors. Normalization sorts the resulting capabilities.
+func completeV5CodexBaselines(c Config) Config {
+	completed := c.clone()
+	for i := range completed.Providers {
+		if completed.Providers[i].Kind != ProviderKindOpenAI {
+			continue
+		}
+		for j := range completed.Providers[i].Models {
+			model := &completed.Providers[i].Models[j]
+			if model.Codex == nil || !model.Codex.Enabled {
+				continue
+			}
+			missing := missingCodexBaseline(model.Capabilities)
+			if len(missing) == 0 {
+				continue
+			}
+			if !v5LegalCapabilities(model.Capabilities) {
+				continue
+			}
+			model.Capabilities = append(model.Capabilities, missing...)
+		}
+	}
+	return completed
+}
+
+func missingCodexBaseline(capabilities []string) []string {
+	present := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		present[capability] = struct{}{}
+	}
+	missing := make([]string, 0, len(codexBaselineCapabilities))
+	for _, capability := range codexBaselineCapabilities {
+		if _, ok := present[capability]; !ok {
+			missing = append(missing, capability)
+		}
+	}
+	return missing
+}
+
 func (c Config) clone() Config {
 	cloned := c
 	if c.Providers != nil {
