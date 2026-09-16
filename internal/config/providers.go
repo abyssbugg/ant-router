@@ -74,6 +74,49 @@ var knownProviderCapabilities = map[string]struct{}{
 	"tools":             {},
 }
 
+// codexBaselineCapabilities is the complete written baseline required by
+// Codex-enabled OpenAI models under schema version 6.
+var codexBaselineCapabilities = []string{"custom_tools", "hosted_web_search", "namespace_tools", "parallel_tools", "text", "tools"}
+
+// completeV5CodexBaselines migrates schema version 5 providers to the
+// schema version 6 Codex capability baseline. Version 5 predates the
+// written baseline, so its Codex-enabled models are completed rather
+// than rejected. Normalization sorts the resulting capabilities.
+func completeV5CodexBaselines(c Config) Config {
+	completed := c.clone()
+	for i := range completed.Providers {
+		if completed.Providers[i].Kind != ProviderKindOpenAI {
+			continue
+		}
+		for j := range completed.Providers[i].Models {
+			model := &completed.Providers[i].Models[j]
+			if model.Codex == nil || !model.Codex.Enabled {
+				continue
+			}
+			missing := missingCodexBaseline(model.Capabilities)
+			if len(missing) == 0 {
+				continue
+			}
+			model.Capabilities = append(model.Capabilities, missing...)
+		}
+	}
+	return completed
+}
+
+func missingCodexBaseline(capabilities []string) []string {
+	present := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		present[capability] = struct{}{}
+	}
+	missing := make([]string, 0, len(codexBaselineCapabilities))
+	for _, capability := range codexBaselineCapabilities {
+		if _, ok := present[capability]; !ok {
+			missing = append(missing, capability)
+		}
+	}
+	return missing
+}
+
 func (c Config) clone() Config {
 	cloned := c
 	if c.Providers != nil {

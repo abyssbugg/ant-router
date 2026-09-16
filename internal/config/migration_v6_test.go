@@ -59,11 +59,14 @@ func TestSchemaV5MigratesToV6WithoutInferringCapabilities(t *testing.T) {
 	}
 }
 
-func TestSchemaV5CodexModelRequiresExplicitV6Baseline(t *testing.T) {
-	_, err := Decode(strings.NewReader(openAIVersionedTOML(5, `"text"`, true)))
-	var configErr *Error
-	if !errors.As(err, &configErr) || configErr.Code != CodeValidationFailed || configErr.Path != "providers[0].models[0].capabilities" {
-		t.Fatalf("error = %#v, want incomplete Codex baseline", err)
+func TestSchemaV5CodexModelMigratesToWrittenBaseline(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(openAIVersionedTOML(5, `"text", "tools"`, true)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"custom_tools", "hosted_web_search", "namespace_tools", "parallel_tools", "text", "tools"}
+	if !slices.Equal(cfg.Providers[0].Models[0].Capabilities, want) {
+		t.Fatalf("capabilities = %v, want %v", cfg.Providers[0].Models[0].Capabilities, want)
 	}
 }
 

@@ -36,6 +36,10 @@ func defaultDataPlaneConfig() DataPlaneConfig {
 }
 
 func (c Config) normalized() Config {
+	if c.v5Migrated {
+		c = completeV5CodexBaselines(c)
+		c.v5Migrated = false
+	}
 	if c.DataPlane == (DataPlaneConfig{}) {
 		c.DataPlane = defaultDataPlaneConfig()
 	}

@@ -21,6 +21,10 @@ type Config struct {
 	Providers     []ProviderConfig `toml:"providers,omitempty"`
 	// MockProvider is an unencoded compatibility shadow removed after daemon registry wiring.
 	MockProvider MockProviderConfig `toml:"-"`
+	// v5Migrated marks configs decoded from schema version 5, whose Codex
+	// payloads predate the written six-capability baseline. Their
+	// Codex-enabled models are completed during normalization.
+	v5Migrated bool
 }
 
 // DaemonConfig contains daemon-specific configuration

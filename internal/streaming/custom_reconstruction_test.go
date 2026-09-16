@@ -109,4 +109,90 @@ func TestMachineCustomInputRespectsResponseLimit(t *testing.T) {
 			t.Fatalf("limit code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
 		}
 	})
+
+	t.Run("streamed deltas reach exact limit", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = len(input)
+		b := newStreamBuilder(t, options)
+		itemID, callID := streamItemID(t, 35), streamCallID(t, 35)
+		startCustomItem(t, b, itemID, callID)
+		event, _ := canonical.NewCustomInputDeltaEvent(b.nextEventID(), b.responseID, b.sequence, itemID, input)
+		b.sequence++
+		transition := b.mustAccept(event)
+		if !transition.SemanticOutput() || !transition.JustCommitted() || b.machine.Snapshot().ReconstructedBytes() != len(input) {
+			t.Fatalf("streamed delta transition = %#v snapshot = %#v", transition, b.machine.Snapshot())
+		}
+		completion, _ := canonical.NewCustomInputCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, input)
+		b.sequence++
+		if transition := b.mustAccept(completion); transition.SemanticOutput() || transition.JustCommitted() {
+			t.Fatalf("completion after streamed delta = %#v", transition)
+		}
+	})
+
+	t.Run("streamed delta beyond response limit is transactional", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = len(input) - 1
+		b := newStreamBuilder(t, options)
+		itemID, callID := streamItemID(t, 36), streamCallID(t, 36)
+		startCustomItem(t, b, itemID, callID)
+		event, _ := canonical.NewCustomInputDeltaEvent(b.nextEventID(), b.responseID, b.sequence, itemID, input)
+		before := b.machine.Snapshot()
+		if _, err := b.machine.Accept(event); codeOfStream(err) != CodeResponseLimitExceeded || b.machine.Snapshot() != before {
+			t.Fatalf("limit code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
+		}
+		completion, _ := canonical.NewCustomInputCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, "")
+		b.sequence++
+		transition := b.mustAccept(completion)
+		if !transition.SemanticOutput() || !transition.JustCommitted() || b.machine.Snapshot().ReconstructedBytes() != 0 {
+			t.Fatalf("completion after rejected delta = %#v snapshot = %#v", transition, b.machine.Snapshot())
+		}
+	})
+
+	t.Run("rejected delta preserves accumulated buffer", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = 4
+		b := newStreamBuilder(t, options)
+		itemID, callID := streamItemID(t, 37), streamCallID(t, 37)
+		startCustomItem(t, b, itemID, callID)
+		first, _ := canonical.NewCustomInputDeltaEvent(b.nextEventID(), b.responseID, b.sequence, itemID, "ab")
+		b.sequence++
+		b.mustAccept(first)
+		oversized, _ := canonical.NewCustomInputDeltaEvent(b.nextEventID(), b.responseID, b.sequence, itemID, "cde")
+		before := b.machine.Snapshot()
+		if _, err := b.machine.Accept(oversized); codeOfStream(err) != CodeResponseLimitExceeded || b.machine.Snapshot() != before {
+			t.Fatalf("oversized delta code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
+		}
+		continuation, _ := canonical.NewCustomInputDeltaEvent(b.nextEventID(), b.responseID, b.sequence, itemID, "cd")
+		b.sequence++
+		transition := b.mustAccept(continuation)
+		if !transition.SemanticOutput() || b.machine.Snapshot().ReconstructedBytes() != 4 {
+			t.Fatalf("continuation delta = %#v snapshot = %#v", transition, b.machine.Snapshot())
+		}
+		completion, _ := canonical.NewCustomInputCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, "abcd")
+		b.sequence++
+		if transition := b.mustAccept(completion); transition.SemanticOutput() || transition.JustCommitted() {
+			t.Fatalf("completion = %#v", transition)
+		}
+	})
+
+	t.Run("accumulated deltas beyond custom input cap are transactional", func(t *testing.T) {
+		b := newStreamBuilder(t, DefaultMachineOptions())
+		itemID, callID := streamItemID(t, 38), streamCallID(t, 38)
+		startCustomItem(t, b, itemID, callID)
+		filler := strings.Repeat("x", canonical.MaxCustomToolInputBytes-256)
+		first, err := canonical.NewCustomInputDeltaEvent(b.nextEventID(), b.responseID, b.sequence, itemID, filler)
+		if err != nil {
+			t.Fatalf("first delta constructor: %v", err)
+		}
+		b.sequence++
+		b.mustAccept(first)
+		second, err := canonical.NewCustomInputDeltaEvent(b.nextEventID(), b.responseID, b.sequence, itemID, filler)
+		if err != nil {
+			t.Fatalf("second delta constructor: %v", err)
+		}
+		before := b.machine.Snapshot()
+		if _, err := b.machine.Accept(second); codeOfStream(err) != CodeResponseLimitExceeded || b.machine.Snapshot() != before {
+			t.Fatalf("cap code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
+		}
+	})
 }
