@@ -81,6 +81,23 @@ func TestCustomInputDeltaEventEncodesWithinWireLimit(t *testing.T) {
 	}
 }
 
+func TestCustomInputCompletedEventEncodesWithinWireLimit(t *testing.T) {
+	itemID := testItemID(t, 108)
+	filler := strings.Repeat("a", MaxCustomToolInputBytes-256)
+	event, err := NewCustomInputCompletedEvent(testEventID(t, 108), testResponseID(t, 108), 0, itemID, filler)
+	if err != nil {
+		t.Fatalf("custom input completed constructor: %v", err)
+	}
+	if _, err := EncodeEvent(event); err != nil {
+		t.Fatalf("encoded custom input completed exceeded wire limit: %v", err)
+	}
+	escaped := strings.Repeat("\"", MaxCustomToolInputBytes-256)
+	_, err = NewCustomInputCompletedEvent(testEventID(t, 109), testResponseID(t, 109), 0, itemID, escaped)
+	if codeOfCanonical(err) != CodeLimitExceeded {
+		t.Fatalf("escaped oversized custom input completed error = %v", err)
+	}
+}
+
 func TestCustomCallErrorsRedactInput(t *testing.T) {
 	const secret = "custom-secret-6947219efdb84ae5"
 	_, err := NewCustomInputDeltaEvent(testEventID(t, 99), testResponseID(t, 99), 0, testItemID(t, 99), secret+"\x00")

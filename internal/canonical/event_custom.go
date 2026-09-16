@@ -43,7 +43,7 @@ type CustomInputCompletedPayload struct {
 func (p CustomInputCompletedPayload) ItemID() ItemID { return p.itemID }
 func (p CustomInputCompletedPayload) Input() string  { return p.input }
 func (p CustomInputCompletedPayload) Valid() bool {
-	return p.itemID.Valid() && utf8.ValidString(p.input) && len(p.input) <= MaxCustomToolInputBytes && validCustomTextCharacters(p.input)
+	return p.itemID.Valid() && utf8.ValidString(p.input) && len(p.input) <= MaxCustomToolInputBytes && !deltaExceedsWireLimit(p.input) && validCustomTextCharacters(p.input)
 }
 
 // NewCustomInputCompletedEvent validates authoritative freeform custom-tool input.
@@ -57,7 +57,7 @@ func NewCustomInputCompletedEvent(id EventID, responseID ResponseID, sequence ui
 		code := CodeInvalidInvariant
 		if !utf8.ValidString(input) {
 			code = CodeInvalidUTF8
-		} else if len(input) > MaxCustomToolInputBytes {
+		} else if len(input) > MaxCustomToolInputBytes || deltaExceedsWireLimit(input) {
 			code = CodeLimitExceeded
 		}
 		return Event{}, eventError(code, "event.custom_input_completed")

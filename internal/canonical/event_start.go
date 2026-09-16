@@ -63,7 +63,9 @@ func (p ItemStartedPayload) Valid() bool {
 	if p.index < 0 || p.index >= MaxResponseItems || !p.id.Valid() {
 		return false
 	}
-	hasSearchMetadata := p.searchStatus.Valid() || p.searchAction.Valid()
+	// Presence, not validity: any non-zero search field is search metadata
+	// even when its value is invalid, so non-search item types reject it.
+	hasSearchMetadata := p.searchStatus != "" || p.searchAction.Kind().Valid()
 	switch p.kind {
 	case ItemType("message"):
 		return p.role == Role("assistant") && !p.callID.Valid() && p.namespace == "" && p.name == "" && !hasSearchMetadata
