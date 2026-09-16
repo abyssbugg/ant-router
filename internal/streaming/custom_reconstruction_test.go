@@ -83,14 +83,30 @@ func TestMachineCustomInputFailuresAreTransactional(t *testing.T) {
 }
 
 func TestMachineCustomInputRespectsResponseLimit(t *testing.T) {
-	options := DefaultMachineOptions()
-	options.MaxResponseBytes = 4
-	b := newStreamBuilder(t, options)
-	itemID, callID := streamItemID(t, 33), streamCallID(t, 33)
-	startCustomItem(t, b, itemID, callID)
-	event, _ := canonical.NewCustomInputCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, strings.Repeat("x", 5))
-	before := b.machine.Snapshot()
-	if _, err := b.machine.Accept(event); codeOfStream(err) != CodeResponseLimitExceeded || b.machine.Snapshot() != before {
-		t.Fatalf("limit code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
-	}
+	const input = "patch"
+
+	t.Run("exact limit", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = len(input)
+		b := newStreamBuilder(t, options)
+		itemID, callID := streamItemID(t, 33), streamCallID(t, 33)
+		startCustomItem(t, b, itemID, callID)
+		event, _ := canonical.NewCustomInputCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, input)
+		if _, err := b.machine.Accept(event); err != nil || b.machine.Snapshot().ReconstructedBytes() != len(input) {
+			t.Fatalf("exact limit err=%v snapshot=%#v", err, b.machine.Snapshot())
+		}
+	})
+
+	t.Run("limit exceeded is transactional", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = len(input) - 1
+		b := newStreamBuilder(t, options)
+		itemID, callID := streamItemID(t, 34), streamCallID(t, 34)
+		startCustomItem(t, b, itemID, callID)
+		event, _ := canonical.NewCustomInputCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, strings.Repeat("x", len(input)))
+		before := b.machine.Snapshot()
+		if _, err := b.machine.Accept(event); codeOfStream(err) != CodeResponseLimitExceeded || b.machine.Snapshot() != before {
+			t.Fatalf("limit code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
+		}
+	})
 }

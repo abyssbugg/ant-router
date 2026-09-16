@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+
+language: en-US
+tone_instructions: >-
+  Be concise, technically rigorous, and evidence-based. Prioritize correctness,
+  security, transactional behavior, compatibility, and maintainability over style.
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: false
+  review_status: true
+  commit_status: true
+  fail_commit_status: false
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: false
+  auto_apply_labels: false
+  suggested_reviewers: false
+  auto_assign_reviewers: false
+  poem: false
+  path_filters: []
+  path_instructions:
+    - path: "**/*.go"
+      instructions: >-
+        Review Go correctness, error identity, validation order, immutable-value
+        assumptions, defensive copying, byte and item limits, race safety,
+        context cancellation, platform parity, and compatibility with existing APIs.
+    - path: "internal/canonical/**"
+      instructions: >-
+        Preserve provider-neutral canonical contracts, strict constructors and
+        validation, deterministic codecs, bounded inputs, and exact round trips.
+    - path: "internal/streaming/**"
+      instructions: >-
+        Treat the stream machine as transactional. Rejected events must not mutate
+        snapshots or counters. Verify legal lifecycle transitions, semantic commit
+        boundaries, reconstruction equality, response-size accounting, terminal
+        behavior, and continuation safety.
+    - path: "**/*_test.go"
+      instructions: >-
+        Require behavioral assertions for success and failure paths, transactional
+        rollback checks, boundary limits, race-sensitive behavior, and regression
+        coverage. Flag tests that merely mirror implementation details.
+    - path: "CLAUDE.md"
+      instructions: >-
+        Preserve both permanent Ant Router protocols, explicit user approval for
+        commits and remote mutations, ByteRover/task-tool coordination, worktree
+        isolation, TDD, independent review gates, and evidence-based reporting.
+  abort_on_close: true
+  disable_cache: false
+  tools:
+    markdownlint:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 90000
+    golangci-lint:
+      enabled: true
+      config_file: ""
+    yamllint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    actionlint:
+      enabled: true
+    checkmake:
+      enabled: true
+    semgrep:
+      enabled: true
+      config_file: ""
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CLAUDE.md"
+      - "**/*.go"
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
+  pull_requests:
+    scope: auto

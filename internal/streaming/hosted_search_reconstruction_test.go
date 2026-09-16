@@ -49,6 +49,33 @@ func TestMachineReconstructsHostedSearchAndCommitsAtStart(t *testing.T) {
 	}
 }
 
+func TestMachineHostedSearchActionCountsTowardResponseLimit(t *testing.T) {
+	const actionBytes = len("ant router") + len("https://example.com")
+
+	t.Run("exact limit", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = actionBytes
+		b := newStreamBuilder(t, options)
+		itemID := streamItemID(t, 43)
+		startSearchItem(t, b, itemID)
+		if got := b.machine.Snapshot().ReconstructedBytes(); got != actionBytes {
+			t.Fatalf("reconstructed bytes = %d, want %d", got, actionBytes)
+		}
+	})
+
+	t.Run("limit exceeded is transactional", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = actionBytes - 1
+		b := newStreamBuilder(t, options)
+		itemID := streamItemID(t, 44)
+		start, _ := canonical.NewItemStartedEvent(b.nextEventID(), b.responseID, b.sequence, canonical.ItemStartParams{Index: 0, ID: itemID, Type: canonical.ItemType("hosted_search_call"), SearchStatus: canonical.HostedSearchStatusInProgress, SearchAction: searchAction(t)})
+		before := b.machine.Snapshot()
+		if _, err := b.machine.Accept(start); codeOfStream(err) != CodeResponseLimitExceeded || b.machine.Snapshot() != before {
+			t.Fatalf("limit code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
+		}
+	})
+}
+
 func TestMachineRejectsHostedSearchStatusRegressionTransactionally(t *testing.T) {
 	b := newStreamBuilder(t, DefaultMachineOptions())
 	itemID := streamItemID(t, 41)

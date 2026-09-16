@@ -16,9 +16,28 @@ func (m *Machine) acceptItemStarted(event canonical.Event) error {
 	if _, exists := m.items[payload.ID()]; exists {
 		return m.error(CodeInvalidItemState, "event.item_started.id")
 	}
+	nextBytes := m.reconstructedBytes
+	if payload.Type() == canonical.ItemType("hosted_search_call") {
+		nextBytes += hostedSearchActionSize(payload.SearchAction())
+		if nextBytes > m.options.MaxResponseBytes {
+			return m.error(CodeResponseLimitExceeded, "event.item_started")
+		}
+	}
 	m.items[payload.ID()] = newItemState(payload)
 	m.itemOrder = append(m.itemOrder, payload.ID())
+	m.reconstructedBytes = nextBytes
 	return nil
+}
+
+func hostedSearchActionSize(action canonical.HostedSearchAction) int {
+	size := len(action.URL()) + len(action.Pattern())
+	for _, query := range action.Queries() {
+		size += len(query)
+	}
+	for _, source := range action.Sources() {
+		size += len(source)
+	}
+	return size
 }
 
 func (m *Machine) acceptContentStarted(event canonical.Event) error {

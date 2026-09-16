@@ -45,6 +45,13 @@ func TestURLCitationRejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestURLCitationRejectsIndexBeyondTextLimit(t *testing.T) {
+	_, err := NewURLCitation(0, MaxTextBytes+1, "title", "https://example.com")
+	if codeOfCanonical(err) != CodeInvalidInvariant {
+		t.Fatalf("citation index error = %v", err)
+	}
+}
+
 func TestTextCitationsValidateRangesAndOrdering(t *testing.T) {
 	first, _ := NewURLCitation(0, 4, "First", "https://example.com/first")
 	second, _ := NewURLCitation(5, 11, "Second", "https://example.com/second")

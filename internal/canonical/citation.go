@@ -36,7 +36,7 @@ func (c URLCitation) URL() string     { return c.url }
 
 // Valid reports whether a citation satisfies structural and URL invariants.
 func (c URLCitation) Valid() bool {
-	return c.startIndex >= 0 && c.endIndex > c.startIndex && validBoundedMetadata(c.title, MaxCitationTitleBytes, true) && validHTTPSReference(c.url)
+	return c.startIndex >= 0 && c.endIndex > c.startIndex && c.endIndex <= MaxTextBytes && validBoundedMetadata(c.title, MaxCitationTitleBytes, true) && validHTTPSReference(c.url)
 }
 
 func (c URLCitation) validForText(text string) bool {

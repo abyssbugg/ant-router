@@ -85,6 +85,39 @@ func TestMachineCitationMismatchIsTransactional(t *testing.T) {
 	}
 }
 
+func TestMachineAtomicCitedTextRespectsResponseLimit(t *testing.T) {
+	citation := testCitation(t)
+	text, _ := canonical.NewTextContentWithCitations("test", []canonical.URLCitation{citation})
+	block, _ := canonical.NewTextBlock(text)
+	const textBytes = len("test")
+	totalBytes := textBytes + citationSize(citation)
+
+	t.Run("exact limit", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = totalBytes
+		b := newStreamBuilder(t, options)
+		itemID := streamItemID(t, 54)
+		startTextContent(t, b, itemID)
+		event, _ := canonical.NewContentCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, 0, block)
+		if _, err := b.machine.Accept(event); err != nil || b.machine.Snapshot().ReconstructedBytes() != totalBytes {
+			t.Fatalf("exact limit err=%v snapshot=%#v", err, b.machine.Snapshot())
+		}
+	})
+
+	t.Run("limit exceeded is transactional", func(t *testing.T) {
+		options := DefaultMachineOptions()
+		options.MaxResponseBytes = totalBytes - 1
+		b := newStreamBuilder(t, options)
+		itemID := streamItemID(t, 55)
+		startTextContent(t, b, itemID)
+		event, _ := canonical.NewContentCompletedEvent(b.nextEventID(), b.responseID, b.sequence, itemID, 0, block)
+		before := b.machine.Snapshot()
+		if _, err := b.machine.Accept(event); codeOfStream(err) != CodeResponseLimitExceeded || b.machine.Snapshot() != before {
+			t.Fatalf("limit code=%q snapshot=%#v", codeOfStream(err), b.machine.Snapshot())
+		}
+	})
+}
+
 func TestMachineCitationMetadataCountsTowardResponseLimit(t *testing.T) {
 	options := DefaultMachineOptions()
 	options.MaxResponseBytes = 4
