@@ -207,6 +207,65 @@ func TestSchemaV6CodexPayloadStillRequiresWrittenBaseline(t *testing.T) {
 	}
 }
 
+const schemaV5CodexNoCapabilitiesTOML = `schema_version = 5
+[[providers]]
+id = "openai-primary"
+kind = "openai"
+enabled = true
+[providers.credential]
+source = "env"
+name = "OPENAI_API_KEY"
+[[providers.models]]
+alias = "openai/gpt-test"
+upstream = "gpt-test"
+[providers.models.codex]
+enabled = true
+display_name = "GPT Test"
+description = "Test"
+context_window = 128000
+effective_context_window_percent = 90
+priority = 10
+visibility = "list"
+`
+
+func TestSchemaV5CodexPayloadRejectsEmptyCapabilities(t *testing.T) {
+	_, err := Decode(strings.NewReader(schemaV5CodexNoCapabilitiesTOML))
+	var configErr *Error
+	if !errors.As(err, &configErr) || configErr.Code != CodeValidationFailed || configErr.Path != "providers[0].models[0].capabilities" {
+		t.Fatalf("error = %#v, want schema-v5 empty capability rejection", err)
+	}
+}
+
+const schemaV5CodexHostedSearchWithoutToolsTOML = `schema_version = 5
+[[providers]]
+id = "openai-primary"
+kind = "openai"
+enabled = true
+[providers.credential]
+source = "env"
+name = "OPENAI_API_KEY"
+[[providers.models]]
+alias = "openai/gpt-test"
+upstream = "gpt-test"
+capabilities = ["hosted_web_search"]
+[providers.models.codex]
+enabled = true
+display_name = "GPT Test"
+description = "Test"
+context_window = 128000
+effective_context_window_percent = 90
+priority = 10
+visibility = "list"
+`
+
+func TestSchemaV5CodexPayloadRejectsHostedSearchWithoutTools(t *testing.T) {
+	_, err := Decode(strings.NewReader(schemaV5CodexHostedSearchWithoutToolsTOML))
+	var configErr *Error
+	if !errors.As(err, &configErr) || configErr.Code != CodeValidationFailed || configErr.Path != "providers[0].models[0].capabilities[0]" {
+		t.Fatalf("error = %#v, want schema-v5 hosted web search rejection", err)
+	}
+}
+
 func TestSchemaV6DecodesCodexMetadata(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(`schema_version = 6
 [[providers]]
