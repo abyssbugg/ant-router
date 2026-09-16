@@ -79,10 +79,22 @@ func (m *Machine) Accept(event canonical.Event) (Transition, error) {
 		err = m.acceptContinuationUpdated(event)
 	case canonical.EventType("item_started"):
 		err = m.acceptItemStarted(event)
+		if err == nil {
+			payload, _ := event.ItemStarted()
+			outcome.semantic = payload.Type() == canonical.ItemType("hosted_search_call")
+		}
 	case canonical.EventType("content_started"):
 		err = m.acceptContentStarted(event)
 	case canonical.EventType("text_delta"), canonical.EventType("json_delta"), canonical.EventType("tool_arguments_delta"):
 		outcome, err = m.acceptDelta(event)
+	case canonical.EventType("custom_input_delta"):
+		outcome, err = m.acceptCustomInputDelta(event)
+	case canonical.EventType("custom_input_completed"):
+		outcome, err = m.acceptCustomInputCompleted(event)
+	case canonical.EventType("hosted_search_status"):
+		outcome, err = m.acceptHostedSearchStatus(event)
+	case canonical.EventType("url_citation_added"):
+		outcome, err = m.acceptURLCitationAdded(event)
 	case canonical.EventType("content_completed"):
 		outcome, err = m.acceptContentCompleted(event)
 	case canonical.EventType("item_completed"):

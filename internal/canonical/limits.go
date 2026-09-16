@@ -15,9 +15,9 @@ const (
 	MaxJSONDepth = 64
 	// MaxTools limits tool definitions in one request.
 	MaxTools = 128
-	// MaxNamespaceTools limits direct functions inside one namespace.
+	// MaxNamespaceTools limits function and custom children inside one namespace.
 	MaxNamespaceTools = 128
-	// MaxTotalToolFunctions limits all direct and namespaced functions in one request.
+	// MaxTotalToolFunctions limits all direct and namespaced function/custom tools in one request.
 	MaxTotalToolFunctions = 256
 	// MaxToolNameBytes limits a portable function or namespace name.
 	MaxToolNameBytes = 64
@@ -35,6 +35,24 @@ const (
 	MaxOutputTokens = 1_000_000
 	// MaxToolSchemaBytes limits one tool input schema.
 	MaxToolSchemaBytes = 256 << 10
+	// MaxCustomGrammarBytes limits one custom-tool grammar definition.
+	MaxCustomGrammarBytes = 256 << 10
+	// MaxCustomToolInputBytes limits one completed custom-tool input.
+	MaxCustomToolInputBytes = 2 << 20
+	// MaxHostedSearchQueries limits search queries in one action.
+	MaxHostedSearchQueries = 16
+	// MaxHostedSearchQueryBytes limits one search query.
+	MaxHostedSearchQueryBytes = 4 << 10
+	// MaxHostedSearchSources limits source URLs in one search action.
+	MaxHostedSearchSources = 32
+	// MaxHostedSearchURLBytes limits one hosted-search or citation URL.
+	MaxHostedSearchURLBytes = 8 << 10
+	// MaxHostedSearchPatternBytes limits one find-in-page pattern.
+	MaxHostedSearchPatternBytes = 4 << 10
+	// MaxTextCitations limits URL citations on one text block.
+	MaxTextCitations = 64
+	// MaxCitationTitleBytes limits one URL citation title.
+	MaxCitationTitleBytes = 4 << 10
 	// MaxInlineImageBytes limits one inline image payload.
 	MaxInlineImageBytes = 20 << 20
 	// MaxImageURLBytes limits one remote image URL.

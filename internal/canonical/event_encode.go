@@ -31,7 +31,12 @@ func encodeEventData(event Event) (json.RawMessage, error) {
 		return marshalCodec(continuationUpdatedDTO{Continuation: *encoded}, MaxOrdinaryEventBytes)
 	case EventType("item_started"):
 		payload, _ := event.ItemStarted()
-		return marshalCodec(itemStartedDTO{Index: payload.Index(), ID: payload.ID().String(), ItemType: string(payload.Type()), Role: string(payload.Role()), CallID: payload.CallID().String(), Namespace: payload.Namespace(), Name: payload.Name()}, MaxOrdinaryEventBytes)
+		dto := itemStartedDTO{Index: payload.Index(), ID: payload.ID().String(), ItemType: string(payload.Type()), Role: string(payload.Role()), CallID: payload.CallID().String(), Namespace: payload.Namespace(), Name: payload.Name(), SearchStatus: string(payload.SearchStatus())}
+		if action := payload.SearchAction(); action.Valid() {
+			encoded := encodeHostedSearchAction(action)
+			dto.SearchAction = &encoded
+		}
+		return marshalCodec(dto, MaxOrdinaryEventBytes)
 	case EventType("content_started"):
 		payload, _ := event.ContentStarted()
 		return marshalCodec(contentStartedDTO{ItemID: payload.ItemID().String(), ContentIndex: payload.Index(), ContentType: string(payload.Type())}, MaxOrdinaryEventBytes)
@@ -44,6 +49,18 @@ func encodeEventData(event Event) (json.RawMessage, error) {
 	case EventType("tool_arguments_delta"):
 		payload, _ := event.ToolArgumentsDelta()
 		return marshalCodec(toolArgumentsDeltaDTO{ItemID: payload.ItemID().String(), Delta: payload.Delta()}, MaxOrdinaryEventBytes)
+	case EventType("custom_input_delta"):
+		payload, _ := event.CustomInputDelta()
+		return marshalCodec(customInputDeltaDTO{ItemID: payload.ItemID().String(), Delta: payload.Delta()}, MaxOrdinaryEventBytes)
+	case EventType("custom_input_completed"):
+		payload, _ := event.CustomInputCompleted()
+		return marshalCodec(customInputCompletedDTO{ItemID: payload.ItemID().String(), Input: payload.Input()}, MaxOrdinaryEventBytes)
+	case EventType("hosted_search_status"):
+		payload, _ := event.HostedSearchStatus()
+		return marshalCodec(hostedSearchStatusDTO{ItemID: payload.ItemID().String(), Status: string(payload.Status())}, MaxOrdinaryEventBytes)
+	case EventType("url_citation_added"):
+		payload, _ := event.URLCitationAdded()
+		return marshalCodec(urlCitationAddedDTO{ItemID: payload.ItemID().String(), ContentIndex: payload.ContentIndex(), Citation: encodeURLCitation(payload.Citation())}, MaxOrdinaryEventBytes)
 	case EventType("content_completed"):
 		payload, _ := event.ContentCompleted()
 		content, err := encodeContent(payload.Content())

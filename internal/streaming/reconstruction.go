@@ -92,6 +92,40 @@ func reconstructItem(state *itemState, final canonical.Item) (canonical.Item, in
 			return canonical.Item{}, 0, eventStateError(CodeCompletionMismatch, "event.item_completed")
 		}
 		return item, atomicBytes, nil
+	case canonical.ItemType("custom_tool_call"):
+		finalCall, ok := final.CustomToolCall()
+		if !ok || !state.customInputCompleted || finalCall.CallID() != state.callID || finalCall.Namespace() != state.namespace || finalCall.Name() != state.name || finalCall.Input() != string(state.customInput) || len(state.contents) != 0 || len(state.arguments) != 0 {
+			return canonical.Item{}, 0, eventStateError(CodeCompletionMismatch, "event.item_completed")
+		}
+		var call canonical.CustomToolCall
+		var err error
+		if state.namespace == "" {
+			call, err = canonical.NewCustomToolCall(state.id, state.callID, state.name, string(state.customInput))
+		} else {
+			call, err = canonical.NewNamespacedCustomToolCall(state.id, state.callID, state.namespace, state.name, string(state.customInput))
+		}
+		if err != nil {
+			return canonical.Item{}, 0, err
+		}
+		item, err := canonical.NewCustomToolCallItem(call)
+		if err != nil || !itemEqual(item, final) {
+			return canonical.Item{}, 0, eventStateError(CodeCompletionMismatch, "event.item_completed")
+		}
+		return item, 0, nil
+	case canonical.ItemType("hosted_search_call"):
+		finalCall, ok := final.HostedSearchCall()
+		if !ok || !state.searchStatus.Terminal() || finalCall.Status() != state.searchStatus || !hostedSearchActionEqual(finalCall.Action(), state.searchAction) || len(state.contents) != 0 || len(state.arguments) != 0 || len(state.customInput) != 0 {
+			return canonical.Item{}, 0, eventStateError(CodeCompletionMismatch, "event.item_completed")
+		}
+		call, err := canonical.NewHostedSearchCall(state.id, state.searchStatus, state.searchAction)
+		if err != nil {
+			return canonical.Item{}, 0, err
+		}
+		item, err := canonical.NewHostedSearchCallItem(call)
+		if err != nil || !itemEqual(item, final) {
+			return canonical.Item{}, 0, eventStateError(CodeCompletionMismatch, "event.item_completed")
+		}
+		return item, 0, nil
 	default:
 		return canonical.Item{}, 0, eventStateError(CodeInvalidItemState, "event.item_completed")
 	}

@@ -36,7 +36,7 @@ func TestRemoteImageAllowsUnknownMIME(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeContent() failed: %v", err)
 	}
-	decoded, err := decodeContent(encoded)
+	decoded, err := decodeContent(encoded, ProtocolVersion)
 	if err != nil {
 		t.Fatalf("decodeContent() failed: %v", err)
 	}

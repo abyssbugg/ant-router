@@ -63,6 +63,7 @@ var (
 
 var knownProviderCapabilities = map[string]struct{}{
 	"continuation":      {},
+	"custom_tools":      {},
 	"image_input":       {},
 	"namespace_tools":   {},
 	"hosted_web_search": {},
@@ -219,6 +220,7 @@ func validateProviders(c Config) error {
 				}
 				hasText := false
 				hasTools := false
+				customIndex := -1
 				namespaceIndex := -1
 				hostedSearchIndex := -1
 				parallelIndex := -1
@@ -235,6 +237,9 @@ func validateProviders(c Config) error {
 					}
 					hasText = hasText || capability == "text"
 					hasTools = hasTools || capability == "tools"
+					if capability == "custom_tools" {
+						customIndex = k
+					}
 					if capability == "namespace_tools" {
 						namespaceIndex = k
 					}
@@ -244,6 +249,10 @@ func validateProviders(c Config) error {
 					if capability == "parallel_tools" {
 						parallelIndex = k
 					}
+				}
+				if customIndex >= 0 && !hasTools {
+					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, customIndex)
+					return providerValidationError(path, "custom tools requires tools capability")
 				}
 				if hostedSearchIndex >= 0 && !hasTools {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, hostedSearchIndex)
@@ -259,6 +268,9 @@ func validateProviders(c Config) error {
 				}
 				if err := validateCodexModel(model.Codex, modelPrefix+".codex"); err != nil {
 					return err
+				}
+				if provider.Kind == ProviderKindOpenAI && model.Codex != nil && model.Codex.Enabled && (!hasText || !hasTools || customIndex < 0 || namespaceIndex < 0 || hostedSearchIndex < 0 || parallelIndex < 0) {
+					return providerValidationError(modelPrefix+".capabilities", "Codex-enabled OpenAI model requires the complete Codex capability baseline")
 				}
 				if provider.Kind == ProviderKindAnthropic {
 					if !hasText {

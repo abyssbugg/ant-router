@@ -69,7 +69,7 @@ func (v ImageDetail) Valid() bool { return oneOf(string(v), "auto", "low", "high
 
 // Valid reports whether the item type is supported.
 func (v ItemType) Valid() bool {
-	return oneOf(string(v), "message", "tool_call", "tool_result", "reasoning_summary")
+	return oneOf(string(v), "message", "tool_call", "custom_tool_call", "hosted_search_call", "tool_result", "reasoning_summary")
 }
 
 // Valid reports whether the content type is supported.
@@ -77,7 +77,7 @@ func (v ContentType) Valid() bool { return oneOf(string(v), "text", "image", "js
 
 // Valid reports whether the event type is supported.
 func (v EventType) Valid() bool {
-	return oneOf(string(v), "response_started", "continuation_updated", "item_started", "content_started", "text_delta", "json_delta", "tool_arguments_delta", "content_completed", "item_completed", "usage_updated", "response_completed", "response_failed", "response_cancelled")
+	return oneOf(string(v), "response_started", "continuation_updated", "item_started", "content_started", "text_delta", "json_delta", "tool_arguments_delta", "custom_input_delta", "custom_input_completed", "hosted_search_status", "url_citation_added", "content_completed", "item_completed", "usage_updated", "response_completed", "response_failed", "response_cancelled")
 }
 
 // Valid reports whether the finish reason is supported.

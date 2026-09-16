@@ -13,6 +13,11 @@ func FuzzDecodeRequest(f *testing.F) {
 		f.Fatalf("read seed: %v", err)
 	}
 	f.Add(seed)
+	v2Seed, err := os.ReadFile("testdata/v2/request_custom_search.json")
+	if err != nil {
+		f.Fatalf("read v2 seed: %v", err)
+	}
+	f.Add(v2Seed)
 	f.Add([]byte(`{}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		value, err := DecodeRequest(data)
@@ -34,8 +39,12 @@ func FuzzDecodeRequest(f *testing.F) {
 		if !bytes.Equal(encoded, reencoded) {
 			t.Fatal("request round trip unstable")
 		}
-		_, _ = FullDigest(value)
-		_, _ = PortableDigest(value)
+		if _, err := FullDigest(value); err != nil {
+			t.Fatalf("full digest: %v", err)
+		}
+		if _, err := PortableDigest(value); err != nil {
+			t.Fatalf("portable digest: %v", err)
+		}
 	})
 }
 
@@ -45,6 +54,11 @@ func FuzzDecodeResponse(f *testing.F) {
 		f.Fatalf("read seed: %v", err)
 	}
 	f.Add(seed)
+	v2Seed, err := os.ReadFile("testdata/v2/response_custom_search_citation.json")
+	if err != nil {
+		f.Fatalf("read v2 seed: %v", err)
+	}
+	f.Add(v2Seed)
 	f.Add([]byte(`{}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		value, err := DecodeResponse(data)
@@ -66,6 +80,12 @@ func FuzzDecodeResponse(f *testing.F) {
 		if !bytes.Equal(encoded, reencoded) {
 			t.Fatal("response round trip unstable")
 		}
+		if _, err := FullResponseDigest(value); err != nil {
+			t.Fatalf("full response digest: %v", err)
+		}
+		if _, err := PortableResponseDigest(value); err != nil {
+			t.Fatalf("portable response digest: %v", err)
+		}
 	})
 }
 
@@ -79,6 +99,17 @@ func FuzzDecodeEvent(f *testing.F) {
 		f.Fatalf("decode seed: %v", err)
 	}
 	for _, event := range events {
+		f.Add([]byte(event))
+	}
+	v2Stream, err := os.ReadFile("testdata/v2/event_stream_custom_search.json")
+	if err != nil {
+		f.Fatalf("read v2 seed: %v", err)
+	}
+	var v2Events []json.RawMessage
+	if err := json.Unmarshal(v2Stream, &v2Events); err != nil {
+		f.Fatalf("decode v2 seed: %v", err)
+	}
+	for _, event := range v2Events {
 		f.Add([]byte(event))
 	}
 	f.Add([]byte(`{}`))

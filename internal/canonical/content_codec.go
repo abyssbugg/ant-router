@@ -13,7 +13,11 @@ func encodeContent(block ContentBlock) (json.RawMessage, error) {
 	switch block.Type() {
 	case ContentType("text"):
 		content, _ := block.Text()
-		return marshalCodec(textContentDTO{Type: "text", Text: content.Text()}, MaxRequestBytes)
+		citations := make([]urlCitationDTO, 0, len(content.Citations()))
+		for _, citation := range content.Citations() {
+			citations = append(citations, encodeURLCitation(citation))
+		}
+		return marshalCodec(textContentDTO{Type: "text", Text: content.Text(), Citations: citations}, MaxRequestBytes)
 	case ContentType("image"):
 		content, _ := block.Image()
 		source := imageSourceDTO{Type: string(content.SourceType())}
@@ -31,7 +35,7 @@ func encodeContent(block ContentBlock) (json.RawMessage, error) {
 	}
 }
 
-func decodeContent(data []byte) (ContentBlock, error) {
+func decodeContent(data []byte, version string) (ContentBlock, error) {
 	kind, err := discriminator(data)
 	if err != nil {
 		return ContentBlock{}, err
@@ -42,7 +46,18 @@ func decodeContent(data []byte) (ContentBlock, error) {
 		if err := strictDecode(data, &dto); err != nil {
 			return ContentBlock{}, err
 		}
-		content, err := NewTextContent(dto.Text)
+		if version != ProtocolVersion && len(dto.Citations) != 0 {
+			return ContentBlock{}, codecError(CodeInvalidVariant, "content.text.citations")
+		}
+		citations := make([]URLCitation, 0, len(dto.Citations))
+		for _, citationDTO := range dto.Citations {
+			citation, err := decodeURLCitation(citationDTO)
+			if err != nil {
+				return ContentBlock{}, err
+			}
+			citations = append(citations, citation)
+		}
+		content, err := NewTextContentWithCitations(dto.Text, citations)
 		if err != nil {
 			return ContentBlock{}, err
 		}

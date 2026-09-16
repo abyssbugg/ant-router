@@ -79,15 +79,26 @@ func (m *Machine) acceptContentCompleted(event canonical.Event) (acceptOutcome, 
 	copyItem := item.clone()
 	copyContent := copyItem.contents[payload.Index()]
 	atomicSize := 0
+	semantic := len(content.buffer) == 0
 	switch content.kind {
 	case canonical.ContentType("text"):
 		final, _ := payload.Content().Text()
+		finalCitations := final.Citations()
+		if len(content.citations) > 0 {
+			if !citationSlicesEqual(content.citations, finalCitations) {
+				return acceptOutcome{}, m.error(CodeCompletionMismatch, "event.content_completed")
+			}
+		} else {
+			atomicCitationBytes := citationSliceSize(finalCitations)
+			atomicSize += atomicCitationBytes
+			semantic = semantic || atomicCitationBytes > 0
+		}
 		if len(content.buffer) > 0 {
 			if string(content.buffer) != final.Text() {
 				return acceptOutcome{}, m.error(CodeCompletionMismatch, "event.content_completed")
 			}
 		} else {
-			atomicSize = len(final.Text())
+			atomicSize += len(final.Text())
 		}
 	case canonical.ContentType("json"):
 		final, _ := payload.Content().JSON()
@@ -114,7 +125,7 @@ func (m *Machine) acceptContentCompleted(event canonical.Event) (acceptOutcome, 
 	copyContent.finalContent = payload.Content()
 	m.items[payload.ItemID()] = copyItem
 	m.reconstructedBytes += atomicSize
-	return acceptOutcome{semantic: len(content.buffer) == 0}, nil
+	return acceptOutcome{semantic: semantic}, nil
 }
 
 func (m *Machine) acceptItemCompleted(event canonical.Event) (acceptOutcome, error) {
@@ -124,6 +135,9 @@ func (m *Machine) acceptItemCompleted(event canonical.Event) (acceptOutcome, err
 	}
 	item := m.items[payload.Item().ID()]
 	if item == nil || payload.Index() != item.index {
+		return acceptOutcome{}, m.error(CodeInvalidItemState, "event.item_completed")
+	}
+	if item.kind == canonical.ItemType("custom_tool_call") && !item.customInputCompleted {
 		return acceptOutcome{}, m.error(CodeInvalidItemState, "event.item_completed")
 	}
 	reconstructed, atomicBytes, err := reconstructItem(item, payload.Item())

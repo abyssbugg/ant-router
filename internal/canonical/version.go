@@ -1,4 +1,11 @@
 package canonical
 
-// ProtocolVersion is the only canonical protocol version accepted by Phase 2A.
-const ProtocolVersion = "1"
+// ProtocolVersionV1 identifies the legacy canonical protocol contract.
+const ProtocolVersionV1 = "1"
+
+// ProtocolVersion identifies the current canonical protocol contract.
+const ProtocolVersion = "2"
+
+func validProtocolVersion(version string) bool {
+	return version == ProtocolVersionV1 || version == ProtocolVersion
+}

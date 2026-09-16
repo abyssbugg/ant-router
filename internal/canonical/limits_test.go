@@ -3,8 +3,8 @@ package canonical
 import "testing"
 
 func TestProtocolVersionAndLimits(t *testing.T) {
-	if ProtocolVersion != "1" {
-		t.Errorf("ProtocolVersion = %q, want 1", ProtocolVersion)
+	if ProtocolVersion != "2" {
+		t.Errorf("ProtocolVersion = %q, want 2", ProtocolVersion)
 	}
 	tests := map[string]struct{ got, want int }{
 		"request":         {MaxRequestBytes, 32 << 20},

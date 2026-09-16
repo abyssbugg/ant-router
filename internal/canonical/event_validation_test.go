@@ -43,6 +43,8 @@ func TestItemStartedRejections(t *testing.T) {
 		{Index: 0, ID: base.ID, Type: ItemType("tool_call"), CallID: "", Name: "Search"},
 		{Index: 0, ID: base.ID, Type: ItemType("tool_call"), CallID: testCallID(t, 1), Name: "bad name"},
 		{Index: 0, ID: base.ID, Type: ItemType("reasoning_summary"), Name: "unexpected"},
+		{Index: 0, ID: base.ID, Type: ItemType("message"), Role: base.Role, SearchStatus: HostedSearchStatus("bogus")},
+		{Index: 0, ID: base.ID, Type: ItemType("tool_call"), CallID: testCallID(t, 2), Name: "Search", SearchStatus: HostedSearchStatus("bogus")},
 	}
 	for index, params := range cases {
 		if _, err := NewItemStartedEvent(testEventID(t, 1), testResponseID(t, 1), 0, params); err == nil {

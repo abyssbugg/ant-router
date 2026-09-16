@@ -91,7 +91,7 @@ func TestHostedWebSearchDeclarationRoundTrip(t *testing.T) {
 	}
 }
 
-func TestToolNamespaceIsImmutableAndFunctionOnly(t *testing.T) {
+func TestToolNamespaceIsImmutableAndRejectsNested(t *testing.T) {
 	child := testNamespaceFunction(t, "curr_time")
 	namespace, err := NewToolNamespace("clock", "Time tools", []ToolDefinition{child})
 	if err != nil {

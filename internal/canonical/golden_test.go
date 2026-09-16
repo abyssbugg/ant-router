@@ -64,7 +64,7 @@ func TestGoldenFixtures(t *testing.T) {
 
 func assertGolden(t *testing.T, name string, encoded []byte) {
 	t.Helper()
-	path := filepath.Join("testdata", name)
+	path := filepath.Join("testdata", "v2", name)
 	if os.Getenv("UPDATE_GOLDEN") == "1" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("os.MkdirAll() failed: %v", err)

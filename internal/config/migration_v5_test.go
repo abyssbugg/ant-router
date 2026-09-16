@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-func TestDefaultUsesSchemaV5(t *testing.T) {
-	if got := Default().SchemaVersion; got != 5 {
-		t.Fatalf("schema version = %d, want 5", got)
+func TestDefaultUsesSchemaV6FromV5Migration(t *testing.T) {
+	if got := Default().SchemaVersion; got != 6 {
+		t.Fatalf("schema version = %d, want 6", got)
 	}
 }
 
-func TestSchemaV4MigratesToV5WithoutCodexMetadata(t *testing.T) {
+func TestSchemaV4MigratesToV6WithoutCodexMetadata(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(`schema_version = 4
 [[providers]]
 id = "openai-primary"
@@ -29,8 +29,8 @@ capabilities = ["text"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 5 {
-		t.Fatalf("schema version = %d, want 5", cfg.SchemaVersion)
+	if cfg.SchemaVersion != 6 {
+		t.Fatalf("schema version = %d, want 6", cfg.SchemaVersion)
 	}
 	if cfg.Providers[0].Models[0].Codex != nil {
 		t.Fatal("migration guessed Codex metadata")
@@ -93,8 +93,8 @@ visibility = "list"
 	}
 }
 
-func TestSchemaV5DecodesCodexMetadata(t *testing.T) {
-	cfg, err := Decode(strings.NewReader(`schema_version = 5
+func TestSchemaV6DecodesCodexMetadata(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(`schema_version = 6
 [[providers]]
 id = "openai-primary"
 kind = "openai"
@@ -105,7 +105,7 @@ name = "OPENAI_API_KEY"
 [[providers.models]]
 alias = "openai/gpt-test"
 upstream = "gpt-test"
-capabilities = ["text"]
+capabilities = ["custom_tools", "hosted_web_search", "namespace_tools", "parallel_tools", "text", "tools"]
 [providers.models.codex]
 enabled = true
 display_name = "GPT Test via Ant Router"
@@ -118,7 +118,7 @@ visibility = "list"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 5 || cfg.Providers[0].Models[0].Codex == nil {
+	if cfg.SchemaVersion != 6 || cfg.Providers[0].Models[0].Codex == nil {
 		t.Fatalf("config = %#v", cfg)
 	}
 }

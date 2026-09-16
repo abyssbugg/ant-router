@@ -9,7 +9,7 @@ func DecodeEvent(data []byte) (Event, error) {
 	if err := strictDecode(prepared, &dto); err != nil {
 		return Event{}, err
 	}
-	if dto.Version != ProtocolVersion {
+	if !validProtocolVersion(dto.Version) {
 		return Event{}, codecError(CodeInvalidVersion, "version")
 	}
 	id, err := ParseEventID(dto.ID)
@@ -47,6 +47,9 @@ func DecodeEvent(data []byte) (Event, error) {
 		if err := strictDecode(dto.Data, &payload); err != nil {
 			return Event{}, err
 		}
+		if dto.Version != ProtocolVersion && (payload.ItemType == "custom_tool_call" || payload.ItemType == "hosted_search_call" || payload.SearchStatus != "" || payload.SearchAction != nil) {
+			return Event{}, codecError(CodeInvalidVariant, "event.item_started")
+		}
 		itemID, parseErr := ParseItemID(payload.ID)
 		if parseErr != nil {
 			return Event{}, parseErr
@@ -58,7 +61,14 @@ func DecodeEvent(data []byte) (Event, error) {
 				return Event{}, parseErr
 			}
 		}
-		event, err = NewItemStartedEvent(id, responseID, dto.Sequence, ItemStartParams{Index: payload.Index, ID: itemID, Type: ItemType(payload.ItemType), Role: Role(payload.Role), CallID: callID, Namespace: payload.Namespace, Name: payload.Name})
+		var searchAction HostedSearchAction
+		if payload.SearchAction != nil {
+			searchAction, parseErr = decodeHostedSearchAction(*payload.SearchAction)
+			if parseErr != nil {
+				return Event{}, parseErr
+			}
+		}
+		event, err = NewItemStartedEvent(id, responseID, dto.Sequence, ItemStartParams{Index: payload.Index, ID: itemID, Type: ItemType(payload.ItemType), Role: Role(payload.Role), CallID: callID, Namespace: payload.Namespace, Name: payload.Name, SearchStatus: HostedSearchStatus(payload.SearchStatus), SearchAction: searchAction})
 	case EventType("content_started"):
 		var payload contentStartedDTO
 		if err := strictDecode(dto.Data, &payload); err != nil {
@@ -93,6 +103,62 @@ func DecodeEvent(data []byte) (Event, error) {
 			return Event{}, parseErr
 		}
 		event, err = NewToolArgumentsDeltaEvent(id, responseID, dto.Sequence, itemID, payload.Delta)
+	case EventType("custom_input_delta"):
+		if dto.Version != ProtocolVersion {
+			return Event{}, codecError(CodeInvalidVariant, "event.type")
+		}
+		var payload customInputDeltaDTO
+		if err := strictDecode(dto.Data, &payload); err != nil {
+			return Event{}, err
+		}
+		itemID, parseErr := ParseItemID(payload.ItemID)
+		if parseErr != nil {
+			return Event{}, parseErr
+		}
+		event, err = NewCustomInputDeltaEvent(id, responseID, dto.Sequence, itemID, payload.Delta)
+	case EventType("custom_input_completed"):
+		if dto.Version != ProtocolVersion {
+			return Event{}, codecError(CodeInvalidVariant, "event.type")
+		}
+		var payload customInputCompletedDTO
+		if err := strictDecode(dto.Data, &payload); err != nil {
+			return Event{}, err
+		}
+		itemID, parseErr := ParseItemID(payload.ItemID)
+		if parseErr != nil {
+			return Event{}, parseErr
+		}
+		event, err = NewCustomInputCompletedEvent(id, responseID, dto.Sequence, itemID, payload.Input)
+	case EventType("hosted_search_status"):
+		if dto.Version != ProtocolVersion {
+			return Event{}, codecError(CodeInvalidVariant, "event.type")
+		}
+		var payload hostedSearchStatusDTO
+		if err := strictDecode(dto.Data, &payload); err != nil {
+			return Event{}, err
+		}
+		itemID, parseErr := ParseItemID(payload.ItemID)
+		if parseErr != nil {
+			return Event{}, parseErr
+		}
+		event, err = NewHostedSearchStatusEvent(id, responseID, dto.Sequence, itemID, HostedSearchStatus(payload.Status))
+	case EventType("url_citation_added"):
+		if dto.Version != ProtocolVersion {
+			return Event{}, codecError(CodeInvalidVariant, "event.type")
+		}
+		var payload urlCitationAddedDTO
+		if err := strictDecode(dto.Data, &payload); err != nil {
+			return Event{}, err
+		}
+		itemID, parseErr := ParseItemID(payload.ItemID)
+		if parseErr != nil {
+			return Event{}, parseErr
+		}
+		citation, parseErr := decodeURLCitation(payload.Citation)
+		if parseErr != nil {
+			return Event{}, parseErr
+		}
+		event, err = NewURLCitationAddedEvent(id, responseID, dto.Sequence, itemID, payload.ContentIndex, citation)
 	case EventType("content_completed"):
 		var payload contentCompletedDTO
 		if err := strictDecode(dto.Data, &payload); err != nil {
@@ -102,7 +168,7 @@ func DecodeEvent(data []byte) (Event, error) {
 		if parseErr != nil {
 			return Event{}, parseErr
 		}
-		content, parseErr := decodeContent(payload.Content)
+		content, parseErr := decodeContent(payload.Content, dto.Version)
 		if parseErr != nil {
 			return Event{}, parseErr
 		}
@@ -112,7 +178,7 @@ func DecodeEvent(data []byte) (Event, error) {
 		if err := strictDecode(dto.Data, &payload); err != nil {
 			return Event{}, err
 		}
-		item, parseErr := decodeItem(payload.Item)
+		item, parseErr := decodeItem(payload.Item, dto.Version)
 		if parseErr != nil {
 			return Event{}, parseErr
 		}

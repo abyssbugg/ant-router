@@ -74,7 +74,7 @@ func TestEventCodecStrictRejections(t *testing.T) {
 	}{
 		{[]byte(`{"version":"1","version":"1"}`), CodeDuplicateKey},
 		{insertBeforeFinalBrace(valid, `,"extra":true`), CodeUnknownField},
-		{bytes.Replace(valid, []byte(`"version":"1"`), []byte(`"version":"2"`), 1), CodeInvalidVersion},
+		{bytes.Replace(valid, []byte(`"version":"2"`), []byte(`"version":"3"`), 1), CodeInvalidVersion},
 		{bytes.Replace(valid, []byte(`"type":"response_started"`), []byte(`"type":"unknown"`), 1), CodeInvalidVariant},
 		{bytes.Replace(valid, []byte(`"model":"model-a"`), []byte(`"model":"model-a","extra":true`), 1), CodeUnknownField},
 		{append(append([]byte(nil), valid...), []byte(` {}`)...), CodeInvalidJSON},

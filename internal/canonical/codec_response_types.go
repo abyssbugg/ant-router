@@ -44,13 +44,15 @@ type continuationUpdatedDTO struct {
 	Continuation continuationDTO `json:"continuation"`
 }
 type itemStartedDTO struct {
-	Index     int    `json:"index"`
-	ID        string `json:"id"`
-	ItemType  string `json:"item_type"`
-	Role      string `json:"role,omitempty"`
-	CallID    string `json:"call_id,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name,omitempty"`
+	Index        int                    `json:"index"`
+	ID           string                 `json:"id"`
+	ItemType     string                 `json:"item_type"`
+	Role         string                 `json:"role,omitempty"`
+	CallID       string                 `json:"call_id,omitempty"`
+	Namespace    string                 `json:"namespace,omitempty"`
+	Name         string                 `json:"name,omitempty"`
+	SearchStatus string                 `json:"search_status,omitempty"`
+	SearchAction *hostedSearchActionDTO `json:"search_action,omitempty"`
 }
 type contentStartedDTO struct {
 	ItemID       string `json:"item_id"`
@@ -65,6 +67,18 @@ type deltaDTO struct {
 type toolArgumentsDeltaDTO struct {
 	ItemID string `json:"item_id"`
 	Delta  string `json:"delta"`
+}
+type customInputDeltaDTO struct {
+	ItemID string `json:"item_id"`
+	Delta  string `json:"delta"`
+}
+type customInputCompletedDTO struct {
+	ItemID string `json:"item_id"`
+	Input  string `json:"input"`
+}
+type hostedSearchStatusDTO struct {
+	ItemID string `json:"item_id"`
+	Status string `json:"status"`
 }
 type contentCompletedDTO struct {
 	ItemID       string          `json:"item_id"`
@@ -86,4 +100,9 @@ type responseCompletedDTO struct {
 type responseFailedDTO struct {
 	Failure failureDTO `json:"failure"`
 	Usage   *usageDTO  `json:"usage,omitempty"`
+}
+type urlCitationAddedDTO struct {
+	ItemID       string         `json:"item_id"`
+	ContentIndex int            `json:"content_index"`
+	Citation     urlCitationDTO `json:"citation"`
 }

@@ -78,6 +78,22 @@ type wireCodex struct {
 	_                             struct{} `toml:"" json:"-"`
 }
 
+func rejectProviderCapabilityBeforeVersion(providers []wireProvider, capability string, version int) error {
+	for i, provider := range providers {
+		for j, model := range provider.Models {
+			if model.Capabilities == nil {
+				continue
+			}
+			for k, candidate := range *model.Capabilities {
+				if candidate == capability {
+					return &Error{Code: CodeValidationFailed, Path: fmt.Sprintf("providers[%d].models[%d].capabilities[%d]", i, j, k), Err: fmt.Errorf("capability is unavailable in schema version %d", version)}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // Decode decodes a Config from a TOML reader with strict validation.
 // Starts from Default() so omitted fields receive default values.
 // Rejects unknown fields, duplicate keys, malformed TOML, unsupported schema,
@@ -149,7 +165,7 @@ func Decode(r io.Reader) (Config, error) {
 		}
 	}
 
-	// Accept legacy v1/v2/v3 as input and normalize every in-memory config to v4.
+	// Accept legacy v1-v5 as input and normalize every in-memory config to v6.
 	switch *wire.SchemaVersion {
 	case LegacySchemaVersion:
 		if wire.DataPlane != nil {
@@ -168,6 +184,9 @@ func Decode(r io.Reader) (Config, error) {
 	case ProviderRegistrySchemaVersion:
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 3")}
+		}
+		if err := rejectProviderCapabilityBeforeVersion(wire.Providers, "custom_tools", ProviderRegistrySchemaVersion); err != nil {
+			return Config{}, err
 		}
 		for i, provider := range wire.Providers {
 			if provider.Kind != nil && ProviderKind(*provider.Kind) == ProviderKindAnthropic {
@@ -189,6 +208,9 @@ func Decode(r io.Reader) (Config, error) {
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 4")}
 		}
+		if err := rejectProviderCapabilityBeforeVersion(wire.Providers, "custom_tools", AnthropicSchemaVersion); err != nil {
+			return Config{}, err
+		}
 		for i, provider := range wire.Providers {
 			for j, model := range provider.Models {
 				if model.Codex != nil {
@@ -196,9 +218,16 @@ func Decode(r io.Reader) (Config, error) {
 				}
 			}
 		}
-	case SchemaVersion:
+	case CodexSchemaVersion:
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 5")}
+		}
+		if err := rejectProviderCapabilityBeforeVersion(wire.Providers, "custom_tools", CodexSchemaVersion); err != nil {
+			return Config{}, err
+		}
+	case SchemaVersion:
+		if wire.MockProvider != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 6")}
 		}
 	default:
 		return Config{}, &Error{Code: CodeUnsupportedSchema, Path: "schema_version", Err: fmt.Errorf("unsupported schema version %d", *wire.SchemaVersion)}
@@ -247,7 +276,7 @@ func Decode(r io.Reader) (Config, error) {
 	if *wire.SchemaVersion == PreviousSchemaVersion && wire.MockProvider != nil && wire.MockProvider.Enabled != nil && *wire.MockProvider.Enabled {
 		cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 	}
-	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == SchemaVersion {
+	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == CodexSchemaVersion || *wire.SchemaVersion == SchemaVersion {
 		if wire.Providers != nil {
 			cfg.Providers = make([]ProviderConfig, len(wire.Providers))
 		}

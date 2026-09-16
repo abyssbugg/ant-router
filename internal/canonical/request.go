@@ -111,10 +111,11 @@ func NewRequest(params RequestParams) (Request, error) {
 }
 
 func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice ToolChoice, output OutputConstraints) error {
-	toolNames := make(map[string]struct{}, len(tools))
+	toolKinds := make(map[string]ToolDefinitionKind, len(tools))
 	topLevelNames := make(map[string]struct{}, len(tools))
-	totalFunctions := 0
+	totalCallableTools := 0
 	totalDescriptionBytes := 0
+	hasHostedSearchTool := false
 	for _, tool := range tools {
 		totalDescriptionBytes += len(tool.Description())
 		if totalDescriptionBytes > MaxTotalToolDescriptionBytes {
@@ -133,19 +134,21 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 				if totalDescriptionBytes > MaxTotalToolDescriptionBytes {
 					return requestError(CodeLimitExceeded, "request.tools")
 				}
-				totalFunctions++
-				toolNames[toolIdentity(tool.Name(), child.Name())] = struct{}{}
+				totalCallableTools++
+				toolKinds[toolIdentity(tool.Name(), child.Name())] = child.Kind()
 			}
-		} else if tool.Kind() == ToolDefinitionKindFunction {
-			totalFunctions++
-			toolNames[toolIdentity("", tool.Name())] = struct{}{}
+		} else if tool.Kind() == ToolDefinitionKindFunction || tool.Kind() == ToolDefinitionKindCustom {
+			totalCallableTools++
+			toolKinds[toolIdentity("", tool.Name())] = tool.Kind()
+		} else if tool.Kind() == ToolDefinitionKindWebSearch {
+			hasHostedSearchTool = true
 		}
 	}
-	if totalFunctions > MaxTotalToolFunctions {
+	if totalCallableTools > MaxTotalToolFunctions {
 		return requestError(CodeLimitExceeded, "request.tools")
 	}
 	if choice.Kind() == ToolChoiceKind("specific") {
-		if _, exists := toolNames[toolIdentity(choice.Namespace(), choice.Name())]; !exists {
+		if _, exists := toolKinds[toolIdentity(choice.Namespace(), choice.Name())]; !exists {
 			return requestError(CodeInvalidInvariant, "request.tool_choice")
 		}
 	}
@@ -165,13 +168,26 @@ func validateRequestItemsAndTools(input []Item, tools []ToolDefinition, choice T
 		switch item.Type() {
 		case ItemType("tool_call"):
 			call, _ := item.ToolCall()
-			if _, declared := toolNames[toolIdentity(call.Namespace(), call.Name())]; !declared {
+			if declaredKind, declared := toolKinds[toolIdentity(call.Namespace(), call.Name())]; !declared || declaredKind != ToolDefinitionKindFunction {
 				return requestError(CodeInvalidInvariant, "request.input")
 			}
 			if _, duplicate := callIDs[call.CallID()]; duplicate {
 				return requestError(CodeInvalidInvariant, "request.input")
 			}
 			callIDs[call.CallID()] = struct{}{}
+		case ItemType("custom_tool_call"):
+			call, _ := item.CustomToolCall()
+			if declaredKind, declared := toolKinds[toolIdentity(call.Namespace(), call.Name())]; !declared || declaredKind != ToolDefinitionKindCustom {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
+			if _, duplicate := callIDs[call.CallID()]; duplicate {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
+			callIDs[call.CallID()] = struct{}{}
+		case ItemType("hosted_search_call"):
+			if !hasHostedSearchTool {
+				return requestError(CodeInvalidInvariant, "request.input")
+			}
 		case ItemType("tool_result"):
 			result, _ := item.ToolResult()
 			if _, exists := callIDs[result.CallID()]; !exists {
@@ -199,6 +215,18 @@ func computeCapabilities(input []Item, tools []ToolDefinition, output OutputCons
 			}
 		case ItemType("tool_call"):
 			values = append(values, CapabilityTools)
+			call, _ := item.ToolCall()
+			if call.Namespace() != "" {
+				values = append(values, CapabilityNamespaceTools)
+			}
+		case ItemType("custom_tool_call"):
+			values = append(values, CapabilityTools, CapabilityCustomTools)
+			call, _ := item.CustomToolCall()
+			if call.Namespace() != "" {
+				values = append(values, CapabilityNamespaceTools)
+			}
+		case ItemType("hosted_search_call"):
+			values = append(values, CapabilityTools, CapabilityHostedWebSearch)
 		case ItemType("tool_result"):
 			values = append(values, CapabilityTools)
 			result, _ := item.ToolResult()
@@ -216,8 +244,16 @@ func computeCapabilities(input []Item, tools []ToolDefinition, output OutputCons
 	if len(tools) > 0 {
 		values = append(values, CapabilityTools)
 		for _, tool := range tools {
+			if tool.Kind() == ToolDefinitionKindCustom {
+				values = append(values, CapabilityCustomTools)
+			}
 			if tool.Kind() == ToolDefinitionKindNamespace {
 				values = append(values, CapabilityNamespaceTools)
+				for _, child := range tool.Tools() {
+					if child.Kind() == ToolDefinitionKindCustom {
+						values = append(values, CapabilityCustomTools)
+					}
+				}
 			}
 			if tool.Kind() == ToolDefinitionKindWebSearch {
 				values = append(values, CapabilityHostedWebSearch)
