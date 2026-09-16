@@ -63,6 +63,14 @@ During recovery, never:
 - create a new plan or expand the authorized scope;
 - infer success from intent, chat prose, or an agent claim without terminal evidence.
 
+**Terminal evidence (binding definition):** an observed exit code or explicit tool result for the last action. If terminal evidence is absent, the outcome is uncertain — stop and take no action until instructed.
+
+**Applicability:** apply this protocol only after a genuine interruption, never after an ordinary pause.
+
+### Canonical record
+
+The durable record of this protocol is ByteRover topic `ant_router/protocols/interruption_recovery` (dated 2026-09-09; it permanently replaced the earlier draft). If this section and the record ever diverge, stop and reconcile with the user before acting.
+
 ---
 
 ## 2. Lead Engineer Orchestration Protocol
@@ -108,6 +116,22 @@ For every new session or routine resume:
 6. Do not automatically pull, switch branches, commit, push, merge, or otherwise mutate Git state.
 7. Keep mutable open work in the task tool, durable verified knowledge in ByteRover, and stable operating rules in `CLAUDE.md`.
 8. Use the Interruption Recovery Protocol—not this routine sequence—after a genuine interruption.
+
+### Wave cycle (delegation cadence)
+
+Substantial delegated work proceeds as repeating waves:
+
+1. Map the repository and model the work as a dependency graph.
+2. Claim independent files or modules; delegate only substantial, genuinely independent work.
+3. Execute safe workstreams in parallel; never two agents on the same files or contract boundary.
+4. Review and integrate each result; run scope-appropriate acceptance gates.
+5. Unblock dependencies, release claims, and reassess before the next wave.
+
+Report per wave: active ownership, accepted work, blockers, next wave, and architectural approvals required from the user. Research/review agents parallelize first for unfamiliar or high-risk areas; parallelize implementation only when workstreams are genuinely independent and context-plus-integration cost is justified.
+
+### Canonical record
+
+The durable record of this protocol is ByteRover topic `ant_router/protocols/lead_engineer_orchestration` (dated 2026-09-09). If this section and the record ever diverge, stop and reconcile with the user before acting.
 
 Do not turn `CLAUDE.md` into a work log, backlog, transient status report, or duplicate gotcha ledger.
 
