@@ -1,0 +1,73 @@
+version: 2.1
+
+# Ordinary pushes must not consume Windows credits. After explicit authorization,
+# enable this parameter for the diagnostic branch, then approve the held workflow.
+parameters:
+  run-windows-diagnostics:
+    type: boolean
+    default: false
+
+jobs:
+  windows-token-diagnostics:
+    machine:
+      image: windows-server-2022-gui:current
+    resource_class: windows.medium
+    shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    steps:
+      - checkout
+      - run:
+          name: Verify native Windows and characterize token sharing
+          no_output_timeout: 5m
+          command: |
+            $ErrorActionPreference = 'Stop'
+
+            $revision = git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if (-not $env:CIRCLE_SHA1 -or $revision -ne $env:CIRCLE_SHA1) {
+              throw 'Checkout does not match the requested pipeline revision'
+            }
+            Write-Host "Testing commit $revision"
+
+            # The Windows image supplies the bootstrap Go installation. Select
+            # the exact repository toolchain instead of silently using that image's version.
+            $module = Get-Content go.mod
+            $toolchainLine = @($module | Where-Object { $_ -match '^toolchain\s+go\d+\.\d+\.\d+\s*$' })
+            if ($toolchainLine.Count -ne 1) { throw 'Expected one pinned Go toolchain in go.mod' }
+            $toolchain = ($toolchainLine[0] -split '\s+')[1]
+            $env:GOTOOLCHAIN = $toolchain
+            $env:GOOS = 'windows'
+            $env:GOARCH = 'amd64'
+            $env:CGO_ENABLED = '0'
+            $env:GOFLAGS = '-mod=readonly'
+            $env:GOSUMDB = 'sum.golang.org'
+
+            $version = go version
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($version -ne "go version $toolchain windows/amd64") { throw "Unexpected Go version: $version" }
+            Write-Host $version
+            $hostOS = go env GOHOSTOS
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $hostArch = go env GOHOSTARCH
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($hostOS -ne 'windows' -or $hostArch -ne 'amd64') {
+              throw 'Diagnostics require native Windows amd64, not cross-compilation'
+            }
+
+            # These are characterization tests, not a fix for issue #16.
+            # Explicit exit checks are needed for native programs in Windows PowerShell.
+            go test ./internal/controltoken ./internal/inferencetoken -run '^TestWindows' -count=10 -timeout=3m -v
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            go test ./internal/controltoken ./internal/inferencetoken -run '^TestConcurrentLoadOrCreateConverges$' -count=20 -timeout=3m -v
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            go test ./internal/controltoken ./internal/inferencetoken -count=1 -timeout=3m
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+workflows:
+  windows-diagnostics:
+    when: << pipeline.parameters.run-windows-diagnostics >>
+    jobs:
+      - approve-windows-credits:
+          type: approval
+      - windows-token-diagnostics:
+          requires:
+            - approve-windows-credits
