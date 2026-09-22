@@ -8,6 +8,8 @@ import (
 	"os"
 )
 
+func openTokenFile(path string) (*os.File, error) { return os.Open(path) }
+
 func secureTokenDirectory(path string) error           { return os.Chmod(path, 0o700) }
 func privateTokenFile(_ string, mode fs.FileMode) bool { return mode.Perm() == 0o600 }
 func installTokenFile(source, target string) error {
