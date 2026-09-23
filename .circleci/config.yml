@@ -6,6 +6,9 @@ parameters:
   run-windows-diagnostics:
     type: boolean
     default: false
+  run-pr-coverage:
+    type: boolean
+    default: false
 
 jobs:
   windows-token-diagnostics:
@@ -62,12 +65,59 @@ jobs:
             go test ./internal/controltoken ./internal/inferencetoken -count=1 -timeout=3m
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  pr-coverage-linux:
+    docker:
+      - image: cimg/go:1.26.6
+    resource_class: medium
+    shell: /bin/bash -eo pipefail
+    steps:
+      - checkout
+      - run:
+          name: Bounded Linux PR coverage
+          no_output_timeout: 5m
+          command: bash .circleci/scripts/pr-coverage-linux.sh
+
+  pr-coverage-windows:
+    machine:
+      image: windows-server-2022-gui:current
+    resource_class: windows.medium
+    shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    steps:
+      - checkout
+      - run:
+          name: Bounded Windows PR coverage
+          no_output_timeout: 5m
+          command: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .circleci/scripts/pr-coverage-windows.ps1
+
+# The two modes are mutually exclusive. Both false (the default) or both true
+# select no workflow; a skipped pipeline is not successful coverage evidence.
 workflows:
   windows-diagnostics:
-    when: << pipeline.parameters.run-windows-diagnostics >>
+    when:
+      and:
+        - << pipeline.parameters.run-windows-diagnostics >>
+        - not: << pipeline.parameters.run-pr-coverage >>
     jobs:
       - approve-windows-credits:
           type: approval
       - windows-token-diagnostics:
           requires:
             - approve-windows-credits
+  pr-coverage:
+    when:
+      and:
+        - << pipeline.parameters.run-pr-coverage >>
+        - not: << pipeline.parameters.run-windows-diagnostics >>
+    jobs:
+      - approve-linux-coverage:
+          type: approval
+      - pr-coverage-linux:
+          requires:
+            - approve-linux-coverage
+      - approve-windows-coverage:
+          type: approval
+          requires:
+            - pr-coverage-linux
+      - pr-coverage-windows:
+          requires:
+            - approve-windows-coverage
