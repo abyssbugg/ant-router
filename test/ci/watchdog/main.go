@@ -85,6 +85,7 @@ func run(ctx context.Context, args []string, client api, timer clock, out io.Wri
 	flags.StringVar(&want.Workflow, "workflow", "", "explicit pr-coverage workflow UUID")
 	flags.StringVar(&want.Branch, "branch", "", "approved branch")
 	flags.StringVar(&want.Revision, "revision", "", "approved full lowercase commit SHA")
+	flags.StringVar(&want.SourceWorkflow, "source-workflow", "", "optional original workflow UUID for corroborating reused Linux timestamps")
 	allowCancel := flags.Bool("allow-cancel", false, "explicitly authorize monitoring and one target cancellation; default is identity check only")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -98,6 +99,17 @@ func run(ctx context.Context, args []string, client api, timer clock, out io.Wri
 	if !*allowCancel {
 		if _, err := identify(ctx, client, want); err != nil {
 			return err
+		}
+		if want.SourceWorkflow != "" {
+			evidence, err := loadReusedLinux(ctx, client, want)
+			if err != nil {
+				return err
+			}
+			seen := jobTracker{starts: make(map[string]observedStart), ids: make(map[string]string)}
+			if _, err := inspectJobs(ctx, client, want, timer, seen, evidence); err != nil {
+				return err
+			}
+			fmt.Fprintln(out, "Reused Linux evidence and current graph verified READ-ONLY")
 		}
 		fmt.Fprintln(out, "Identity verified READ-ONLY; watchdog NOT ARMED; no coverage result claimed")
 		return nil

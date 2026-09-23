@@ -19,6 +19,7 @@ const (
 
 type target struct {
 	Project, Pipeline, Workflow, Branch, Revision string
+	SourceWorkflow                                string
 }
 
 type api interface {
@@ -91,6 +92,10 @@ func monitor(ctx context.Context, client api, timer clock, want target) error {
 		return unsupervised(want, err)
 	}
 	began := timer.Now()
+	evidence, err := loadReusedLinux(ctx, client, want)
+	if err != nil {
+		return unsupervised(want, err)
+	}
 	seen := jobTracker{starts: make(map[string]observedStart), ids: make(map[string]string)}
 	for {
 		if terminal(w.Status) && w.Status != "success" {
@@ -99,12 +104,7 @@ func monitor(ctx context.Context, client api, timer clock, want target) error {
 		if w.Status != "running" && w.Status != "on_hold" && w.Status != "success" {
 			return cancelAndConfirm(client, timer, want, "unknown workflow status")
 		}
-		var jobs jobPage
-		err := read(ctx, client, "api/v2/workflow/"+want.Workflow+"/job", &jobs)
-		passed := false
-		if err == nil {
-			passed, err = jobs.inspect(want, timer.Now(), seen)
-		}
+		passed, err := inspectJobs(ctx, client, want, timer, seen, evidence)
 		if err != nil {
 			if terminal(w.Status) {
 				return fmt.Errorf("terminal workflow lacks valid coverage: %w", err)

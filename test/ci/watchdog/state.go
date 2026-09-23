@@ -17,6 +17,9 @@ func (t target) validate() error {
 	if !uuidPattern.MatchString(t.Pipeline) || !uuidPattern.MatchString(t.Workflow) || !shaPattern.MatchString(t.Revision) || !projectPattern.MatchString(t.Project) {
 		return errors.New("explicit pipeline/workflow UUIDs, canonical project slug and full lowercase SHA required")
 	}
+	if t.SourceWorkflow != "" && (!uuidPattern.MatchString(t.SourceWorkflow) || t.SourceWorkflow == t.Workflow) {
+		return errors.New("source workflow must be a distinct explicit UUID")
+	}
 	if t.Branch == "" || len(t.Branch) > 255 || strings.ContainsAny(t.Branch, "\x00\r\n\t ") {
 		return errors.New("explicit branch required")
 	}
