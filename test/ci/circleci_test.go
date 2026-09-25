@@ -322,7 +322,18 @@ var coverageSafeguards = map[string][]string{
 		"$env:PATH = (Join-Path $goroot 'bin') + ';' + $env:PATH",
 		"$env:GOTOOLCHAIN = 'local'",
 		"if ($version -ne \"go version $toolchain windows/amd64\") { throw 'Pinned compiler mismatch' }",
+		"$null = Get-Command choco -ErrorAction Stop",
+		"choco upgrade mingw --version=13.2.0 --source=https://community.chocolatey.org/api/v2/ --yes --no-progress --require-checksums --allow-downgrade --install-if-not-installed --execution-timeout=180",
+		"$mingwBin = 'C:\\ProgramData\\mingw64\\mingw64\\bin'",
+		"if (-not (Test-Path -LiteralPath (Join-Path $mingwBin 'gcc.exe') -PathType Leaf)) { throw 'Pinned MinGW compiler missing after installation' }",
+		"$env:PATH = $mingwBin + ';' + $env:PATH",
 		"$null = Get-Command gcc -ErrorAction Stop",
+		"$gccVersion = gcc -dumpfullversion",
+		"if ($gccVersion -ne '13.2.0') { throw 'Pinned MinGW version mismatch' }",
+		"$gccTarget = gcc -dumpmachine",
+		"if ($gccTarget -ne 'x86_64-w64-mingw32') { throw 'MinGW target must be Windows amd64' }",
+		"$raceLibrary = gcc -print-file-name=libsynchronization.a",
+		"if (-not [System.IO.Path]::IsPathRooted($raceLibrary) -or -not (Test-Path -LiteralPath $raceLibrary -PathType Leaf)) { throw 'MinGW runtime lacks Go race support' }",
 		"go vet ./...",
 		"go test ./... -count=1 -timeout=5m",
 		"go test -race ./internal/controltoken ./internal/inferencetoken -count=1 -timeout=3m",
@@ -428,7 +439,7 @@ func validateNativeExits(script string) error {
 	lines := strings.Split(script, "\n")
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "go ") || strings.HasPrefix(line, "git ") || strings.Contains(line, " = go ") || strings.Contains(line, " = git ") {
+		if strings.HasPrefix(line, "go ") || strings.HasPrefix(line, "git ") || strings.HasPrefix(line, "choco ") || strings.HasPrefix(line, "gcc ") || strings.Contains(line, " = go ") || strings.Contains(line, " = git ") || strings.Contains(line, " = gcc ") {
 			if i+1 >= len(lines) || strings.TrimSpace(lines[i+1]) != nativeExitCheck {
 				return fmt.Errorf("native command lacks immediate failure propagation: %s", line)
 			}

@@ -80,7 +80,30 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $hostArch = go env GOHOSTARCH
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($hostOS -ne 'windows' -or $hostArch -ne 'amd64') { throw 'Native Windows amd64 required' }
+# The Windows image does not guarantee GCC on PATH. This pinned package uses
+# SHA-256-checked MinGW-w64 runtime 11 binaries; installation stays inside the
+# parent's 12-minute deadline (and has a shorter package execution timeout).
+# Package layout: https://community.chocolatey.org/packages/mingw/13.2.0
+$null = Get-Command choco -ErrorAction Stop
+choco upgrade mingw --version=13.2.0 --source=https://community.chocolatey.org/api/v2/ --yes --no-progress --require-checksums --allow-downgrade --install-if-not-installed --execution-timeout=180
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$mingwBin = 'C:\ProgramData\mingw64\mingw64\bin'
+if (-not (Test-Path -LiteralPath (Join-Path $mingwBin 'gcc.exe') -PathType Leaf)) { throw 'Pinned MinGW compiler missing after installation' }
+# Chocolatey updates the machine PATH, not this already-running worker's PATH.
+$env:PATH = $mingwBin + ';' + $env:PATH
 $null = Get-Command gcc -ErrorAction Stop
+$gccVersion = gcc -dumpfullversion
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($gccVersion -ne '13.2.0') { throw 'Pinned MinGW version mismatch' }
+$gccTarget = gcc -dumpmachine
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($gccTarget -ne 'x86_64-w64-mingw32') { throw 'MinGW target must be Windows amd64' }
+# Go's Windows race runtime requires MinGW-w64 >= 8, not merely any gcc.exe.
+# https://go.dev/doc/articles/race_detector#Requirements
+$raceLibrary = gcc -print-file-name=libsynchronization.a
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (-not [System.IO.Path]::IsPathRooted($raceLibrary) -or -not (Test-Path -LiteralPath $raceLibrary -PathType Leaf)) { throw 'MinGW runtime lacks Go race support' }
+Write-Host "Verified MinGW GCC $gccVersion ($gccTarget), race library: $raceLibrary"
 Write-Host $version
 go vet ./...
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
