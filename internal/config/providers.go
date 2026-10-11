@@ -294,6 +294,19 @@ func validateProviders(c Config) error {
 			if len(provider.Credential.Name) == 0 || len(provider.Credential.Name) > MaxCredentialName || !envNamePattern.MatchString(provider.Credential.Name) {
 				return providerValidationError(prefix+".credential.name", "invalid environment variable name")
 			}
+			// Provider credentials reach only the provider's official
+			// endpoint, so a mis-scoped name would silently ship another
+			// secret's value there; require the kind-scoped prefix.
+			switch provider.Kind {
+			case ProviderKindOpenAI:
+				if !strings.HasPrefix(provider.Credential.Name, "OPENAI_") {
+					return providerValidationError(prefix+".credential.name", "openai credential must use an OPENAI_ prefixed environment variable")
+				}
+			case ProviderKindAnthropic:
+				if !strings.HasPrefix(provider.Credential.Name, "ANTHROPIC_") {
+					return providerValidationError(prefix+".credential.name", "anthropic credential must use an ANTHROPIC_ prefixed environment variable")
+				}
+			}
 			if len(provider.Models) == 0 || len(provider.Models) > MaxModelsPerProvider {
 				return providerValidationError(prefix+".models", "invalid model count")
 			}

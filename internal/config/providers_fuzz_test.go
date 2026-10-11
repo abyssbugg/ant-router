@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
@@ -57,7 +58,7 @@ func FuzzCredentialEnvironmentName(f *testing.F) {
 		cfg := Default()
 		cfg.Providers = []ProviderConfig{provider}
 		err := cfg.Validate()
-		valid := len(value) > 0 && len(value) <= MaxCredentialName && envNamePattern.MatchString(value)
+		valid := len(value) > 0 && len(value) <= MaxCredentialName && envNamePattern.MatchString(value) && strings.HasPrefix(value, "OPENAI_")
 		if valid && err != nil {
 			t.Fatalf("valid environment name %q failed validation: %v", value, err)
 		}

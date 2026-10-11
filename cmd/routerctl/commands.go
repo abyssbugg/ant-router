@@ -10,6 +10,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
+	"github.com/abyssbugg/ant-router/internal/runtimepaths"
 )
 
 type controlClient interface {
@@ -93,6 +94,36 @@ func execute(ctx context.Context, options cliOptions, command cliCommand, stdin 
 		}
 	}
 	if err != nil {
+		_ = writeCLIError(stderr, options, err)
+		return exitCode(err)
+	}
+	return ExitSuccess
+}
+
+// executeDataPlaneRotate regenerates the inference token offline. The daemon
+// serves data-plane authentication from the current on-disk token, so the new
+// credential takes effect immediately and the previous one stops working.
+func executeDataPlaneRotate(options cliOptions, stdout, stderr io.Writer) int {
+	paths, err := runtimepaths.Resolve(runtimepaths.Options{InstanceOverride: options.Instance, StateOverride: options.StateRoot, RuntimeOverride: options.RuntimeRoot})
+	if err == nil {
+		var store *inferencetoken.Store
+		store, err = inferencetoken.NewStore(paths.StateRoot)
+		if err == nil {
+			_, err = store.Rotate(paths.Instance)
+		}
+	}
+	if err != nil {
+		_ = writeCLIError(stderr, options, err)
+		return exitCode(err)
+	}
+	if options.JSON {
+		if err := writeJSONOutput(stdout, map[string]any{"schema_version": cliSchemaVersion, "rotated": true}); err != nil {
+			_ = writeCLIError(stderr, options, err)
+			return exitCode(err)
+		}
+		return ExitSuccess
+	}
+	if _, err := fmt.Fprintln(stdout, "Inference token rotated."); err != nil {
 		_ = writeCLIError(stderr, options, err)
 		return exitCode(err)
 	}

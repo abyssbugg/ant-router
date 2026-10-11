@@ -140,7 +140,7 @@ func New(options Options) (*Daemon, error) {
 	serverOptions.Config = service
 	serverOptions.CodexCatalog = daemon
 	serverOptions.ShutdownTimeout = shutdownTimeout
-	server, err := control.NewServer(listener, token, daemon, serverOptions)
+	server, err := control.NewServer(listener, liveControlVerifier{store: tokenStore, instance: paths.Instance}, daemon, serverOptions)
 	if err != nil {
 		_ = listener.Close()
 		dataPlane.closeBeforeStart()

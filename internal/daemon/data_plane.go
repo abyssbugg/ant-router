@@ -43,15 +43,14 @@ func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, providers
 	if err != nil {
 		return nil, err
 	}
-	token, err := tokenStore.LoadOrCreate(paths.Instance)
-	if err != nil {
+	if _, err := tokenStore.LoadOrCreate(paths.Instance); err != nil {
 		return nil, err
 	}
 	if providers == nil || providers.load() == nil || providers.load().registry == nil {
 		return nil, fmt.Errorf("provider registry is unavailable")
 	}
 	handler, err := dataplane.NewHandler(dataplane.HandlerOptions{
-		TokenSource:      dataplane.StaticTokenSource(token),
+		TokenSource:      liveInferenceTokenSource{store: tokenStore, instance: paths.Instance},
 		Executor:         providers,
 		Catalog:          providers,
 		AffinityResolver: providers,

@@ -60,6 +60,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if command.Name == "codex" && command.Action == "token" {
 		return executeCodexToken(ctx, options, stdout, stderr)
 	}
+	if command.Name == "data-plane" && command.Action == "rotate" {
+		return executeDataPlaneRotate(options, stdout, stderr)
+	}
 	if command.Name == "codex" && offlineCodexAction(command.Action) {
 		service, err := newCodexService(options, nil)
 		if err != nil {

@@ -296,3 +296,37 @@ func TestDataPlaneRequiresAnyEnabledProvider(t *testing.T) {
 		t.Fatalf("Validate() with mock provider error = %v", err)
 	}
 }
+
+func TestCredentialNameRequiresProviderPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		kind  ProviderKind
+		name  string
+		valid bool
+	}{
+		{ProviderKindOpenAI, "OPENAI_API_KEY", true},
+		{ProviderKindOpenAI, "OPENAI_TEST_KEY", true},
+		{ProviderKindOpenAI, "ANTHROPIC_API_KEY", false},
+		{ProviderKindOpenAI, "PATH", false},
+		{ProviderKindAnthropic, "ANTHROPIC_API_KEY", true},
+		{ProviderKindAnthropic, "OPENAI_API_KEY", false},
+		{ProviderKindAnthropic, "GITHUB_TOKEN", false},
+	} {
+		var provider ProviderConfig
+		switch tc.kind {
+		case ProviderKindOpenAI:
+			provider = validOpenAIProvider("openai", "openai/model")
+		case ProviderKindAnthropic:
+			provider = validAnthropicProvider("anthropic", "anthropic/model")
+		}
+		provider.Credential.Name = tc.name
+		cfg := Default()
+		cfg.Providers = []ProviderConfig{provider}
+		err := cfg.Validate()
+		if tc.valid && err != nil {
+			t.Errorf("%s credential %q rejected: %v", tc.kind, tc.name, err)
+		}
+		if !tc.valid && err == nil {
+			t.Errorf("%s credential %q accepted", tc.kind, tc.name)
+		}
+	}
+}

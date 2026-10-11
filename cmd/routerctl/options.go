@@ -66,15 +66,27 @@ func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
 			return options, cliCommand{}, errUsage
 		}
 	case "data-plane":
-		if len(remaining) < 2 || remaining[1] != "env" || len(remaining) > 3 {
+		if len(remaining) < 2 {
 			return options, cliCommand{}, errUsage
 		}
-		command.Action = "env"
-		if len(remaining) == 3 {
-			if remaining[2] != "--show-token" {
+		command.Action = remaining[1]
+		switch command.Action {
+		case "env":
+			if len(remaining) > 3 {
 				return options, cliCommand{}, errUsage
 			}
-			command.ShowToken = true
+			if len(remaining) == 3 {
+				if remaining[2] != "--show-token" {
+					return options, cliCommand{}, errUsage
+				}
+				command.ShowToken = true
+			}
+		case "rotate":
+			if len(remaining) != 2 {
+				return options, cliCommand{}, errUsage
+			}
+		default:
+			return options, cliCommand{}, errUsage
 		}
 	case "codex":
 		if err := parseCodexCommand(remaining, &command); err != nil {

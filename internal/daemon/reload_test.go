@@ -18,7 +18,8 @@ func dataPlaneModelCount(t *testing.T, baseURL, token string) int {
 		t.Fatalf("NewRequest() failed: %v", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
-	response, err := http.DefaultClient.Do(request)
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatalf("GET /models failed: %v", err)
 	}
@@ -54,7 +55,7 @@ func TestConfigApplyReloadsProvidersWithoutRestart(t *testing.T) {
 	disabled.DataPlane.ShutdownTimeout = config.Duration{Duration: 2_000_000_000}
 	disabled.Providers = []config.ProviderConfig{{
 		ID: "openai", Kind: config.ProviderKindOpenAI, Enabled: true,
-		Credential: &config.CredentialRef{Source: "env", Name: "ANT_ROUTER_MISSING_TEST_CREDENTIAL"},
+		Credential: &config.CredentialRef{Source: "env", Name: "OPENAI_MISSING_TEST_KEY"},
 		Models:     []config.ProviderModelConfig{{Alias: "gpt-test", Upstream: "gpt-4o-mini", Capabilities: []string{"text"}}},
 	}}
 	disabledConfig, err := config.Canonical(disabled)
