@@ -20,7 +20,7 @@ export GOTOOLCHAIN ?= local
 .PHONY: phase4b-test phase4b-race phase4b-contract phase4b-fault phase4b-stress phase4b-fuzz phase4b-ci phase4b-live-compile
 .PHONY: phase4c-test phase4c-race phase4c-contract phase4c-fault phase4c-stress phase4c-fuzz phase4c-e2e phase4c-ci phase4c-live-compile phase4c-live
 .PHONY: codex-alpha-test codex-alpha-race codex-alpha-e2e codex-alpha-fuzz codex-alpha-ci
-.PHONY: fmt-check vet test test-race config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz phase2a-ci streaming-test streaming-race streaming-golden streaming-stress streaming-fuzz phase2b-ci phase3a-test phase3a-race phase3a-fault phase3a-sdk phase3a-stress phase3a-fuzz phase3a-ci phase3b-test phase3b-race phase3b-sdk phase3b-e2e phase3b-stress phase3b-fuzz phase3b-ci build cross-build verify ci clean
+.PHONY: fmt-check vet test test-race cover config-test config-race fault-test fuzz-smoke control-test control-race control-fault control-fuzz control-ci configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e phase1c-fuzz phase1c-ci canonical-test canonical-race canonical-golden canonical-stress canonical-fuzz phase2a-ci streaming-test streaming-race streaming-golden streaming-stress streaming-fuzz phase2b-ci phase3a-test phase3a-race phase3a-fault phase3a-sdk phase3a-stress phase3a-fuzz phase3a-ci phase3b-test phase3b-race phase3b-sdk phase3b-e2e phase3b-stress phase3b-fuzz phase3b-ci build cross-build verify ci clean
 
 fmt-check:
 	@files="$$(gofmt -l cmd internal)"; \
@@ -38,6 +38,10 @@ test:
 
 test-race:
 	$(GO) test -race $(PACKAGES)
+
+cover:
+	$(GO) test $(PACKAGES) -coverprofile=coverage.out -count=1
+	$(GO) tool cover -func=coverage.out | tail -1
 
 config-test:
 	$(GO) test $(CONFIG_PACKAGES) -count=100

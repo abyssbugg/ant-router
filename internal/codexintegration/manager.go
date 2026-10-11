@@ -116,6 +116,13 @@ func (manager *Manager) applyPublication(ctx context.Context, plan Plan) (Result
 	if err := manager.writePending(ctx, pending); err != nil {
 		return Result{}, err
 	}
+	if err := manager.verifyPlannedState(ctx, input); err != nil {
+		// Best-effort journal clear: if clearing fails, a later Recover
+		// completes or rolls back the recorded transaction, which is safe
+		// because no file was mutated after the failed verification.
+		_ = manager.clearPending()
+		return Result{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(input.CatalogPath), 0o700); err != nil {
 		return Result{}, errors.New("Codex integration unavailable")
 	}
@@ -216,9 +223,31 @@ func (manager *Manager) recoverDisabled(ctx context.Context, pending pendingTran
 	return manager.clearPending()
 }
 
+// verifyPlannedState re-observes both target files and fails when either no
+// longer matches the plan, so a non-cooperating concurrent writer is never
+// silently overwritten.
+func (manager *Manager) verifyPlannedState(ctx context.Context, input PlanInput) error {
+	profileObservation, _, err := observeFile(ctx, input.ProfilePath, codexownership.MaxProfileBytes)
+	if err != nil {
+		return err
+	}
+	catalogObservation, _, err := observeFile(ctx, input.CatalogPath, codexownership.MaxCatalogBytes)
+	if err != nil {
+		return err
+	}
+	if profileObservation != input.CurrentProfile || catalogObservation != input.CurrentCatalog {
+		return errors.Join(ErrConflict, errors.New("Codex integration plan is stale"))
+	}
+	return nil
+}
+
 func (manager *Manager) applyDisable(ctx context.Context, plan Plan) (Result, error) {
 	pending := pendingTransaction{SchemaVersion: pendingSchemaVersion, Action: ActionDisable, BaseGeneration: plan.input.OwnershipGeneration, ProfilePath: plan.input.ProfilePath, CatalogPath: plan.input.CatalogPath}
 	if err := manager.writePending(ctx, pending); err != nil {
+		return Result{}, err
+	}
+	if err := manager.verifyPlannedState(ctx, plan.input); err != nil {
+		_ = manager.clearPending()
 		return Result{}, err
 	}
 	for _, path := range []string{plan.input.ProfilePath, plan.input.CatalogPath} {

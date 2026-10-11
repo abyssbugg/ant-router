@@ -410,3 +410,76 @@ func TestManagerRestoresPriorGenerationAndDisables(t *testing.T) {
 		}
 	}
 }
+
+type concurrentWriterStore struct {
+	*codexownership.Store
+	mutate        bool
+	mutateProfile string
+}
+
+func (store *concurrentWriterStore) Stage(ctx context.Context, input codexownership.Input) (codexownership.Generation, error) {
+	if store.mutate {
+		store.mutate = false
+		if err := os.WriteFile(store.mutateProfile, []byte("concurrently edited by a non-cooperating writer"), 0o600); err != nil {
+			return codexownership.Generation{}, err
+		}
+	}
+	return store.Store.Stage(ctx, input)
+}
+
+func TestManagerEnableRejectsConcurrentFileMutation(t *testing.T) {
+	_, planner := newTestManager(t)
+	plan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := planner.ownership.(*codexownership.Store)
+	hijacked := &concurrentWriterStore{Store: base, mutate: true, mutateProfile: plan.input.ProfilePath}
+	manager, err := NewManager(planner, hijacked, func() time.Time { return time.Unix(10, 0).UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Enable(context.Background(), plan.Digest()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Enable() = %v, want ErrConflict for concurrently mutated file", err)
+	}
+	if _, _, err := planner.ownership.Current(context.Background()); err == nil {
+		t.Fatal("ownership committed despite concurrent mutation")
+	}
+}
+
+func TestManagerDisableRejectsConcurrentFileMutation(t *testing.T) {
+	manager, planner := newTestManager(t)
+	enablePlan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Enable(context.Background(), enablePlan.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	disablePlan, err := planner.PlanDisable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePath := disablePlan.input.ProfilePath
+	originalWrite := manager.write
+	mutated := false
+	manager.write = func(ctx context.Context, path string, data []byte, mode os.FileMode) (atomicfile.Result, error) {
+		if !mutated {
+			mutated = true
+			if err := os.WriteFile(profilePath, []byte("concurrently edited by a non-cooperating writer"), 0o600); err != nil {
+				return atomicfile.Result{}, err
+			}
+		}
+		return originalWrite(ctx, path, data, mode)
+	}
+	if _, err := manager.Disable(context.Background(), disablePlan.Digest()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Disable() = %v, want ErrConflict for concurrently mutated file", err)
+	}
+	actual, readErr := os.ReadFile(profilePath)
+	if readErr != nil || string(actual) != "concurrently edited by a non-cooperating writer" {
+		t.Fatalf("profile file = %q, %v; the concurrent edit was destroyed", actual, readErr)
+	}
+	if _, exists, err := manager.readPending(context.Background()); err != nil || exists {
+		t.Fatalf("pending journal = exists %t, %v; want cleared after rejected disable", exists, err)
+	}
+}

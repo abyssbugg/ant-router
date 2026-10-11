@@ -303,6 +303,7 @@ func (fs *FileStore) ReadManifest(ctx context.Context) (Manifest, error) {
 // WriteManifest writes the manifest atomically.
 // Validates the manifest. Verifies Current and nonblank Previous revisions exist via ReadRevision.
 // Encodes manifest and writes with fs.writeFile at 0600 permissions.
+// On success, collects unreferenced revision files (best-effort).
 // Propagates CodeDurabilityUncertain unchanged.
 func (fs *FileStore) WriteManifest(ctx context.Context, manifest Manifest) error {
 	fs.mutationMu.Lock()
@@ -335,7 +336,40 @@ func (fs *FileStore) WriteManifest(ctx context.Context, manifest Manifest) error
 		return err
 	}
 
-	return fs.writeFile(ctx, fs.manifestPath, data, 0o600)
+	if err := fs.writeFile(ctx, fs.manifestPath, data, 0o600); err != nil {
+		return err
+	}
+	fs.collectRevisions(manifest)
+	return nil
+}
+
+// collectRevisions removes stored revision files the manifest no longer
+// references. It is best-effort: failures are ignored because lingering
+// revisions are harmless and the next activation retries collection.
+func (fs *FileStore) collectRevisions(manifest Manifest) {
+	entries, err := os.ReadDir(fs.revisionsDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !isRevisionFileName(entry.Name()) {
+			continue
+		}
+		id := revision.ID(strings.TrimSuffix(entry.Name(), revisionFileSuffix))
+		if id == manifest.Current || id == manifest.Previous {
+			continue
+		}
+		_ = os.Remove(filepath.Join(fs.revisionsDir, entry.Name()))
+	}
+}
+
+const revisionFileSuffix = ".toml"
+
+func isRevisionFileName(name string) bool {
+	if !strings.HasSuffix(name, revisionFileSuffix) {
+		return false
+	}
+	return revision.ID(strings.TrimSuffix(name, revisionFileSuffix)).Valid()
 }
 
 func (fs *FileStore) verifyManifestRevision(ctx context.Context, id revision.ID, path string) error {
