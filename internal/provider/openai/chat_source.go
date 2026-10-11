@@ -97,9 +97,19 @@ func (s *chatEventSource) Recv(ctx context.Context) (canonical.Event, error) {
 			if err := s.scanner.Err(); err != nil {
 				return canonical.Event{}, err
 			}
-			// Upstream closed the connection. A stream that never reached a
-			// finish reason is interrupted, not completed.
-			return canonical.Event{}, errors.New("chat stream ended before a finish reason")
+			// Upstream closed the connection. A stream that reached a finish
+			// reason completes normally even without [DONE]; anything else is
+			// interrupted, not completed.
+			if !s.sawFinish {
+				return canonical.Event{}, errors.New("chat stream ended before a finish reason")
+			}
+			s.done = true
+			finalEvents, err := s.accumulator.Finish()
+			if err != nil {
+				return canonical.Event{}, err
+			}
+			s.events = append(s.events, finalEvents...)
+			break
 		}
 		line := strings.TrimSpace(s.scanner.Text())
 		if line == "" || strings.HasPrefix(line, ":") {
@@ -157,7 +167,7 @@ var _ streaming.EventSource = (*chatEventSource)(nil)
 // executeChat performs one retry-free chat stream attempt and returns the
 // canonical event source.
 func (p *Provider) executeChat(ctx context.Context, upstreamModel string, request canonical.Request) (streaming.EventSource, error) {
-	body, err := chat.EncodeRequest(request, true)
+	body, err := chat.EncodeRequest(request, upstreamModel, true)
 	if err != nil {
 		if chat.IsUnsupported(err) {
 			return nil, execution.NewError(execution.CodeInvalidRequest, "request", 0, err)

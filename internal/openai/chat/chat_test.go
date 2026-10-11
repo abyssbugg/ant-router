@@ -101,7 +101,7 @@ func testRequest(t *testing.T) canonical.Request {
 }
 
 func TestEncodeRequestShape(t *testing.T) {
-	body, err := EncodeRequest(testRequest(t), false)
+	body, err := EncodeRequest(testRequest(t), "deepseek-chat", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +125,66 @@ func TestEncodeRequestShape(t *testing.T) {
 	}
 }
 
+func TestEncodeRequestUsesUpstreamModel(t *testing.T) {
+	body, err := EncodeRequest(testRequest(t), "deepseek-v3-official", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"model":"deepseek-v3-official"`) {
+		t.Fatalf("body missing upstream model: %s", body)
+	}
+	if strings.Contains(string(body), `"model":"deepseek-chat"`) {
+		t.Fatal("body leaked the public alias as the upstream model")
+	}
+	if _, err := EncodeRequest(testRequest(t), "  ", false); err == nil {
+		t.Fatal("empty upstream model accepted")
+	}
+}
+
+func TestAccumulatorDefersToolStartUntilName(t *testing.T) {
+	ids := &countingIDs{}
+	responseID, err := ids.ResponseID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accumulator := NewAccumulator(responseID, "public/model", ids)
+	machine, err := streaming.NewMachine(streaming.DefaultMachineOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := []string{
+		`{"id":"c1","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+		`{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":"}}]}}]}`,
+		`{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"up_1","function":{"name":"lookup"}}]}}]}`,
+		`{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"x\"}"}}]}}]}`,
+		`{"id":"c1","choices":[{"index":0,"finish_reason":"tool_calls","delta":{}}]}`,
+	}
+	for _, raw := range chunks {
+		chunk, err := DecodeChunk([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, err := accumulator.Accept(chunk)
+		if err != nil {
+			t.Fatalf("chunk %s: %v", raw, err)
+		}
+		for _, event := range events {
+			if _, err := machine.Accept(event); err != nil {
+				t.Fatalf("machine rejected %q: %v", event.Type(), err)
+			}
+		}
+	}
+	finalEvents, err := accumulator.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range finalEvents {
+		if _, err := machine.Accept(event); err != nil {
+			t.Fatalf("machine rejected final %q: %v", event.Type(), err)
+		}
+	}
+}
+
 func TestEncodeRequestRejectsContinuation(t *testing.T) {
 	request := testRequest(t)
 	continuation, err := canonical.NewContinuation("openai", "gpt-test", []byte(`{"entries":[]}`))
@@ -140,7 +200,7 @@ func TestEncodeRequestRejectsContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EncodeRequest(rebuilt, false); !IsUnsupported(err) {
+	if _, err := EncodeRequest(rebuilt, "deepseek-chat", false); !IsUnsupported(err) {
 		t.Fatalf("continuation error = %v, want unsupported", err)
 	}
 }
@@ -162,7 +222,7 @@ func TestEncodeRequestRejectsHostedSearchTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EncodeRequest(rebuilt, false); !IsUnsupported(err) {
+	if _, err := EncodeRequest(rebuilt, "deepseek-chat", false); !IsUnsupported(err) {
 		t.Fatalf("web search error = %v, want unsupported", err)
 	}
 }

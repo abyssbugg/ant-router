@@ -438,8 +438,15 @@ func validateProviders(c Config) error {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, parallelIndex)
 					return providerValidationError(path, "parallel tools requires tools capability")
 				}
-				if provider.Kind == ProviderKindOpenAI && provider.Wire == ProviderWireChat && (customIndex >= 0 || namespaceIndex >= 0 || hostedSearchIndex >= 0) {
-					return providerValidationError(modelPrefix+".capabilities", "capability is unavailable on the chat wire")
+				if provider.Kind == ProviderKindOpenAI && provider.Wire == ProviderWireChat {
+					if customIndex >= 0 || namespaceIndex >= 0 || hostedSearchIndex >= 0 {
+						return providerValidationError(modelPrefix+".capabilities", "capability is unavailable on the chat wire")
+					}
+					for _, capability := range model.Capabilities {
+						if capability == "continuation" || capability == "image_input" {
+							return providerValidationError(modelPrefix+".capabilities", "capability is deferred for the chat wire")
+						}
+					}
 				}
 				if provider.Kind == ProviderKindOpenAI && provider.Wire == ProviderWireChat && model.Codex != nil && model.Codex.Enabled {
 					return providerValidationError(modelPrefix+".codex", "Codex integration requires the Responses wire")

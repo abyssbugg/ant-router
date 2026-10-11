@@ -48,11 +48,25 @@ capabilities = ["text", "tools", "parallel_tools"]
 	}
 }
 
-func TestDecodeSchemaV6RejectsEndpointFields(t *testing.T) {
-	for _, field := range []string{"base_url = \"https://api.deepseek.com/v1\"", "wire = \"chat\""} {
-		document := "schema_version = 6\n[[providers]]\nid = \"deepseek\"\nkind = \"openai\"\nenabled = true\n" + field + "\n[providers.credential]\nsource = \"env\"\nname = \"OPENAI_API_KEY\"\n[[providers.models]]\nalias = \"a\"\nupstream = \"u\"\ncapabilities = [\"text\"]\n"
-		if _, err := Decode(strings.NewReader(document)); err == nil {
-			t.Fatalf("v6 accepted %q", field)
+func TestDecodeOlderSchemaRejectsEndpointFields(t *testing.T) {
+	for _, version := range []string{"3", "4", "5", "6"} {
+		for _, field := range []string{"base_url = \"https://api.deepseek.com/v1\"", "wire = \"chat\""} {
+			document := "schema_version = " + version + "\n[[providers]]\nid = \"deepseek\"\nkind = \"openai\"\nenabled = true\n" + field + "\n[providers.credential]\nsource = \"env\"\nname = \"OPENAI_API_KEY\"\n[[providers.models]]\nalias = \"a\"\nupstream = \"u\"\ncapabilities = [\"text\"]\n"
+			if _, err := Decode(strings.NewReader(document)); err == nil {
+				t.Fatalf("v%s accepted %q", version, field)
+			}
+		}
+	}
+}
+
+func TestValidateChatWireRejectsDeferredCapabilities(t *testing.T) {
+	for _, capability := range []string{"continuation", "image_input"} {
+		cfg := Default()
+		provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
+		provider.Models[0].Capabilities = []string{"text", capability}
+		cfg.Providers = []ProviderConfig{provider}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("chat wire accepted capability %q", capability)
 		}
 	}
 }

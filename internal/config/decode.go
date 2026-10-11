@@ -80,6 +80,18 @@ type wireCodex struct {
 	_                             struct{} `toml:"" json:"-"`
 }
 
+func rejectProviderEndpointFields(providers []wireProvider, version int) error {
+	for i, provider := range providers {
+		if provider.BaseURL != nil {
+			return &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].base_url", i), Err: fmt.Errorf("field is unavailable in schema version %d", version)}
+		}
+		if provider.Wire != nil {
+			return &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].wire", i), Err: fmt.Errorf("field is unavailable in schema version %d", version)}
+		}
+	}
+	return nil
+}
+
 func rejectProviderCapabilityBeforeVersion(providers []wireProvider, capability string, version int) error {
 	for i, provider := range providers {
 		for j, model := range provider.Models {
@@ -190,6 +202,9 @@ func Decode(r io.Reader) (Config, error) {
 		if err := rejectProviderCapabilityBeforeVersion(wire.Providers, "custom_tools", ProviderRegistrySchemaVersion); err != nil {
 			return Config{}, err
 		}
+		if err := rejectProviderEndpointFields(wire.Providers, ProviderRegistrySchemaVersion); err != nil {
+			return Config{}, err
+		}
 		for i, provider := range wire.Providers {
 			if provider.Kind != nil && ProviderKind(*provider.Kind) == ProviderKindAnthropic {
 				return Config{}, &Error{Code: CodeValidationFailed, Path: fmt.Sprintf("providers[%d].kind", i), Err: fmt.Errorf("provider kind is unavailable in schema version 3")}
@@ -213,6 +228,9 @@ func Decode(r io.Reader) (Config, error) {
 		if err := rejectProviderCapabilityBeforeVersion(wire.Providers, "custom_tools", AnthropicSchemaVersion); err != nil {
 			return Config{}, err
 		}
+		if err := rejectProviderEndpointFields(wire.Providers, AnthropicSchemaVersion); err != nil {
+			return Config{}, err
+		}
 		for i, provider := range wire.Providers {
 			for j, model := range provider.Models {
 				if model.Codex != nil {
@@ -225,6 +243,9 @@ func Decode(r io.Reader) (Config, error) {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 5")}
 		}
 		if err := rejectProviderCapabilityBeforeVersion(wire.Providers, "custom_tools", CodexSchemaVersion); err != nil {
+			return Config{}, err
+		}
+		if err := rejectProviderEndpointFields(wire.Providers, CodexSchemaVersion); err != nil {
 			return Config{}, err
 		}
 		// Schema version 5 predates the written Codex capability baseline,

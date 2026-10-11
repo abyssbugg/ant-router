@@ -382,27 +382,51 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 		state = &toolStreamState{itemID: itemID, callID: callID, name: call.Function.Name}
 		a.tools[call.Index] = state
 		a.toolOrder = append(a.toolOrder, call.Index)
-		if err := a.startItem(canonical.ItemStartParams{ID: itemID, Type: canonical.ItemType("tool_call"), CallID: state.callID, Name: call.Function.Name}); err != nil {
-			return err
-		}
-		state.started = true
 	}
 	if call.Function.Name != "" && state.name == "" {
 		state.name = call.Function.Name
 	}
-	if call.Function.Arguments != "" {
-		eventID, err := a.ids.EventID()
-		if err != nil {
-			return protocolErr("event.id")
+	if !state.started {
+		// The canonical item must start with a valid tool name; fragments
+		// that arrive before any name are buffered and replayed after start.
+		if state.name == "" {
+			state.args.WriteString(call.Function.Arguments)
+			return nil
 		}
-		deltaEvent, err := canonical.NewToolArgumentsDeltaEvent(eventID, a.responseID, a.sequence, state.itemID, call.Function.Arguments)
-		if err != nil {
-			return protocolErr("event.tool_arguments_delta")
+		if err := a.startItem(canonical.ItemStartParams{ID: state.itemID, Type: canonical.ItemType("tool_call"), CallID: state.callID, Name: state.name}); err != nil {
+			return err
 		}
-		a.sequence++
-		state.args.WriteString(call.Function.Arguments)
-		a.events = append(a.events, deltaEvent)
+		state.started = true
+		if state.args.Len() > 0 {
+			buffered := state.args.String()
+			state.args.Reset()
+			if buffered != "" {
+				if err := a.emitToolArguments(state, buffered); err != nil {
+					return err
+				}
+			}
+		}
 	}
+	if call.Function.Arguments != "" {
+		if err := a.emitToolArguments(state, call.Function.Arguments); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *Accumulator) emitToolArguments(state *toolStreamState, delta string) error {
+	eventID, err := a.ids.EventID()
+	if err != nil {
+		return protocolErr("event.id")
+	}
+	deltaEvent, err := canonical.NewToolArgumentsDeltaEvent(eventID, a.responseID, a.sequence, state.itemID, delta)
+	if err != nil {
+		return protocolErr("event.tool_arguments_delta")
+	}
+	a.sequence++
+	state.args.WriteString(delta)
+	a.events = append(a.events, deltaEvent)
 	return nil
 }
 

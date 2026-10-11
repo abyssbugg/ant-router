@@ -3,16 +3,21 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 )
 
-// EncodeRequest maps one canonical request to a Chat Completions body. The
-// stream flag controls the stream and stream_options fields; every other
-// mapping is identical for both delivery modes.
-func EncodeRequest(request canonical.Request, stream bool) ([]byte, error) {
+// EncodeRequest maps one canonical request to a Chat Completions body.
+// upstreamModel is the configured upstream model name the endpoint expects;
+// the canonical request carries only the public alias. The stream flag
+// controls the stream and stream_options fields.
+func EncodeRequest(request canonical.Request, upstreamModel string, stream bool) ([]byte, error) {
 	if !request.Valid() {
 		return nil, invalid("request", "canonical request is invalid")
+	}
+	if strings.TrimSpace(upstreamModel) == "" || strings.TrimSpace(upstreamModel) != upstreamModel {
+		return nil, invalid("request.upstream_model", "upstream model is invalid")
 	}
 	if request.Continuation() != nil {
 		return nil, unsupported("request.continuation")
@@ -26,7 +31,7 @@ func EncodeRequest(request canonical.Request, stream bool) ([]byte, error) {
 		return nil, err
 	}
 	body := map[string]any{
-		"model":    request.Model(),
+		"model":    upstreamModel,
 		"messages": messages,
 		"stream":   stream,
 	}
@@ -36,6 +41,7 @@ func EncodeRequest(request canonical.Request, stream bool) ([]byte, error) {
 	if len(tools) > 0 {
 		body["tools"] = tools
 		body["tool_choice"] = encodeToolChoice(request.ToolChoice())
+		body["parallel_tool_calls"] = request.Output().ParallelToolCalls()
 	}
 	if output := request.Output(); output.Format() != canonical.OutputFormat("text") {
 		body["response_format"] = encodeOutputFormat(output)
@@ -52,7 +58,6 @@ func EncodeRequest(request canonical.Request, stream bool) ([]byte, error) {
 	if maxTokens := request.Output().MaxTokens(); maxTokens > 0 {
 		body["max_tokens"] = maxTokens
 	}
-	body["parallel_tool_calls"] = request.Output().ParallelToolCalls()
 	return json.Marshal(body)
 }
 
