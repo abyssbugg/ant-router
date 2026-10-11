@@ -37,7 +37,7 @@ type Daemon struct {
 	configService   *configservice.Service
 	server          *control.Server
 	dataPlane       *activeDataPlane
-	providers       *providerRuntime
+	providers       *reloadableProviders
 	startedAt       time.Time
 	shutdownTimeout time.Duration
 	ready           chan struct{}
@@ -96,11 +96,22 @@ func New(options Options) (*Daemon, error) {
 		return nil, err
 	}
 	providers.configGeneration = configGeneration
+	reloadable := newReloadableProviders(providers)
+	service.SetActivationCallback(func(snapshot config.Snapshot) {
+		// Activations are validated before persistence, so a rebuild failure
+		// here is an invariant break; keep serving the previous runtime.
+		reloaded, err := buildProviderRuntime(snapshot.Config(), credentialSource)
+		if err != nil {
+			return
+		}
+		reloaded.configGeneration = snapshot.Generation()
+		reloadable.swap(reloaded)
+	})
 	dataPlaneListen := options.DataPlaneListen
 	if dataPlaneListen == nil {
 		dataPlaneListen = dataplane.ListenLoopback
 	}
-	dataPlane, err := buildDataPlane(paths, manager, providers, dataPlaneListen)
+	dataPlane, err := buildDataPlane(paths, manager, reloadable, dataPlaneListen)
 	if err != nil {
 		_ = listener.Close()
 		return nil, err
@@ -119,7 +130,7 @@ func New(options Options) (*Daemon, error) {
 		lifecycle:       app.NewLifecycle(),
 		configService:   service,
 		dataPlane:       dataPlane,
-		providers:       providers,
+		providers:       reloadable,
 		startedAt:       time.Now().UTC(),
 		shutdownTimeout: shutdownTimeout,
 		ready:           make(chan struct{}),
@@ -200,7 +211,7 @@ func (d *Daemon) shutdownDataPlane(ctx context.Context) error {
 }
 
 func (d *Daemon) CodexCatalog(ctx context.Context) (control.CodexCatalog, error) {
-	return d.providers.codexCatalog(ctx)
+	return d.providers.load().codexCatalog(ctx)
 }
 
 func (d *Daemon) Status(ctx context.Context) (control.RuntimeStatus, error) {
@@ -224,7 +235,7 @@ func (d *Daemon) Status(ctx context.Context) (control.RuntimeStatus, error) {
 		copyValue := d.dataPlane.status
 		dataPlane = &copyValue
 	}
-	providers, err := d.providers.summaries(ctx)
+	providers, err := d.providers.load().summaries(ctx)
 	if err != nil {
 		return control.RuntimeStatus{}, err
 	}

@@ -27,7 +27,7 @@ func (d *activeDataPlane) closeBeforeStart() {
 	}
 }
 
-func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, providers *providerRuntime, listen func(string) (net.Listener, error)) (*activeDataPlane, error) {
+func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, providers *reloadableProviders, listen func(string) (net.Listener, error)) (*activeDataPlane, error) {
 	snapshot, ok := manager.Current()
 	if !ok {
 		return nil, nil
@@ -47,14 +47,14 @@ func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, providers
 	if err != nil {
 		return nil, err
 	}
-	if providers == nil || providers.registry == nil {
+	if providers == nil || providers.load() == nil || providers.load().registry == nil {
 		return nil, fmt.Errorf("provider registry is unavailable")
 	}
 	handler, err := dataplane.NewHandler(dataplane.HandlerOptions{
 		TokenSource:      dataplane.StaticTokenSource(token),
-		Executor:         providers.registry,
-		Catalog:          providers.registry,
-		AffinityResolver: providers.registry,
+		Executor:         providers,
+		Catalog:          providers,
+		AffinityResolver: providers,
 		ListenAddress:    configuration.DataPlane.Listen,
 		MaxConcurrent:    configuration.DataPlane.MaxConcurrentRequests,
 		RequestTimeout:   dataPlaneRequestTimeout,
