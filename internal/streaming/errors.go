@@ -31,6 +31,8 @@ const (
 	CodeResponseLimitExceeded ErrorCode = "response_limit_exceeded"
 	// CodePrecommitLimitExceeded reports precommit buffer growth beyond limits.
 	CodePrecommitLimitExceeded ErrorCode = "precommit_limit_exceeded"
+	// CodeEventLimitExceeded reports tracked event growth beyond limits.
+	CodeEventLimitExceeded ErrorCode = "event_limit_exceeded"
 	// CodeSourceFailed reports an upstream source failure.
 	CodeSourceFailed ErrorCode = "source_failed"
 	// CodeSinkFailed reports a downstream sink failure.

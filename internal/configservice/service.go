@@ -120,10 +120,16 @@ func (s *Service) Apply(ctx context.Context, request ApplyRequest) (CurrentResul
 func (s *Service) Current() CurrentResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if snapshot, ok := s.manager.Current(); ok {
-		return resultFromSnapshot(s.state, snapshot)
+	diagnostic := ""
+	if s.diagnostic != nil {
+		diagnostic = s.diagnostic.Error()
 	}
-	return CurrentResult{State: s.state}
+	if snapshot, ok := s.manager.Current(); ok {
+		result := resultFromSnapshot(s.state, snapshot)
+		result.Diagnostic = diagnostic
+		return result
+	}
+	return CurrentResult{State: s.state, Diagnostic: diagnostic}
 }
 
 func (s *Service) Rollback(ctx context.Context) (CurrentResult, error) {

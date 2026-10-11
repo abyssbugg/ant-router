@@ -198,6 +198,9 @@ func (h *handler) responses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if parsed.Stream {
+		if !tracker.wrote {
+			writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_error", "request", "request failed")
+		}
 		return
 	}
 	response, ok := result.Response()
@@ -234,7 +237,7 @@ func writeResponsesError(w http.ResponseWriter, err error) {
 }
 func writeExecutionError(w http.ResponseWriter, err error) {
 	status := http.StatusBadGateway
-	if execution.CodeOf(err) == execution.CodeInvalidModel {
+	if code := execution.CodeOf(err); code == execution.CodeInvalidModel || code == execution.CodeInvalidRequest {
 		status = http.StatusBadRequest
 	}
 	writeAPIError(w, status, "server_error", string(execution.CodeOf(err)), "model", "request could not be executed")

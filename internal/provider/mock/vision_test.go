@@ -77,7 +77,15 @@ func TestVisionScenarioProducesSafeDeterministicSummary(t *testing.T) {
 func TestVisionScenarioRequiresImage(t *testing.T) {
 	provider, _ := New(Options{IDs: &sequenceIDs{}})
 	_, err := provider.Execute(context.Background(), scenarioRequest(t, "mock/vision"))
-	if execution.CodeOf(err) != execution.CodeInvalidModel {
+	if execution.CodeOf(err) != execution.CodeInvalidRequest {
+		t.Fatalf("Execute() error=%v", err)
+	}
+}
+
+func TestExecuteRejectsInvalidRequest(t *testing.T) {
+	provider, _ := New(Options{IDs: &sequenceIDs{}})
+	_, err := provider.Execute(context.Background(), canonical.Request{})
+	if execution.CodeOf(err) != execution.CodeInvalidRequest {
 		t.Fatalf("Execute() error=%v", err)
 	}
 }

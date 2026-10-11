@@ -39,9 +39,10 @@ func (e Encoder) EncodeResponse(response canonical.Response) ([]byte, error) {
 		}
 		output = append(output, value)
 	}
+	status, incompleteDetails := wireResponseStatus(response.FinishReason())
 	wire := wireResponse{
 		ID: wireResponseID(response.ID()), Object: "response", CreatedAt: e.createdAt,
-		Status: "completed", Model: response.Model(), Output: output, Usage: encodeUsage(response.Usage()),
+		Status: status, IncompleteDetails: incompleteDetails, Model: response.Model(), Output: output, Usage: encodeUsage(response.Usage()),
 	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
@@ -154,6 +155,17 @@ func encodeOutputItem(item canonical.Item, continuationEntries continuationOutpu
 		return wireReasoning{ID: wireID, Type: "reasoning", Status: "completed", Summary: summary, EncryptedContent: encrypted}, nil
 	default:
 		return nil, errors.New("output item is unsupported")
+	}
+}
+
+func wireResponseStatus(finish canonical.FinishReason) (string, any) {
+	switch finish {
+	case canonical.FinishReason("length"):
+		return "incomplete", map[string]string{"reason": "max_output_tokens"}
+	case canonical.FinishReason("content_filter"):
+		return "incomplete", map[string]string{"reason": "content_filter"}
+	default:
+		return "completed", nil
 	}
 }
 

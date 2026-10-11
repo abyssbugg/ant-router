@@ -3,6 +3,7 @@ package openai
 import (
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -117,12 +118,18 @@ func (r *boundedReadCloser) Read(buffer []byte) (int, error) {
 		}
 		n, err := r.body.Read(buffer)
 		r.remaining -= int64(n)
+		if n == 0 && err == nil {
+			return 0, io.ErrNoProgress
+		}
 		return n, err
 	}
 	var probe [1]byte
 	n, err := r.body.Read(probe[:])
 	if n > 0 {
 		return 0, errResponseTooLarge
+	}
+	if n == 0 && err == nil {
+		return 0, io.ErrNoProgress
 	}
 	return 0, err
 }

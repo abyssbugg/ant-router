@@ -75,14 +75,14 @@ func (p *Provider) Execute(ctx context.Context, request canonical.Request) (stre
 		return nil, err
 	}
 	if !request.Valid() {
-		return nil, execution.NewError(execution.CodeInvalidModel, "request", 0, errors.New("request is invalid"))
+		return nil, execution.NewError(execution.CodeInvalidRequest, "request", 0, errors.New("request is invalid"))
 	}
 	model, ok := p.model(request.Model())
 	if !ok || !supports(model.Capabilities(), request.Capabilities()) {
 		return nil, execution.NewError(execution.CodeInvalidModel, "request.model", 0, errors.New("model is unavailable"))
 	}
 	if request.Model() == "mock/vision" && requestImageCount(request) == 0 {
-		return nil, execution.NewError(execution.CodeInvalidModel, "request.input", 0, errors.New("vision model requires an image input"))
+		return nil, execution.NewError(execution.CodeInvalidRequest, "request.input", 0, errors.New("vision model requires an image input"))
 	}
 	p.idMu.Lock()
 	events, finalErr, err := buildScript(p.ids, request)

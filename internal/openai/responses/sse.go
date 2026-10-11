@@ -96,7 +96,11 @@ func (s *SSESink) mapEvent(event canonical.Event, transition streaming.Transitio
 		}
 		setType("response.output_item.added")
 		base["output_index"] = payload.Index()
-		base["item"] = startedOutputItem(payload, s.reasoningEntries)
+		item, err := startedOutputItem(payload, s.reasoningEntries)
+		if err != nil {
+			return "", nil, false, newError(CodeInternal, "stream.item", errors.New("started item is unsupported"))
+		}
+		base["item"] = item
 		return "response.output_item.added", base, false, nil
 	case canonical.EventType("content_started"):
 		payload, _ := event.ContentStarted()
@@ -183,9 +187,13 @@ func (s *SSESink) mapEvent(event canonical.Event, transition streaming.Transitio
 		if err != nil {
 			return "", nil, false, err
 		}
-		setType("response.completed")
+		name := "response.completed"
+		if finish := response.FinishReason(); finish == canonical.FinishReason("length") || finish == canonical.FinishReason("content_filter") {
+			name = "response.incomplete"
+		}
+		setType(name)
 		base["response"] = json.RawMessage(encoded)
-		return "response.completed", base, true, nil
+		return name, base, true, nil
 	case canonical.EventType("response_failed"):
 		payload, _ := event.ResponseFailed()
 		setType("response.failed")
@@ -233,16 +241,18 @@ func (s *SSESink) writeData(ctx context.Context, data string) error {
 	return nil
 }
 
-func startedOutputItem(payload canonical.ItemStartedPayload, continuationEntries continuationOutputEntries) any {
+func startedOutputItem(payload canonical.ItemStartedPayload, continuationEntries continuationOutputEntries) (any, error) {
 	switch payload.Type() {
 	case canonical.ItemType("message"):
-		return wireMessage{ID: wireItemID("msg", payload.ID()), Type: "message", Status: "in_progress", Role: "assistant", Content: []wireOutputText{}}
+		return wireMessage{ID: wireItemID("msg", payload.ID()), Type: "message", Status: "in_progress", Role: "assistant", Content: []wireOutputText{}}, nil
 	case canonical.ItemType("tool_call"):
 		wireItem, wireCall := toolCallWireIdentity(payload.ID(), payload.CallID(), continuationEntries)
-		return wireFunctionCall{ID: wireItem, Type: "function_call", Status: "in_progress", CallID: wireCall, Name: payload.Name(), Arguments: ""}
-	default:
+		return wireFunctionCall{ID: wireItem, Type: "function_call", Status: "in_progress", CallID: wireCall, Name: payload.Name(), Arguments: ""}, nil
+	case canonical.ItemType("reasoning_summary"):
 		wireID, encrypted := reasoningWireIdentity(payload.ID(), continuationEntries)
-		return wireReasoning{ID: wireID, Type: "reasoning", Status: "in_progress", Summary: []wireReasoningSummary{}, EncryptedContent: encrypted}
+		return wireReasoning{ID: wireID, Type: "reasoning", Status: "in_progress", Summary: []wireReasoningSummary{}, EncryptedContent: encrypted}, nil
+	default:
+		return nil, errors.New("output item is unsupported")
 	}
 }
 
