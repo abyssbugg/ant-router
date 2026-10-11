@@ -107,7 +107,7 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 		if err != nil {
 			return execution.Registration{}, err
 		}
-		provider, err := openaiprovider.NewProviderForID(providerConfig.ID, source, ref)
+		provider, err := openaiprovider.NewProviderForIDWithEndpoint(providerConfig.ID, source, ref, openaiprovider.Endpoint{BaseURL: providerConfig.BaseURL, Chat: providerConfig.Wire == config.ProviderWireChat})
 		if err != nil {
 			return execution.Registration{}, err
 		}
