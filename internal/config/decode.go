@@ -47,6 +47,8 @@ type wireProvider struct {
 	Kind       *string             `toml:"kind"`
 	Enabled    *bool               `toml:"enabled"`
 	Credential *wireCredential     `toml:"credential"`
+	BaseURL    *string             `toml:"base_url"`
+	Wire       *string             `toml:"wire"`
 	Models     []wireProviderModel `toml:"models"`
 	_          struct{}            `toml:"" json:"-"`
 }
@@ -229,9 +231,21 @@ func Decode(r io.Reader) (Config, error) {
 		// so its valid payloads never carry all six capabilities. Mark the
 		// config so normalization migrates Codex-enabled models to v6.
 		cfg.v5Migrated = true
-	case SchemaVersion:
+	case BaselineSchemaVersion:
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 6")}
+		}
+		for i, provider := range wire.Providers {
+			if provider.BaseURL != nil {
+				return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].base_url", i), Err: fmt.Errorf("field is unavailable in schema version 6")}
+			}
+			if provider.Wire != nil {
+				return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].wire", i), Err: fmt.Errorf("field is unavailable in schema version 6")}
+			}
+		}
+	case SchemaVersion:
+		if wire.MockProvider != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 7")}
 		}
 	default:
 		return Config{}, &Error{Code: CodeUnsupportedSchema, Path: "schema_version", Err: fmt.Errorf("unsupported schema version %d", *wire.SchemaVersion)}
@@ -280,7 +294,7 @@ func Decode(r io.Reader) (Config, error) {
 	if *wire.SchemaVersion == PreviousSchemaVersion && wire.MockProvider != nil && wire.MockProvider.Enabled != nil && *wire.MockProvider.Enabled {
 		cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 	}
-	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == CodexSchemaVersion || *wire.SchemaVersion == SchemaVersion {
+	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == CodexSchemaVersion || *wire.SchemaVersion == BaselineSchemaVersion || *wire.SchemaVersion == SchemaVersion {
 		if wire.Providers != nil {
 			cfg.Providers = make([]ProviderConfig, len(wire.Providers))
 		}
@@ -294,6 +308,12 @@ func Decode(r io.Reader) (Config, error) {
 			}
 			if provider.Enabled != nil {
 				converted.Enabled = *provider.Enabled
+			}
+			if provider.BaseURL != nil {
+				converted.BaseURL = *provider.BaseURL
+			}
+			if provider.Wire != nil {
+				converted.Wire = ProviderWire(*provider.Wire)
 			}
 			if provider.Credential != nil {
 				converted.Credential = &CredentialRef{}

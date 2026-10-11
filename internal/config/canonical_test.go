@@ -264,7 +264,7 @@ func TestRevisionFor(t *testing.T) {
 
 	// Verify format: 64 lowercase hex characters
 	if len(rid.String()) != 64 {
-		t.Errorf("RevisionID length = %d, want 64", len(rid.String()))
+		t.Errorf("RevisionID length = %d, want 74", len(rid.String()))
 	}
 
 	// Verify it's valid

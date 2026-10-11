@@ -46,7 +46,7 @@ max_output_tokens = 8192
 		t.Fatalf("Decode() error = %v", err)
 	}
 	want := validAnthropicProvider("anthropic-primary", "anthropic/claude-test")
-	if cfg.SchemaVersion != 6 || len(cfg.Providers) != 1 || !reflect.DeepEqual(cfg.Providers[0], want) {
+	if cfg.SchemaVersion != SchemaVersion || len(cfg.Providers) != 1 || !reflect.DeepEqual(cfg.Providers[0], want) {
 		t.Fatalf("decoded config = %#v, want provider %#v", cfg, want)
 	}
 }

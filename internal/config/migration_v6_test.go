@@ -40,8 +40,8 @@ capabilities = [%s]
 }
 
 func TestDefaultUsesSchemaV6(t *testing.T) {
-	if got := Default().SchemaVersion; got != 6 {
-		t.Fatalf("schema version = %d, want 6", got)
+	if got := Default().SchemaVersion; got != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", got, SchemaVersion)
 	}
 }
 
@@ -50,8 +50,8 @@ func TestSchemaV5MigratesToV6WithoutInferringCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 6 {
-		t.Fatalf("schema version = %d, want 6", cfg.SchemaVersion)
+	if cfg.SchemaVersion != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", cfg.SchemaVersion, SchemaVersion)
 	}
 	want := []string{"hosted_web_search", "text", "tools"}
 	if !slices.Equal(cfg.Providers[0].Models[0].Capabilities, want) {
@@ -87,7 +87,7 @@ func TestSchemaV6AcceptsCompleteCodexBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 6 || cfg.Providers[0].Models[0].Codex == nil {
+	if cfg.SchemaVersion != SchemaVersion || cfg.Providers[0].Models[0].Codex == nil {
 		t.Fatalf("config = %#v", cfg)
 	}
 }
