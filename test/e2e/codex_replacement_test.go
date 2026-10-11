@@ -59,7 +59,11 @@ func TestCodexReplacementAlphaWorkflow(t *testing.T) {
 	waitForDaemon(t, binaries, stateRoot, runtimeRoot, instance)
 	defer second.stop()
 
-	global := []string{"--codex-home", codexHome, "--codex-bin", codexBin, "codex"}
+	// The workflow under test is independent of the installed Codex release;
+	// the escape flag lets machines with a newer untested Codex CLI (local
+	// dev) run the same flow CI pins to Codex 0.153.4. The version gate
+	// itself is covered by codexversion's unit tests.
+	global := []string{"--allow-untested-codex", "--codex-home", codexHome, "--codex-bin", codexBin, "codex"}
 	planOut, planErr, code := routerctl(t, binaries, stateRoot, runtimeRoot, instance, append(global, "plan", "enable")...)
 	if code != 0 || len(planErr) != 0 {
 		t.Fatalf("plan enable = %d %q", code, planErr)
