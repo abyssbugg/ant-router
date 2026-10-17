@@ -165,6 +165,16 @@ func (r *Registry) Execute(ctx context.Context, request canonical.Request) (stre
 	if continuation := request.Continuation(); continuation != nil && (continuation.Provider() != binding.providerID || continuation.Model() != binding.upstream) {
 		return nil, NewError(CodeInvalidRequest, "request.continuation", 0, nil)
 	}
+	if !binding.model.Capabilities().Has(canonical.CapabilityHostedWebSearch) {
+		// Web search is disabled for this model: withhold the hosted tool
+		// declaration (clients such as Codex always offer it) rather than
+		// failing the turn.
+		withheld, err := request.WithoutHostedWebSearchTools()
+		if err != nil {
+			return nil, NewError(CodeInvalidRequest, "request.tools", 0, nil)
+		}
+		request = withheld
+	}
 	if !supportsCapabilities(binding.model.Capabilities(), request.Capabilities()) {
 		return nil, NewError(CodeInvalidModel, "request.model", 0, nil)
 	}

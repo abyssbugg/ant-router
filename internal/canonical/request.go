@@ -319,6 +319,24 @@ func (r Request) WithoutContinuation() Request {
 	return copyValue
 }
 
+// WithoutHostedWebSearchTools returns the request with every hosted web-search
+// tool declaration removed. The result is revalidated, so a tool choice that
+// only the removed declarations could satisfy is rejected rather than
+// silently changed. Hosted search history items are kept and still require the
+// hosted web search capability.
+func (r Request) WithoutHostedWebSearchTools() (Request, error) {
+	tools := make([]ToolDefinition, 0, len(r.tools))
+	for _, tool := range r.tools {
+		if tool.Kind() != ToolDefinitionKindWebSearch {
+			tools = append(tools, tool)
+		}
+	}
+	if len(tools) == len(r.tools) {
+		return r, nil
+	}
+	return NewRequest(RequestParams{ID: r.id, Model: r.model, Input: r.input, Tools: tools, ToolChoice: r.toolChoice, Output: r.output, Sampling: r.sampling, Continuation: r.continuation, ReasoningSummary: r.reasoningSummary})
+}
+
 // Valid reports whether the request satisfies all local and cross-value invariants.
 func (r Request) Valid() bool {
 	_, err := NewRequest(RequestParams{ID: r.id, Model: r.model, Input: r.input, Tools: r.tools, ToolChoice: r.toolChoice, Output: r.output, Sampling: r.sampling, Continuation: r.continuation, ReasoningSummary: r.reasoningSummary})
