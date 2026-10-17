@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
@@ -151,7 +152,12 @@ func BuildResponse(responseID canonical.ResponseID, model string, completion Com
 		if call.Type != "" && call.Type != "function" {
 			return canonical.Response{}, protocolErr("response.tool_calls.type")
 		}
-		arguments, err := canonicaljson.Parse([]byte(call.Function.Arguments), canonicaljson.DefaultLimits())
+		// Treat empty arguments (after trimming ASCII whitespace) as empty JSON object.
+		argsStr := strings.TrimSpace(call.Function.Arguments)
+		if argsStr == "" {
+			argsStr = "{}"
+		}
+		arguments, err := canonicaljson.Parse([]byte(argsStr), canonicaljson.DefaultLimits())
 		if err != nil {
 			return canonical.Response{}, protocolErr("response.tool_calls.arguments")
 		}
