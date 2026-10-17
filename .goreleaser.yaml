@@ -1,0 +1,107 @@
+version: 2
+project_name: ant-router
+
+builds:
+  - id: routerd
+    main: ./cmd/routerd
+    binary: routerd
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.version={{.Version}}
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.commit={{.FullCommit}}
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.date={{.CommitDate}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: routerctl
+    main: ./cmd/routerctl
+    binary: routerctl
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.version={{.Version}}
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.commit={{.FullCommit}}
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.date={{.CommitDate}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+    name_template: ant-router_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+# Keyless Sigstore signing of the checksum file; verify with
+# cosign verify-blob --bundle checksums.txt.sigstore.json checksums.txt.
+# Snapshot builds skip it via --skip=sign.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - --yes
+      - --bundle=${signature}
+      - ${artifact}
+    artifacts: checksum
+
+homebrew_casks:
+  - repository:
+      owner: abyssbugg
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    skip_upload: auto
+    binaries:
+      - routerd
+      - routerctl
+
+changelog:
+  use: github
+  groups:
+    - title: Features
+      regexp: "^feat"
+    - title: Fixes
+      regexp: "^fix"
+    - title: Other
+      regexp: ".*"
+  exclude:
+    patterns:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  owner: abyssbugg
+  name: ant-router
+  draft: true
+  prerelease: auto
