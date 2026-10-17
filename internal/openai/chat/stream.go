@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
-	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 )
 
 // RandomIDs generates canonical identifiers from crypto/rand.
@@ -57,6 +56,7 @@ type toolStreamState struct {
 	itemID  canonical.ItemID
 	callID  canonical.ToolCallID
 	name    string
+	tool    resolvedTool
 	started bool
 	args    strings.Builder
 }
@@ -68,6 +68,7 @@ type Accumulator struct {
 	responseID  canonical.ResponseID
 	publicModel string
 	ids         IDGenerator
+	names       ToolNameMap
 	sequence    uint64
 	events      []canonical.Event
 
@@ -87,8 +88,10 @@ type Accumulator struct {
 }
 
 // NewAccumulator constructs one chunk accumulator for a single stream.
-func NewAccumulator(responseID canonical.ResponseID, publicModel string, ids IDGenerator) *Accumulator {
-	return &Accumulator{responseID: responseID, publicModel: publicModel, ids: ids, tools: make(map[int]*toolStreamState)}
+// names maps upstream function names back to the canonical tools they were
+// encoded from; nil means every call is a plain function tool call.
+func NewAccumulator(responseID canonical.ResponseID, publicModel string, ids IDGenerator, names ToolNameMap) *Accumulator {
+	return &Accumulator{responseID: responseID, publicModel: publicModel, ids: ids, names: names, tools: make(map[int]*toolStreamState)}
 }
 
 // Accept consumes one chunk and returns the canonical events it produced.
@@ -393,19 +396,14 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 		// The canonical item must start with a valid tool name; fragments
 		// that arrive before any name are buffered and replayed after start.
 		if state.name == "" {
-			// Nothing has been emitted yet, so the streaming machine cannot
-			// enforce its argument limit; bound the replay buffer here.
-			if state.args.Len()+len(call.Function.Arguments) > canonical.MaxJSONBytes {
-				return protocolErr("tool.arguments_limit")
-			}
-			state.args.WriteString(call.Function.Arguments)
-			return nil
+			return bufferToolArguments(state, call.Function.Arguments)
 		}
-		if err := a.startItem(canonical.ItemStartParams{ID: state.itemID, Type: canonical.ItemType("tool_call"), CallID: state.callID, Name: state.name}); err != nil {
+		state.tool = resolveTool(a.names, state.name)
+		if err := a.startItem(canonical.ItemStartParams{ID: state.itemID, Type: state.tool.itemType(), CallID: state.callID, Namespace: state.tool.namespace, Name: state.tool.name}); err != nil {
 			return err
 		}
 		state.started = true
-		if state.args.Len() > 0 {
+		if !state.tool.custom() && state.args.Len() > 0 {
 			buffered := state.args.String()
 			state.args.Reset()
 			if buffered != "" {
@@ -415,11 +413,27 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 			}
 		}
 	}
+	if state.tool.custom() {
+		// Custom input travels inside a JSON object that cannot be decoded
+		// incrementally; it is decoded once the call completes.
+		return bufferToolArguments(state, call.Function.Arguments)
+	}
 	if call.Function.Arguments != "" {
 		if err := a.emitToolArguments(state, call.Function.Arguments); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// bufferToolArguments holds argument fragments that cannot be emitted yet.
+// Nothing reaches the streaming machine while they are buffered, so the
+// buffer is bounded here.
+func bufferToolArguments(state *toolStreamState, fragment string) error {
+	if state.args.Len()+len(fragment) > canonical.MaxJSONBytes {
+		return protocolErr("tool.arguments_limit")
+	}
+	state.args.WriteString(fragment)
 	return nil
 }
 
@@ -439,17 +453,24 @@ func (a *Accumulator) emitToolArguments(state *toolStreamState, delta string) er
 }
 
 func (a *Accumulator) completeTool(state *toolStreamState) error {
-	arguments, err := canonicaljson.Parse([]byte(state.args.String()), canonicaljson.DefaultLimits())
-	if err != nil {
-		return protocolErr("tool.arguments")
+	if !state.started {
+		return protocolErr("tool.name")
 	}
-	toolCall, err := canonical.NewToolCall(state.itemID, state.callID, state.name, arguments)
+	item, err := buildToolCallItem(state.tool, state.itemID, state.callID, state.args.String())
 	if err != nil {
-		return protocolErr("tool.item")
+		return err
 	}
-	item, err := canonical.NewToolCallItem(toolCall)
-	if err != nil {
-		return protocolErr("tool.item")
+	if call, ok := item.CustomToolCall(); ok {
+		eventID, err := a.ids.EventID()
+		if err != nil {
+			return protocolErr("event.id")
+		}
+		inputCompleted, err := canonical.NewCustomInputCompletedEvent(eventID, a.responseID, a.sequence, state.itemID, call.Input())
+		if err != nil {
+			return protocolErr("event.custom_input_completed")
+		}
+		a.sequence++
+		a.events = append(a.events, inputCompleted)
 	}
 	eventID, err := a.ids.EventID()
 	if err != nil {

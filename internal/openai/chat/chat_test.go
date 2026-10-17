@@ -148,7 +148,7 @@ func TestAccumulatorDefersToolStartUntilName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accumulator := NewAccumulator(responseID, "public/model", ids)
+	accumulator := NewAccumulator(responseID, "public/model", ids, nil)
 	machine, err := streaming.NewMachine(streaming.DefaultMachineOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +192,7 @@ func TestAccumulatorBoundsPendingToolArgumentsBeforeName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accumulator := NewAccumulator(responseID, "public/model", ids)
+	accumulator := NewAccumulator(responseID, "public/model", ids, nil)
 	fragment := strings.Repeat("a", 64<<10)
 	raw := `{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"` + fragment + `"}}]}}]}`
 	chunk, err := DecodeChunk([]byte(raw))
@@ -216,7 +216,7 @@ func TestAccumulatorBoundsDistinctToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accumulator := NewAccumulator(responseID, "public/model", ids)
+	accumulator := NewAccumulator(responseID, "public/model", ids, nil)
 	for index := 0; index <= canonical.MaxResponseItems; index++ {
 		raw := fmt.Sprintf(`{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":%d,"function":{"arguments":"{}"}}]}}]}`, index)
 		chunk, err := DecodeChunk([]byte(raw))
@@ -367,7 +367,7 @@ func TestBuildResponseFromCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := BuildResponse(responseID, "deepseek-chat", completion, ids)
+	response, err := BuildResponse(responseID, "deepseek-chat", completion, ids, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestAccumulatorStreamReconstructsThroughMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accumulator := NewAccumulator(responseID, "public/model", ids)
+	accumulator := NewAccumulator(responseID, "public/model", ids, nil)
 	machine, err := streaming.NewMachine(streaming.DefaultMachineOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -463,7 +463,7 @@ func TestAccumulatorRejectsBrokenArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accumulator := NewAccumulator(responseID, "public/model", ids)
+	accumulator := NewAccumulator(responseID, "public/model", ids, nil)
 	for _, raw := range []string{
 		`{"id":"c1","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
 		`{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"lookup","arguments":"{not json"}}]}}]}`,

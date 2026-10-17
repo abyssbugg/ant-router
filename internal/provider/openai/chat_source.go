@@ -75,13 +75,13 @@ type chatEventSource struct {
 	closed      bool
 }
 
-func newChatEventSource(body io.ReadCloser, responseID canonical.ResponseID, publicModel string, ids chat.IDGenerator) *chatEventSource {
+func newChatEventSource(body io.ReadCloser, responseID canonical.ResponseID, publicModel string, ids chat.IDGenerator, names chat.ToolNameMap) *chatEventSource {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxChatSSELine)
 	return &chatEventSource{
 		body:        body,
 		scanner:     scanner,
-		accumulator: chat.NewAccumulator(responseID, publicModel, ids),
+		accumulator: chat.NewAccumulator(responseID, publicModel, ids, names),
 	}
 }
 
@@ -167,7 +167,7 @@ var _ streaming.EventSource = (*chatEventSource)(nil)
 // executeChat performs one retry-free chat stream attempt and returns the
 // canonical event source.
 func (p *Provider) executeChat(ctx context.Context, upstreamModel string, request canonical.Request) (streaming.EventSource, error) {
-	body, err := chat.EncodeRequest(request, upstreamModel, true)
+	body, names, err := chat.EncodeRequestWithTools(request, upstreamModel, true)
 	if err != nil {
 		if chat.IsUnsupported(err) {
 			return nil, execution.NewError(execution.CodeInvalidRequest, "request", 0, err)
@@ -195,7 +195,7 @@ func (p *Provider) executeChat(ctx context.Context, upstreamModel string, reques
 		_ = response.Body.Close()
 		return nil, execution.NewError(execution.CodeInternal, "provider.chat.id", 0, err)
 	}
-	return newChatEventSource(response.Body, responseID, request.Model(), chatAdapterIDs{ids: p.ids}), nil
+	return newChatEventSource(response.Body, responseID, request.Model(), chatAdapterIDs{ids: p.ids}, names), nil
 }
 
 func retryAfterOf(delay time.Duration) time.Duration {
