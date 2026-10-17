@@ -29,6 +29,15 @@ type ToolNameInfo struct {
 // function name.
 const namespaceSeparator = "__"
 
+// upstreamFunctionName returns the Chat Completions function name for a
+// canonical tool name, flattening namespace members.
+func upstreamFunctionName(namespace, name string) string {
+	if namespace == "" {
+		return name
+	}
+	return namespace + namespaceSeparator + name
+}
+
 // chatFunctionName is the function-name grammar Chat Completions accepts.
 var chatFunctionName = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
@@ -72,10 +81,7 @@ type toolEncoder struct {
 }
 
 func (e *toolEncoder) add(path string, tool canonical.ToolDefinition, namespace string) error {
-	name := tool.Name()
-	if namespace != "" {
-		name = namespace + namespaceSeparator + name
-	}
+	name := upstreamFunctionName(namespace, tool.Name())
 	if !chatFunctionName.MatchString(name) {
 		return invalid(path+".name", fmt.Sprintf("function name %q must match %s", name, chatFunctionName))
 	}
