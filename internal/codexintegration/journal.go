@@ -12,16 +12,22 @@ import (
 	"github.com/abyssbugg/ant-router/internal/codexownership"
 )
 
-const pendingSchemaVersion = 1
+// Version 2 records explicit base/target file existence; version 1 journals
+// lack it and are rejected rather than guessed.
+const pendingSchemaVersion = 2
 const maxPendingBytes = 64 << 10
 
 type pendingTransaction struct {
-	SchemaVersion    int    `json:"schema_version"`
-	Action           Action `json:"action"`
-	TargetGeneration string `json:"target_generation,omitempty"`
-	BaseGeneration   string `json:"base_generation,omitempty"`
-	ProfilePath      string `json:"profile_path"`
-	CatalogPath      string `json:"catalog_path"`
+	SchemaVersion       int    `json:"schema_version"`
+	Action              Action `json:"action"`
+	TargetGeneration    string `json:"target_generation,omitempty"`
+	BaseGeneration      string `json:"base_generation,omitempty"`
+	ProfilePath         string `json:"profile_path"`
+	CatalogPath         string `json:"catalog_path"`
+	BaseProfileExists   bool   `json:"base_profile_exists"`
+	BaseCatalogExists   bool   `json:"base_catalog_exists"`
+	TargetProfileExists bool   `json:"target_profile_exists"`
+	TargetCatalogExists bool   `json:"target_catalog_exists"`
 }
 
 func validPending(pending pendingTransaction) bool {
@@ -36,12 +42,19 @@ func validPending(pending pendingTransaction) bool {
 	}
 	switch pending.Action {
 	case ActionEnable:
-		return pending.TargetGeneration != "" && pending.TargetGeneration != pending.BaseGeneration
+		if pending.TargetGeneration == "" || pending.TargetGeneration == pending.BaseGeneration {
+			return false
+		}
+		return pending.TargetProfileExists && pending.TargetCatalogExists
 	case ActionRestore:
 		// Restore may republish the current owned generation after disable removed its files.
-		return pending.TargetGeneration != "" && pending.BaseGeneration != ""
+		if pending.TargetGeneration == "" || pending.BaseGeneration == "" {
+			return false
+		}
+		return pending.TargetProfileExists && pending.TargetCatalogExists
 	case ActionDisable:
-		return pending.TargetGeneration == "" && pending.BaseGeneration != ""
+		// Disable targets absence; recovery removes both files regardless of base.
+		return pending.TargetGeneration == "" && pending.BaseGeneration != "" && !pending.TargetProfileExists && !pending.TargetCatalogExists
 	default:
 		return false
 	}

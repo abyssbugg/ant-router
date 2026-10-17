@@ -262,9 +262,9 @@ func writeExecutionError(w http.ResponseWriter, err error) {
 	errorType, param := "server_error", "model"
 	if code == execution.CodeInvalidModel || code == execution.CodeInvalidRequest {
 		status = http.StatusBadRequest
+		errorType = "invalid_request_error"
 	}
 	if code == execution.CodeInvalidRequest {
-		errorType = "invalid_request_error"
 		// Execution error paths are fixed, non-secret field names.
 		var executionErr *execution.Error
 		if errors.As(err, &executionErr) && executionErr.Path != "" {

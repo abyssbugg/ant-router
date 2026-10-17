@@ -65,3 +65,50 @@ func TestActivationCallbackFailureIsReportedAsDiagnostic(t *testing.T) {
 		t.Fatalf("Rollback() diagnostic = %q, Current() = %q", rolled.Diagnostic, service.Current().Diagnostic)
 	}
 }
+
+// TestStaleActivationCallbackDoesNotOverwriteDiagnostic overlaps two
+// activations so the older callback finishes last; its outcome must not
+// replace the diagnostic of the newer, current activation.
+func TestStaleActivationCallbackDoesNotOverwriteDiagnostic(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		staleErr, freshErr error
+		wantDiagnostic     string
+	}{
+		{name: "stale failure after fresh success", staleErr: errors.New("stale rebuild failed")},
+		{name: "stale success after fresh failure", freshErr: errors.New("fresh rebuild failed"), wantDiagnostic: "fresh rebuild failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, _ := newService(t, t.TempDir())
+			if _, err := service.Initialize(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			service.SetActivationCallback(func(snapshot config.Snapshot) error {
+				if snapshot.Generation() == 1 {
+					close(entered)
+					<-release
+					return tc.staleErr
+				}
+				return tc.freshErr
+			})
+			staleDone := make(chan CurrentResult)
+			go func() { staleDone <- applyTimeout(t, service, 30*time.Second) }()
+			<-entered
+			fresh := applyTimeout(t, service, 31*time.Second)
+			close(release)
+			<-staleDone
+
+			current := service.Current()
+			if current.Generation != fresh.Generation {
+				t.Fatalf("Current() generation = %d, want %d", current.Generation, fresh.Generation)
+			}
+			if tc.wantDiagnostic == "" && current.Diagnostic != "" {
+				t.Fatalf("Current() diagnostic = %q; stale callback overwrote current activation", current.Diagnostic)
+			}
+			if tc.wantDiagnostic != "" && !strings.Contains(current.Diagnostic, tc.wantDiagnostic) {
+				t.Fatalf("Current() diagnostic = %q, want %q", current.Diagnostic, tc.wantDiagnostic)
+			}
+		})
+	}
+}
