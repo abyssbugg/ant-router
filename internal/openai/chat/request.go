@@ -13,22 +13,33 @@ import (
 // the canonical request carries only the public alias. The stream flag
 // controls the stream and stream_options fields.
 func EncodeRequest(request canonical.Request, upstreamModel string, stream bool) ([]byte, error) {
+	body, _, err := encodeRequestInternal(request, upstreamModel, stream)
+	return body, err
+}
+
+// EncodeRequestWithTools maps one canonical request to a Chat Completions body
+// and returns a ToolNameMap for response-side name resolution.
+func EncodeRequestWithTools(request canonical.Request, upstreamModel string, stream bool) ([]byte, ToolNameMap, error) {
+	return encodeRequestInternal(request, upstreamModel, stream)
+}
+
+func encodeRequestInternal(request canonical.Request, upstreamModel string, stream bool) ([]byte, ToolNameMap, error) {
 	if !request.Valid() {
-		return nil, invalid("request", "canonical request is invalid")
+		return nil, nil, invalid("request", "canonical request is invalid")
 	}
 	if strings.TrimSpace(upstreamModel) == "" || strings.TrimSpace(upstreamModel) != upstreamModel {
-		return nil, invalid("request.upstream_model", "upstream model is invalid")
+		return nil, nil, invalid("request.upstream_model", "upstream model is invalid")
 	}
 	if request.Continuation() != nil {
-		return nil, unsupported("request.continuation")
+		return nil, nil, unsupported("request.continuation")
 	}
 	messages, err := encodeMessages(request.Input())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	tools, err := encodeTools(request.Tools())
+	tools, nameMap, err := encodeToolsWithMap(request.Tools())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	body := map[string]any{
 		"model":    upstreamModel,
@@ -58,7 +69,8 @@ func EncodeRequest(request canonical.Request, upstreamModel string, stream bool)
 	if maxTokens := request.Output().MaxTokens(); maxTokens > 0 {
 		body["max_tokens"] = maxTokens
 	}
-	return json.Marshal(body)
+	encoded, err := json.Marshal(body)
+	return encoded, nameMap, err
 }
 
 func encodeMessages(items []canonical.Item) ([]map[string]any, error) {
@@ -163,28 +175,6 @@ func blocksToText(blocks []canonical.ContentBlock, path string) (string, error) 
 		return "", unsupported(blockPath)
 	}
 	return text, nil
-}
-
-func encodeTools(tools []canonical.ToolDefinition) ([]map[string]any, error) {
-	encoded := make([]map[string]any, 0, len(tools))
-	for index, tool := range tools {
-		path := fmt.Sprintf("request.tools[%d]", index)
-		switch tool.Kind() {
-		case canonical.ToolDefinitionKindFunction:
-			function := map[string]any{
-				"name":        tool.Name(),
-				"description": tool.Description(),
-				"parameters":  json.RawMessage(tool.InputSchema().Bytes()),
-			}
-			if tool.Enforcement() == canonical.SchemaEnforcementStrict {
-				function["strict"] = true
-			}
-			encoded = append(encoded, map[string]any{"type": "function", "function": function})
-		default:
-			return nil, unsupported(path)
-		}
-	}
-	return encoded, nil
 }
 
 func encodeToolChoice(choice canonical.ToolChoice) any {
