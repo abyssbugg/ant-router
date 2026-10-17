@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/abyssbugg/ant-router/internal/filelock"
 	"github.com/abyssbugg/ant-router/internal/revision"
@@ -52,9 +51,17 @@ type Store interface {
 	RepairRevision(context.Context, revision.ID, []byte) error
 }
 
+// RevisionCommitter is implemented by stores that can store a revision and
+// publish a manifest referencing it as one locked operation, so no other
+// store sharing the root can collect the revision in between. Callers should
+// prefer it over PutRevision followed by WriteManifest when available.
+type RevisionCommitter interface {
+	CommitRevision(context.Context, revision.ID, []byte, Manifest) error
+}
+
 // FileStore is an implementation of Store that persists data to the filesystem.
 type FileStore struct {
-	mutationMu   sync.Mutex
+	mutationSem  chan struct{}                                            // one-slot semaphore; waiting honors context cancellation
 	root         string                                                   // absolute path to root directory
 	revisionsDir string                                                   // absolute path to revisions directory
 	manifestPath string                                                   // absolute path to manifest file
@@ -63,6 +70,7 @@ type FileStore struct {
 	lockPath     string                                                   // cross-process mutation lock
 
 	afterManifestVerify func() // test hook: runs while WriteManifest holds the lock
+	afterRevisionPut    func() // test hook: runs inside CommitRevision between revision and manifest writes
 }
 
 // storeLockName is the cross-process lock file inside the store root. It does
@@ -70,7 +78,7 @@ type FileStore struct {
 // collection never touch it.
 const storeLockName = ".store.lock"
 
-// lock serializes mutations within this process (mutationMu) and across
+// lock serializes mutations within this process (mutationSem) and across
 // processes or stores sharing the root (an exclusive file lock), always in that
 // order. Every path that verifies, writes, collects, repairs, or cleans store
 // files must hold it, otherwise one store could collect a revision another has
@@ -79,10 +87,14 @@ func (fs *FileStore) lock(ctx context.Context) (func(), error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
-	fs.mutationMu.Lock()
+	select {
+	case fs.mutationSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, &Error{Code: CodeCancelled, Err: ctx.Err()}
+	}
 	held, err := filelock.Acquire(ctx, fs.lockPath)
 	if err != nil {
-		fs.mutationMu.Unlock()
+		<-fs.mutationSem
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, &Error{Code: CodeCancelled, Err: ctxErr}
 		}
@@ -90,7 +102,7 @@ func (fs *FileStore) lock(ctx context.Context) (func(), error) {
 	}
 	return func() {
 		_ = held.Release()
-		fs.mutationMu.Unlock()
+		<-fs.mutationSem
 	}, nil
 }
 
@@ -162,6 +174,7 @@ func NewFileStore(root string) (*FileStore, error) {
 	manifestPath := filepath.Join(absRoot, "manifest.json")
 
 	fs := &FileStore{
+		mutationSem:  make(chan struct{}, 1),
 		root:         absRoot,
 		revisionsDir: revisionsDir,
 		manifestPath: manifestPath,
@@ -185,7 +198,11 @@ func (fs *FileStore) PutRevision(ctx context.Context, id revision.ID, data []byt
 		return err
 	}
 	defer unlock()
+	return fs.putRevisionLocked(ctx, id, data)
+}
 
+// putRevisionLocked implements PutRevision; the caller holds fs.lock.
+func (fs *FileStore) putRevisionLocked(ctx context.Context, id revision.ID, data []byte) error {
 	// Check context
 	select {
 	case <-ctx.Done():
@@ -348,7 +365,42 @@ func (fs *FileStore) WriteManifest(ctx context.Context, manifest Manifest) error
 		return err
 	}
 	defer unlock()
+	if err := fs.writeManifestLocked(ctx, manifest); err != nil {
+		return err
+	}
+	fs.collectRevisions(manifest)
+	return nil
+}
 
+// CommitRevision stores the revision and writes a manifest whose Current is
+// that revision while holding the store lock across both steps, then collects
+// unreferenced revisions. It has the validation and error semantics of
+// PutRevision followed by WriteManifest.
+func (fs *FileStore) CommitRevision(ctx context.Context, id revision.ID, data []byte, manifest Manifest) error {
+	if manifest.Current != id {
+		return &Error{Code: CodeInvalidRevision, Err: fmt.Errorf("manifest current revision does not match committed revision")}
+	}
+	unlock, err := fs.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := fs.putRevisionLocked(ctx, id, data); err != nil {
+		return err
+	}
+	if fs.afterRevisionPut != nil {
+		fs.afterRevisionPut()
+	}
+	if err := fs.writeManifestLocked(ctx, manifest); err != nil {
+		return err
+	}
+	fs.collectRevisions(manifest)
+	return nil
+}
+
+// writeManifestLocked verifies and writes the manifest without collecting
+// revisions; the caller holds fs.lock.
+func (fs *FileStore) writeManifestLocked(ctx context.Context, manifest Manifest) error {
 	// Check context
 	select {
 	case <-ctx.Done():
@@ -379,11 +431,7 @@ func (fs *FileStore) WriteManifest(ctx context.Context, manifest Manifest) error
 	if fs.afterManifestVerify != nil {
 		fs.afterManifestVerify()
 	}
-	if err := fs.writeFile(ctx, fs.manifestPath, data, 0o600); err != nil {
-		return err
-	}
-	fs.collectRevisions(manifest)
-	return nil
+	return fs.writeFile(ctx, fs.manifestPath, data, 0o600)
 }
 
 // collectRevisions removes stored revision files the manifest no longer

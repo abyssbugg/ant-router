@@ -18,6 +18,9 @@ type Service struct {
 	diagnostic   error
 	initialized  bool
 	onActivation func(config.Snapshot) error
+	// activation increments under mu on every successful Apply or Rollback so
+	// a callback can tell whether its activation is still the current one.
+	activation uint64
 }
 
 func New(manager *config.Manager, store configstore.Store) (*Service, error) {
@@ -85,80 +88,84 @@ func (s *Service) SetActivationCallback(callback func(config.Snapshot) error) {
 	s.onActivation = callback
 }
 
-func (s *Service) notifyActivation(snapshot config.Snapshot) CurrentResult {
+func (s *Service) notifyActivation(snapshot config.Snapshot, activation uint64) CurrentResult {
 	s.mu.RLock()
 	callback := s.onActivation
 	s.mu.RUnlock()
-	var callbackErr error
+	var diagnostic error
 	if callback != nil {
-		callbackErr = callback(snapshot)
+		if callbackErr := callback(snapshot); callbackErr != nil {
+			diagnostic = &Error{Code: CodeRuntimeNotUpdated, Err: callbackErr}
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if callbackErr != nil {
-		s.diagnostic = &Error{Code: CodeRuntimeNotUpdated, Err: callbackErr}
-	} else {
-		s.diagnostic = nil
+	// A callback that finishes after a newer activation must not overwrite
+	// the newer activation's diagnostic; its outcome is reported only to its
+	// own caller.
+	if activation == s.activation {
+		s.diagnostic = diagnostic
 	}
 	result := resultFromSnapshot(StateRunning, snapshot)
-	if s.diagnostic != nil {
-		result.Diagnostic = s.diagnostic.Error()
+	if diagnostic != nil {
+		result.Diagnostic = diagnostic.Error()
 	}
 	return result
 }
 
 func (s *Service) Apply(ctx context.Context, request ApplyRequest) (CurrentResult, error) {
-	snapshot, err := s.apply(ctx, request)
+	snapshot, activation, err := s.apply(ctx, request)
 	if err != nil {
 		return CurrentResult{}, err
 	}
-	return s.notifyActivation(snapshot), nil
+	return s.notifyActivation(snapshot, activation), nil
 }
 
-func (s *Service) apply(ctx context.Context, request ApplyRequest) (config.Snapshot, error) {
+func (s *Service) apply(ctx context.Context, request ApplyRequest) (config.Snapshot, uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return config.Snapshot{}, &Error{Code: CodeCancelled, Err: err}
+		return config.Snapshot{}, 0, &Error{Code: CodeCancelled, Err: err}
 	}
 	if len(request.TOML) > config.MaxSourceBytes {
-		return config.Snapshot{}, &Error{Code: CodeConfigurationTooLarge}
+		return config.Snapshot{}, 0, &Error{Code: CodeConfigurationTooLarge}
 	}
 	configuration, err := config.Decode(bytes.NewReader(request.TOML))
 	if err != nil {
-		return config.Snapshot{}, &Error{Code: CodeConfigurationInvalid, Err: err}
+		return config.Snapshot{}, 0, &Error{Code: CodeConfigurationInvalid, Err: err}
 	}
 	candidate, err := config.NewCandidate(configuration, "", request.ExpectedGeneration)
 	if err != nil {
-		return config.Snapshot{}, &Error{Code: CodeConfigurationInvalid, Err: err}
+		return config.Snapshot{}, 0, &Error{Code: CodeConfigurationInvalid, Err: err}
 	}
 	if !request.ExpectedRevision.Valid() || candidate.RevisionID() != request.ExpectedRevision {
-		return config.Snapshot{}, &Error{Code: CodeRevisionMismatch}
+		return config.Snapshot{}, 0, &Error{Code: CodeRevisionMismatch}
 	}
 	currentGeneration := uint64(0)
 	if current, ok := s.manager.Current(); ok {
 		currentGeneration = current.Generation()
 	}
 	if currentGeneration != request.ExpectedGeneration {
-		return config.Snapshot{}, &Error{Code: CodeGenerationConflict}
+		return config.Snapshot{}, 0, &Error{Code: CodeGenerationConflict}
 	}
 	snapshot, err := s.manager.Activate(ctx, candidate)
 	if err != nil {
 		if code, ok := configstore.CodeOf(err); ok && code == configstore.CodeRevisionCorrupt {
 			if repairErr := s.store.RepairRevision(ctx, candidate.RevisionID(), candidate.Canonical()); repairErr != nil {
 				if repairCode, _ := configstore.CodeOf(repairErr); repairCode != configstore.CodeRepairUnnecessary {
-					return config.Snapshot{}, mapError(repairErr)
+					return config.Snapshot{}, 0, mapError(repairErr)
 				}
 			}
 			snapshot, err = s.manager.Activate(ctx, candidate)
 		}
 	}
 	if err != nil {
-		return config.Snapshot{}, mapError(err)
+		return config.Snapshot{}, 0, mapError(err)
 	}
 	s.state = StateRunning
 	s.diagnostic = nil
-	return snapshot, nil
+	s.activation++
+	return snapshot, s.activation, nil
 }
 
 func (s *Service) Current() CurrentResult {
@@ -187,8 +194,10 @@ func (s *Service) Rollback(ctx context.Context) (CurrentResult, error) {
 		s.mu.Unlock()
 		return CurrentResult{}, mapError(err)
 	}
+	s.activation++
+	activation := s.activation
 	s.mu.Unlock()
-	return s.notifyActivation(snapshot), nil
+	return s.notifyActivation(snapshot, activation), nil
 }
 
 func resultFromSnapshot(state State, snapshot config.Snapshot) CurrentResult {
