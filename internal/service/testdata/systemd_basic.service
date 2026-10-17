@@ -1,0 +1,14 @@
+[Unit]
+Description=Ant Router daemon (managed by github.com/abyssbugg/ant-router)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart="/path/to/myapp"
+Restart=on-failure
+RestartSec=2
+StandardOutput=append:/path/to/app.log
+StandardError=append:/path/to/app.log
+
+[Install]
+WantedBy=default.target

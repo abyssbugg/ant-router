@@ -191,3 +191,14 @@ type Manager interface {
 	Stop(ctx context.Context, label string) error
 	Status(ctx context.Context, label string) (Status, error)
 }
+
+// ErrUnsupportedLogPath is returned when a log path cannot be represented
+// safely by the selected service backend.
+type ErrUnsupportedLogPath struct {
+	Path   string
+	Reason string
+}
+
+func (e ErrUnsupportedLogPath) Error() string {
+	return fmt.Sprintf("unsupported log path %q: %s", e.Path, e.Reason)
+}
