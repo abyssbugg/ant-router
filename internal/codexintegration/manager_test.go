@@ -445,6 +445,15 @@ func TestManagerEnableRejectsConcurrentFileMutation(t *testing.T) {
 	if _, _, err := planner.ownership.Current(context.Background()); err == nil {
 		t.Fatal("ownership committed despite concurrent mutation")
 	}
+	// Assert externally edited profile content survived unchanged
+	actual, readErr := os.ReadFile(plan.input.ProfilePath)
+	if readErr != nil || string(actual) != "concurrently edited by a non-cooperating writer" {
+		t.Fatalf("profile file = %q, %v; the concurrent edit was destroyed", actual, readErr)
+	}
+	// Assert no pending journal remains
+	if _, exists, err := manager.readPending(context.Background()); err != nil || exists {
+		t.Fatalf("pending journal = exists %t, %v; want cleared after rejected enable", exists, err)
+	}
 }
 
 func TestManagerDisableRejectsConcurrentFileMutation(t *testing.T) {
@@ -481,5 +490,54 @@ func TestManagerDisableRejectsConcurrentFileMutation(t *testing.T) {
 	}
 	if _, exists, err := manager.readPending(context.Background()); err != nil || exists {
 		t.Fatalf("pending journal = exists %t, %v; want cleared after rejected disable", exists, err)
+	}
+}
+
+func TestManagerRecoverRefusesToOverwriteExternallyEditedFile(t *testing.T) {
+	manager, planner := newTestManager(t)
+	defer func() { planner.options.BaseURL = "http://127.0.0.1:8787/v1" }()
+	firstPlan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Enable(context.Background(), firstPlan.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	planner.options.BaseURL = "http://127.0.0.1:8788/v1"
+	secondCatalog := append(firstPlan.Catalog(), '\n')
+	digest := sha256.Sum256(secondCatalog)
+	planner.catalog = catalogSourceFunc(func(context.Context) (control.CodexCatalogResponse, error) {
+		return control.CodexCatalogResponse{APIVersion: control.APIVersion, Generation: 8, Catalog: string(secondCatalog), SHA256: hex.EncodeToString(digest[:])}, nil
+	})
+	secondPlan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := manager.write
+	calls := 0
+	manager.write = func(ctx context.Context, path string, data []byte, mode os.FileMode) (atomicfile.Result, error) {
+		calls++
+		if calls == 3 {
+			return atomicfile.Result{}, errors.New("injected profile failure")
+		}
+		return original(ctx, path, data, mode)
+	}
+	if _, err := manager.Enable(context.Background(), secondPlan.Digest()); err == nil {
+		t.Fatal("partial update succeeded")
+	}
+	manager.write = original
+	external := []byte("edited by the user while recovery was pending\n")
+	if err := os.WriteFile(firstPlan.input.ProfilePath, external, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Recover(context.Background()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Recover error = %v, want ErrConflict", err)
+	}
+	actual, err := os.ReadFile(firstPlan.input.ProfilePath)
+	if err != nil || string(actual) != string(external) {
+		t.Fatalf("profile = %q, %v; external edit was overwritten", actual, err)
+	}
+	if _, exists, err := manager.readPending(context.Background()); err != nil || !exists {
+		t.Fatalf("pending journal exists=%t err=%v; want retained for operator resolution", exists, err)
 	}
 }

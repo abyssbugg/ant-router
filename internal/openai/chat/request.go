@@ -103,6 +103,9 @@ func encodeMessages(items []canonical.Item) ([]map[string]any, error) {
 			if !ok {
 				return nil, unsupported(path)
 			}
+			if result.IsError() {
+				return nil, unsupported(path + ".is_error")
+			}
 			text, err := blocksToText(result.Content(), path+".content")
 			if err != nil {
 				return nil, err
@@ -112,6 +115,12 @@ func encodeMessages(items []canonical.Item) ([]map[string]any, error) {
 				"tool_call_id": string(result.CallID()),
 				"content":      text,
 			})
+		case canonical.ItemType("reasoning_summary"):
+			// Reasoning items from replayed history are omitted from the chat wire;
+			// they are internal to prior inference and have no input representation.
+			// Tool calls around omitted reasoning items still group in the same
+			// assistant message via appendAssistantToolCall.
+			continue
 		default:
 			return nil, unsupported(path)
 		}
