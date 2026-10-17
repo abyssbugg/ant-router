@@ -97,15 +97,17 @@ func New(options Options) (*Daemon, error) {
 	}
 	providers.configGeneration = configGeneration
 	reloadable := newReloadableProviders(providers)
-	service.SetActivationCallback(func(snapshot config.Snapshot) {
-		// Activations are validated before persistence, so a rebuild failure
-		// here is an invariant break; keep serving the previous runtime.
+	service.SetActivationCallback(func(snapshot config.Snapshot) error {
+		// Credentials resolve at build time, so a validated configuration can
+		// still fail to build (for example, an unset environment variable).
+		// Keep serving the previous runtime and report the divergence.
 		reloaded, err := buildProviderRuntime(snapshot.Config(), credentialSource)
 		if err != nil {
-			return
+			return err
 		}
 		reloaded.configGeneration = snapshot.Generation()
 		reloadable.swap(reloaded)
+		return nil
 	})
 	dataPlaneListen := options.DataPlaneListen
 	if dataPlaneListen == nil {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -78,7 +79,7 @@ func TestValidateCompatibleEndpointRules(t *testing.T) {
 		{"fragment rejected", "https://api.example.com/v1#frag", "chat", ProviderKindOpenAI, []string{"text"}, false, false},
 		{"unknown wire", "https://api.example.com/v1", "grpc", ProviderKindOpenAI, []string{"text"}, false, false},
 		{"base_url on anthropic", "https://api.example.com", "", ProviderKindAnthropic, nil, false, false},
-		{"wire on mock", "https://api.example.com/v1", "", ProviderKindMock, nil, false, false},
+		{"wire on mock", "https://api.example.com/v1", "chat", ProviderKindMock, nil, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Default()
@@ -90,7 +91,7 @@ func TestValidateCompatibleEndpointRules(t *testing.T) {
 				provider.BaseURL = tc.baseURL
 				cfg.Providers = []ProviderConfig{provider}
 			case ProviderKindMock:
-				cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true, BaseURL: tc.baseURL}}
+				cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true, BaseURL: tc.baseURL, Wire: ProviderWire(tc.wire)}}
 			}
 			if tc.caps != nil {
 				cfg.Providers[0].Models[0].Capabilities = tc.caps
@@ -99,8 +100,17 @@ func TestValidateCompatibleEndpointRules(t *testing.T) {
 			if tc.shouldPass && err != nil {
 				t.Fatalf("Validate() = %v, want pass", err)
 			}
-			if !tc.shouldPass && err == nil {
-				t.Fatal("Validate() accepted invalid endpoint configuration")
+			if !tc.shouldPass {
+				if err == nil {
+					t.Fatal("Validate() accepted invalid endpoint configuration")
+				}
+				// For "wire on mock" case, verify the error path
+				if tc.name == "wire on mock" {
+					var configErr *Error
+					if !errors.As(err, &configErr) || configErr.Path != "providers[0].wire" {
+						t.Fatalf("wire on mock: error path = %q, want %q", configErr.Path, "providers[0].wire")
+					}
+				}
 			}
 		})
 	}

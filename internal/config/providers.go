@@ -85,11 +85,11 @@ type ProviderConfig struct {
 // allowed so tests can run against local endpoint doubles.
 func validateProviderEndpoint(provider ProviderConfig, prefix string) error {
 	if provider.Kind != ProviderKindOpenAI {
-		if provider.BaseURL != "" {
-			return providerValidationError(prefix+".base_url", "base_url is only available for the OpenAI provider kind")
-		}
 		if provider.Wire != "" {
 			return providerValidationError(prefix+".wire", "wire is only available for the OpenAI provider kind")
+		}
+		if provider.BaseURL != "" {
+			return providerValidationError(prefix+".base_url", "base_url is only available for the OpenAI provider kind")
 		}
 		return nil
 	}
@@ -108,7 +108,7 @@ func validateProviderEndpoint(provider ProviderConfig, prefix string) error {
 	if err != nil || parsed.Host == "" {
 		return providerValidationError(prefix+".base_url", "invalid base_url")
 	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery || strings.ContainsRune(provider.BaseURL, '#') {
 		return providerValidationError(prefix+".base_url", "base_url must not contain credentials, a query, or a fragment")
 	}
 	loopback := parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1" || parsed.Hostname() == "localhost"
@@ -359,17 +359,21 @@ func validateProviders(c Config) error {
 			if len(provider.Credential.Name) == 0 || len(provider.Credential.Name) > MaxCredentialName || !envNamePattern.MatchString(provider.Credential.Name) {
 				return providerValidationError(prefix+".credential.name", "invalid environment variable name")
 			}
-			// Provider credentials reach only the provider's official
-			// endpoint, so a mis-scoped name would silently ship another
-			// secret's value there; require the kind-scoped prefix.
-			switch provider.Kind {
-			case ProviderKindOpenAI:
-				if !strings.HasPrefix(provider.Credential.Name, "OPENAI_") {
-					return providerValidationError(prefix+".credential.name", "openai credential must use an OPENAI_ prefixed environment variable")
-				}
-			case ProviderKindAnthropic:
-				if !strings.HasPrefix(provider.Credential.Name, "ANTHROPIC_") {
-					return providerValidationError(prefix+".credential.name", "anthropic credential must use an ANTHROPIC_ prefixed environment variable")
+			// When using a custom endpoint (non-empty BaseURL), credentials
+			// reach only that endpoint, so a mis-scoped name would silently
+			// ship another secret's value there; require the kind-scoped prefix.
+			// For official endpoints, any valid env var name is accepted for
+			// backwards compatibility with pre-v7 configurations.
+			if provider.BaseURL != "" {
+				switch provider.Kind {
+				case ProviderKindOpenAI:
+					if !strings.HasPrefix(provider.Credential.Name, "OPENAI_") {
+						return providerValidationError(prefix+".credential.name", "openai credential must use an OPENAI_ prefixed environment variable")
+					}
+				case ProviderKindAnthropic:
+					if !strings.HasPrefix(provider.Credential.Name, "ANTHROPIC_") {
+						return providerValidationError(prefix+".credential.name", "anthropic credential must use an ANTHROPIC_ prefixed environment variable")
+					}
 				}
 			}
 			if len(provider.Models) == 0 || len(provider.Models) > MaxModelsPerProvider {

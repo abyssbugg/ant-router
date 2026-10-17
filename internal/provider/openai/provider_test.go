@@ -249,4 +249,14 @@ func TestProviderRejectsInvalidConstruction(t *testing.T) {
 	}
 }
 
+func TestProviderForIDWithEndpointRejectsEmptyProviderID(t *testing.T) {
+	t.Parallel()
+	ref := openAIRef(t)
+	source := credential.NewEnvSource(func(name string) (string, bool) { return "key", true })
+	_, err := NewProviderForIDWithEndpoint("", source, ref, Endpoint{})
+	if execution.CodeOf(err) != execution.CodeInternal {
+		t.Fatalf("empty providerID error code = %v, want CodeInternal", execution.CodeOf(err))
+	}
+}
+
 var _ execution.ProviderAdapter = (*Provider)(nil)

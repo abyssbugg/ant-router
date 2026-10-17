@@ -123,6 +123,10 @@ func (manager *Manager) applyPublication(ctx context.Context, plan Plan) (Result
 		_ = manager.clearPending()
 		return Result{}, err
 	}
+	// Residual race: a non-cooperating writer can still modify the target
+	// files between verifyPlannedState and the writes below; portable file
+	// systems offer no compare-and-swap replace. Recover narrows the impact by
+	// refusing to roll back over content that matches neither generation.
 	if err := os.MkdirAll(filepath.Dir(input.CatalogPath), 0o700); err != nil {
 		return Result{}, errors.New("Codex integration unavailable")
 	}
@@ -198,6 +202,15 @@ func (manager *Manager) Recover(ctx context.Context) error {
 	base, err := manager.ownership.Generation(ctx, pending.BaseGeneration)
 	if err != nil || base.ProfilePath != pending.ProfilePath || base.CatalogPath != pending.CatalogPath {
 		return errors.New("Codex recovery base unavailable")
+	}
+	// Roll back only files whose current bytes are ones this transaction could
+	// have produced (target or base). Anything else is an external edit; keep
+	// the journal and report a conflict instead of destroying it.
+	if !bytesEqual(profileBytes, target.Profile) && !bytesEqual(profileBytes, base.Profile) {
+		return ErrConflict
+	}
+	if !bytesEqual(catalogBytes, target.Catalog) && !bytesEqual(catalogBytes, base.Catalog) {
+		return ErrConflict
 	}
 	if _, err := manager.write(ctx, base.CatalogPath, base.Catalog, 0o600); err != nil {
 		return errors.New("Codex recovery failed")

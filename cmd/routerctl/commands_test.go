@@ -10,6 +10,7 @@ import (
 
 	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
+	"github.com/abyssbugg/ant-router/internal/controltransport"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
@@ -116,5 +117,20 @@ func TestExecuteErrorExitCodes(t *testing.T) {
 		if code != test.want || stderr.Len() == 0 {
 			t.Errorf("error %v = code %d stderr %q, want %d", test.err, code, stderr.String(), test.want)
 		}
+	}
+}
+
+func TestInvalidInstanceExitCodeAndMessage(t *testing.T) {
+	err := &controltransport.Error{Code: controltransport.CodeInvalidInstance, Path: "instance", Err: errors.New("invalid")}
+	code := exitCode(err)
+	if code != ExitUsage {
+		t.Fatalf("invalid instance exit code = %d, want %d (ExitUsage)", code, ExitUsage)
+	}
+	detail := describeCLIError(err)
+	if detail.Code != "usage" {
+		t.Errorf("error code = %q, want 'usage'", detail.Code)
+	}
+	if detail.Message != "invalid instance name" {
+		t.Errorf("error message = %q, want 'invalid instance name'", detail.Message)
 	}
 }

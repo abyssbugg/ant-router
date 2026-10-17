@@ -49,7 +49,21 @@ func startDaemon(t *testing.T, options Options) (*Daemon, context.CancelFunc, <-
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- d.Run(ctx) }()
+	finished := make(chan struct{})
+	go func() {
+		done <- d.Run(ctx)
+		close(finished)
+	}()
+	// Stop the daemon even when a test fails early, so its listeners, lock,
+	// and goroutines never leak into later tests.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(10 * time.Second):
+			t.Error("daemon did not stop during test cleanup")
+		}
+	})
 	select {
 	case <-d.Ready():
 	case <-time.After(5 * time.Second):
