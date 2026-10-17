@@ -100,11 +100,15 @@ if (-not $Version) {
     # The tag comes from the final redirect target, never from the body.
     # Windows PowerShell exposes HttpWebResponse.ResponseUri; PowerShell 7
     # exposes HttpResponseMessage.RequestMessage.RequestUri.
+    $finalUri = $null
     $base = $resp.BaseResponse
-    if ($base.PSObject.Properties['ResponseUri']) {
+    if ($base.PSObject.Properties['ResponseUri'] -and $base.ResponseUri) {
         $finalUri = $base.ResponseUri.AbsoluteUri
-    } else {
+    } elseif ($base.PSObject.Properties['RequestMessage'] -and $base.RequestMessage -and $base.RequestMessage.RequestUri) {
         $finalUri = $base.RequestMessage.RequestUri.AbsoluteUri
+    }
+    if (-not $finalUri) {
+        Fail 'could not determine the latest release redirect target'
     }
     $marker = '/releases/tag/'
     $index = $finalUri.IndexOf($marker)

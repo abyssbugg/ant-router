@@ -61,6 +61,7 @@ var ps1RequiredConstructs = []struct {
 	{"zip assembly loaded", regexp.MustCompile(`Add-Type -AssemblyName System\.IO\.Compression\.FileSystem`)},
 	{"per-entry extraction", regexp.MustCompile(`ZipFileExtensions\]::ExtractToFile`)},
 	{"https-only base URL", regexp.MustCompile(`\$parsedBase\.Scheme -eq 'https'`)},
+	{"redirect target guarded", regexp.MustCompile(`if \(-not \$finalUri\) \{\s*Fail 'could not determine the latest release redirect target'`)},
 }
 
 func readPS1(t *testing.T) string {
