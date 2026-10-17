@@ -23,6 +23,9 @@ func TestWriteManifestCoordinatesStoresSharingRoot(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// The second manifest references only B, so the second store collects A.
+	// Without coordination it could do so after the first store verified A
+	// but before the first store published its manifest referencing A.
 	dataA, dataB := []byte("a = 1\n"), []byte("b = 2\n")
 	idA, idB := revision.For(dataA), revision.For(dataB)
 	for _, put := range []struct {
@@ -37,7 +40,7 @@ func TestWriteManifestCoordinatesStoresSharingRoot(t *testing.T) {
 	secondDone := make(chan error, 1)
 	first.afterManifestVerify = func() {
 		go func() {
-			secondDone <- second.WriteManifest(ctx, Manifest{FormatVersion: ManifestFormatVersion, Generation: 2, Current: idB, Previous: idA, ActivatedAt: time.Now().UTC()})
+			secondDone <- second.WriteManifest(ctx, Manifest{FormatVersion: ManifestFormatVersion, Generation: 2, Current: idB, ActivatedAt: time.Now().UTC()})
 		}()
 		select {
 		case err := <-secondDone:
@@ -56,8 +59,13 @@ func TestWriteManifestCoordinatesStoresSharingRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.ReadRevision(ctx, manifest.Current); err != nil {
-		t.Fatalf("manifest references unreadable revision %s: %v", manifest.Current, err)
+	if manifest.Current != idB || manifest.Previous != "" {
+		t.Fatalf("final manifest = %s/%s, want second store's %s", manifest.Current, manifest.Previous, idB)
+	}
+	for _, id := range []revision.ID{manifest.Current} {
+		if _, err := first.ReadRevision(ctx, id); err != nil {
+			t.Fatalf("manifest references unreadable revision %s: %v", id, err)
+		}
 	}
 }
 
