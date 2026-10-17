@@ -443,7 +443,7 @@ func validateProviders(c Config) error {
 						return providerValidationError(modelPrefix+".capabilities", "capability is unavailable on the chat wire")
 					}
 					for _, capability := range model.Capabilities {
-						if capability == "continuation" || capability == "image_input" {
+						if capability == "continuation" {
 							return providerValidationError(modelPrefix+".capabilities", "capability is deferred for the chat wire")
 						}
 					}
