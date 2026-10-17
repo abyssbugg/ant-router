@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"strings"
+
 	"encoding/json"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
@@ -79,6 +81,12 @@ func buildToolCallItem(tool resolvedTool, itemID canonical.ItemID, callID canoni
 			return canonical.Item{}, protocolErr("tool.item")
 		}
 		return item, nil
+	}
+	// Providers stream parameterless function calls with no argument
+	// fragments; an empty (whitespace-only) argument string is the empty
+	// object. Custom tools keep their raw input above.
+	if strings.TrimSpace(arguments) == "" {
+		arguments = "{}"
 	}
 	parsed, err := canonicaljson.Parse([]byte(arguments), canonicaljson.DefaultLimits())
 	if err != nil {
