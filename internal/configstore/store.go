@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/abyssbugg/ant-router/internal/filelock"
 	"github.com/abyssbugg/ant-router/internal/revision"
 )
 
@@ -59,6 +60,38 @@ type FileStore struct {
 	manifestPath string                                                   // absolute path to manifest file
 	writeFile    func(context.Context, string, []byte, fs.FileMode) error // injectable write function
 	readFile     func(string, int) ([]byte, error)                        // injectable bounded read
+	lockPath     string                                                   // cross-process mutation lock
+
+	afterManifestVerify func() // test hook: runs while WriteManifest holds the lock
+}
+
+// storeLockName is the cross-process lock file inside the store root. It does
+// not match the manifest, revision, or temporary-file patterns, so cleanup and
+// collection never touch it.
+const storeLockName = ".store.lock"
+
+// lock serializes mutations within this process (mutationMu) and across
+// processes or stores sharing the root (an exclusive file lock), always in that
+// order. Every path that verifies, writes, collects, repairs, or cleans store
+// files must hold it, otherwise one store could collect a revision another has
+// just verified for its manifest.
+func (fs *FileStore) lock(ctx context.Context) (func(), error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	fs.mutationMu.Lock()
+	held, err := filelock.Acquire(ctx, fs.lockPath)
+	if err != nil {
+		fs.mutationMu.Unlock()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, &Error{Code: CodeCancelled, Err: ctxErr}
+		}
+		return nil, &Error{Code: CodeStoreUnavailable, Path: fs.lockPath, Err: err}
+	}
+	return func() {
+		_ = held.Release()
+		fs.mutationMu.Unlock()
+	}, nil
 }
 
 // NewFileStore creates a new FileStore at the given root directory.
@@ -132,6 +165,7 @@ func NewFileStore(root string) (*FileStore, error) {
 		root:         absRoot,
 		revisionsDir: revisionsDir,
 		manifestPath: manifestPath,
+		lockPath:     filepath.Join(absRoot, storeLockName),
 	}
 
 	// Set injectable filesystem operations.
@@ -146,8 +180,11 @@ func NewFileStore(root string) (*FileStore, error) {
 // Creates file at <root>/revisions/<id>.toml with 0600 permissions.
 // If file exists and is valid, operation is idempotent.
 func (fs *FileStore) PutRevision(ctx context.Context, id revision.ID, data []byte) error {
-	fs.mutationMu.Lock()
-	defer fs.mutationMu.Unlock()
+	unlock, err := fs.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	// Check context
 	select {
@@ -306,8 +343,11 @@ func (fs *FileStore) ReadManifest(ctx context.Context) (Manifest, error) {
 // On success, collects unreferenced revision files (best-effort).
 // Propagates CodeDurabilityUncertain unchanged.
 func (fs *FileStore) WriteManifest(ctx context.Context, manifest Manifest) error {
-	fs.mutationMu.Lock()
-	defer fs.mutationMu.Unlock()
+	unlock, err := fs.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	// Check context
 	select {
@@ -336,6 +376,9 @@ func (fs *FileStore) WriteManifest(ctx context.Context, manifest Manifest) error
 		return err
 	}
 
+	if fs.afterManifestVerify != nil {
+		fs.afterManifestVerify()
+	}
 	if err := fs.writeFile(ctx, fs.manifestPath, data, 0o600); err != nil {
 		return err
 	}
@@ -389,8 +432,11 @@ func (fs *FileStore) verifyManifestRevision(ctx context.Context, id revision.ID,
 // Ignores directories and unrelated hidden files.
 // Honors context cancellation between entries.
 func (fs *FileStore) CleanupTemps(ctx context.Context) error {
-	fs.mutationMu.Lock()
-	defer fs.mutationMu.Unlock()
+	unlock, err := fs.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	if err := contextError(ctx); err != nil {
 		return err
