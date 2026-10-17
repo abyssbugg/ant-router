@@ -112,7 +112,18 @@ func (manager *Manager) applyPublication(ctx context.Context, plan Plan) (Result
 	if err != nil {
 		return Result{}, err
 	}
-	pending := pendingTransaction{SchemaVersion: pendingSchemaVersion, Action: plan.Action(), TargetGeneration: staged.ID, BaseGeneration: input.OwnershipGeneration, ProfilePath: input.ProfilePath, CatalogPath: input.CatalogPath}
+	pending := pendingTransaction{
+		SchemaVersion:       pendingSchemaVersion,
+		Action:              plan.Action(),
+		TargetGeneration:    staged.ID,
+		BaseGeneration:      input.OwnershipGeneration,
+		ProfilePath:         input.ProfilePath,
+		CatalogPath:         input.CatalogPath,
+		TargetProfileExists: true,
+		TargetCatalogExists: true,
+		BaseProfileExists:   input.CurrentProfile.Exists,
+		BaseCatalogExists:   input.CurrentCatalog.Exists,
+	}
 	if err := manager.writePending(ctx, pending); err != nil {
 		return Result{}, err
 	}
@@ -190,7 +201,9 @@ func (manager *Manager) Recover(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if profileObservation.Exists && catalogObservation.Exists && bytesEqual(profileBytes, target.Profile) && bytesEqual(catalogBytes, target.Catalog) {
+	profileAtTarget := fileMatches(profileObservation.Exists, profileBytes, pending.TargetProfileExists, target.Profile)
+	catalogAtTarget := fileMatches(catalogObservation.Exists, catalogBytes, pending.TargetCatalogExists, target.Catalog)
+	if profileAtTarget && catalogAtTarget {
 		if _, err := manager.ownership.Commit(ctx, target.ID); err != nil {
 			return err
 		}
@@ -203,28 +216,50 @@ func (manager *Manager) Recover(ctx context.Context) error {
 	if err != nil || base.ProfilePath != pending.ProfilePath || base.CatalogPath != pending.CatalogPath {
 		return errors.New("Codex recovery base unavailable")
 	}
-	// Roll back only files whose current bytes are ones this transaction could
-	// have produced (target or base). Anything else is an external edit; keep
-	// the journal and report a conflict instead of destroying it.
-	if !bytesEqual(profileBytes, target.Profile) && !bytesEqual(profileBytes, base.Profile) {
+	// Roll back only files whose state (existence and bytes) is one this
+	// transaction could have produced: its target or its base. Anything else
+	// is an external edit or removal; keep the journal and report a conflict.
+	if !profileAtTarget && !fileMatches(profileObservation.Exists, profileBytes, pending.BaseProfileExists, base.Profile) {
 		return ErrConflict
 	}
-	if !bytesEqual(catalogBytes, target.Catalog) && !bytesEqual(catalogBytes, base.Catalog) {
+	if !catalogAtTarget && !fileMatches(catalogObservation.Exists, catalogBytes, pending.BaseCatalogExists, base.Catalog) {
 		return ErrConflict
 	}
-	if _, err := manager.write(ctx, base.CatalogPath, base.Catalog, 0o600); err != nil {
-		return errors.New("Codex recovery failed")
+	if err := manager.restoreBaseFile(ctx, base.CatalogPath, pending.BaseCatalogExists, base.Catalog); err != nil {
+		return err
 	}
-	if err := codexownership.SecureFile(base.CatalogPath); err != nil {
-		return errors.New("Codex recovery failed")
-	}
-	if _, err := manager.write(ctx, base.ProfilePath, base.Profile, 0o600); err != nil {
-		return errors.New("Codex recovery failed")
-	}
-	if err := codexownership.SecureFile(base.ProfilePath); err != nil {
-		return errors.New("Codex recovery failed")
+	if err := manager.restoreBaseFile(ctx, base.ProfilePath, pending.BaseProfileExists, base.Profile); err != nil {
+		return err
 	}
 	return manager.clearPending()
+}
+
+// fileMatches reports whether an observed file equals a recorded state: an
+// absent file matches only a state recorded as absent, a present file only a
+// state recorded as present with identical bytes.
+func fileMatches(exists bool, observed []byte, wantExists bool, want []byte) bool {
+	if exists != wantExists {
+		return false
+	}
+	return !exists || bytesEqual(observed, want)
+}
+
+// restoreBaseFile returns one file to its recorded base state, removing it
+// when the base recorded it as absent.
+func (manager *Manager) restoreBaseFile(ctx context.Context, path string, exists bool, data []byte) error {
+	if !exists {
+		if _, err := manager.remove(ctx, path); err != nil {
+			return errors.New("Codex recovery failed")
+		}
+		return nil
+	}
+	if _, err := manager.write(ctx, path, data, 0o600); err != nil {
+		return errors.New("Codex recovery failed")
+	}
+	if err := codexownership.SecureFile(path); err != nil {
+		return errors.New("Codex recovery failed")
+	}
+	return nil
 }
 
 func (manager *Manager) recoverDisabled(ctx context.Context, pending pendingTransaction) error {
@@ -256,7 +291,15 @@ func (manager *Manager) verifyPlannedState(ctx context.Context, input PlanInput)
 }
 
 func (manager *Manager) applyDisable(ctx context.Context, plan Plan) (Result, error) {
-	pending := pendingTransaction{SchemaVersion: pendingSchemaVersion, Action: ActionDisable, BaseGeneration: plan.input.OwnershipGeneration, ProfilePath: plan.input.ProfilePath, CatalogPath: plan.input.CatalogPath}
+	pending := pendingTransaction{
+		SchemaVersion:     pendingSchemaVersion,
+		Action:            ActionDisable,
+		BaseGeneration:    plan.input.OwnershipGeneration,
+		ProfilePath:       plan.input.ProfilePath,
+		CatalogPath:       plan.input.CatalogPath,
+		BaseProfileExists: plan.input.CurrentProfile.Exists,
+		BaseCatalogExists: plan.input.CurrentCatalog.Exists,
+	}
 	if err := manager.writePending(ctx, pending); err != nil {
 		return Result{}, err
 	}

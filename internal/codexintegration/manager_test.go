@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -539,5 +541,128 @@ func TestManagerRecoverRefusesToOverwriteExternallyEditedFile(t *testing.T) {
 	}
 	if _, exists, err := manager.readPending(context.Background()); err != nil || !exists {
 		t.Fatalf("pending journal exists=%t err=%v; want retained for operator resolution", exists, err)
+	}
+}
+
+// TestManagerRecoverInterruptedRestoreAfterDisableLeavesFilesAbsent covers a
+// base generation whose files were absent (disabled): rolling back must
+// remove the partially published target file, not republish the base bytes.
+func TestManagerRecoverInterruptedRestoreAfterDisableLeavesFilesAbsent(t *testing.T) {
+	manager, planner := newTestManager(t)
+	enablePlan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := manager.Enable(context.Background(), enablePlan.Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	disablePlan, err := planner.PlanDisable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Disable(context.Background(), disablePlan.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	restorePlan, err := planner.PlanRestore(context.Background(), enabled.GenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := manager.write
+	calls := 0
+	manager.write = func(ctx context.Context, path string, data []byte, mode os.FileMode) (atomicfile.Result, error) {
+		calls++
+		if calls == 3 {
+			return atomicfile.Result{}, errors.New("injected profile failure")
+		}
+		return original(ctx, path, data, mode)
+	}
+	if _, err := manager.Restore(context.Background(), enabled.GenerationID, restorePlan.Digest()); err == nil {
+		t.Fatal("partial restore succeeded")
+	}
+	manager.write = original
+	if _, err := os.Lstat(restorePlan.input.CatalogPath); err != nil {
+		t.Fatalf("catalog should be partially published before recovery: %v", err)
+	}
+	if err := manager.Recover(context.Background()); err != nil {
+		t.Fatalf("Recover() = %v", err)
+	}
+	for _, path := range []string{restorePlan.input.ProfilePath, restorePlan.input.CatalogPath} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s after recovery: err=%v, want absent (base was disabled)", path, err)
+		}
+	}
+	if _, exists, err := manager.readPending(context.Background()); err != nil || exists {
+		t.Fatalf("pending journal exists=%t err=%v; want cleared", exists, err)
+	}
+}
+
+// TestManagerRecoverConflictsWhenExpectedFileVanished: a file that both the
+// base and target record as present but is absent on disk was removed
+// externally; recovery must not recreate or accept it.
+func TestManagerRecoverConflictsWhenExpectedFileVanished(t *testing.T) {
+	manager, planner := newTestManager(t)
+	defer func() { planner.options.BaseURL = "http://127.0.0.1:8787/v1" }()
+	firstPlan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Enable(context.Background(), firstPlan.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	planner.options.BaseURL = "http://127.0.0.1:8788/v1"
+	secondPlan, err := planner.PlanEnable(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := manager.write
+	calls := 0
+	manager.write = func(ctx context.Context, path string, data []byte, mode os.FileMode) (atomicfile.Result, error) {
+		calls++
+		if calls == 3 {
+			return atomicfile.Result{}, errors.New("injected profile failure")
+		}
+		return original(ctx, path, data, mode)
+	}
+	if _, err := manager.Enable(context.Background(), secondPlan.Digest()); err == nil {
+		t.Fatal("partial update succeeded")
+	}
+	manager.write = original
+	if err := os.Remove(secondPlan.input.ProfilePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Recover(context.Background()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Recover() = %v, want ErrConflict", err)
+	}
+	if _, err := os.Lstat(secondPlan.input.ProfilePath); !os.IsNotExist(err) {
+		t.Fatalf("recovery recreated externally removed profile: %v", err)
+	}
+	if _, exists, err := manager.readPending(context.Background()); err != nil || !exists {
+		t.Fatalf("pending journal exists=%t err=%v; want retained", exists, err)
+	}
+}
+
+// TestManagerRecoverRejectsPreExistenceSchemaJournal: version 1 journals do
+// not record file existence and must not be interpreted.
+func TestManagerRecoverRejectsPreExistenceSchemaJournal(t *testing.T) {
+	manager, planner := newTestManager(t)
+	path := manager.pendingPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(planner.options.CodexHome, "ant-router.config.toml")
+	catalog := filepath.Join(planner.options.StateRoot, "codex", "ant-router", "models.json")
+	legacy, err := json.Marshal(map[string]any{"schema_version": 1, "action": "disable", "base_generation": strings.Repeat("a", 64), "profile_path": profile, "catalog_path": catalog, "base_profile_exists": true, "base_catalog_exists": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Recover(context.Background()); err == nil {
+		t.Fatal("version 1 pending journal accepted")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("legacy journal must be retained: %v", err)
 	}
 }
