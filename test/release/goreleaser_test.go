@@ -211,8 +211,15 @@ func (r *yamlReader) splitKey(line yamlLine) (string, string) {
 	return key, value
 }
 
+// emptyFlowMapping is the scalar the reader returns for the flow value `{}`.
+const emptyFlowMapping = "{}"
+
 func (r *yamlReader) scalar(line yamlLine, value string) string {
 	switch {
+	case value == emptyFlowMapping:
+		// The empty mapping is the one flow form workflows need
+		// (`permissions: {}`); it is returned as a sentinel scalar.
+		return emptyFlowMapping
 	case strings.HasPrefix(value, "[") || strings.HasPrefix(value, "{"):
 		r.fail("line %d: flow collections are not supported by this reader", line.number)
 	case strings.HasPrefix(value, "&") || strings.HasPrefix(value, "*") || value == "|" || value == ">":
