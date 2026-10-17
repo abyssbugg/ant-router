@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -182,6 +183,127 @@ func TestAccumulatorDefersToolStartUntilName(t *testing.T) {
 		if _, err := machine.Accept(event); err != nil {
 			t.Fatalf("machine rejected final %q: %v", event.Type(), err)
 		}
+	}
+}
+
+func TestAccumulatorBoundsPendingToolArgumentsBeforeName(t *testing.T) {
+	ids := &countingIDs{}
+	responseID, err := ids.ResponseID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accumulator := NewAccumulator(responseID, "public/model", ids)
+	fragment := strings.Repeat("a", 64<<10)
+	raw := `{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"` + fragment + `"}}]}}]}`
+	chunk, err := DecodeChunk([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for sent := 0; sent <= canonical.MaxJSONBytes; sent += len(fragment) {
+		if _, err := accumulator.Accept(chunk); err != nil {
+			if sent+len(fragment) <= canonical.MaxJSONBytes {
+				t.Fatalf("rejected within limit after %d bytes: %v", sent, err)
+			}
+			return
+		}
+	}
+	t.Fatal("unnamed tool arguments beyond canonical.MaxJSONBytes were buffered without error")
+}
+
+func TestAccumulatorBoundsDistinctToolCalls(t *testing.T) {
+	ids := &countingIDs{}
+	responseID, err := ids.ResponseID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accumulator := NewAccumulator(responseID, "public/model", ids)
+	for index := 0; index <= canonical.MaxResponseItems; index++ {
+		raw := fmt.Sprintf(`{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":%d,"function":{"arguments":"{}"}}]}}]}`, index)
+		chunk, err := DecodeChunk([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := accumulator.Accept(chunk); err != nil {
+			if index < canonical.MaxResponseItems {
+				t.Fatalf("rejected tool call %d within limit: %v", index, err)
+			}
+			return
+		}
+	}
+	t.Fatal("more than canonical.MaxResponseItems distinct tool calls were tracked without error")
+}
+
+func TestEncodeMessagesGroupsParallelToolCallsIntoOneAssistantTurn(t *testing.T) {
+	textBlock := func(value string) canonical.ContentBlock {
+		text, err := canonical.NewTextContent(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, err := canonical.NewTextBlock(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return block
+	}
+	messageItem := func(id byte, role string, value string) canonical.Item {
+		message, err := canonical.NewMessage(fixedItemID(t, id), canonical.Role(role), []canonical.ContentBlock{textBlock(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		item, err := canonical.NewMessageItem(message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	ids := &countingIDs{next: 100}
+	callIDs := make([]canonical.ToolCallID, 2)
+	items := []canonical.Item{messageItem(1, "user", "look both up"), messageItem(2, "assistant", "checking")}
+	for index := range callIDs {
+		callID, err := ids.ToolCallID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		callIDs[index] = callID
+		call, err := canonical.NewToolCall(fixedItemID(t, byte(10+index)), callID, "lookup", mustSchema(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		item, err := canonical.NewToolCallItem(call)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	for index, callID := range callIDs {
+		result, err := canonical.NewToolResult(fixedItemID(t, byte(20+index)), callID, []canonical.ContentBlock{textBlock("found")}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		item, err := canonical.NewToolResultItem(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	messages, err := encodeMessages(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := make([]string, 0, len(messages))
+	for _, message := range messages {
+		roles = append(roles, message["role"].(string))
+	}
+	if got, want := strings.Join(roles, ","), "user,assistant,tool,tool"; got != want {
+		t.Fatalf("roles = %s, want %s (every tool message must directly follow the assistant turn that issued its call)", got, want)
+	}
+	assistant := messages[1]
+	if assistant["content"] != "checking" {
+		t.Fatalf("assistant content = %#v, want preceding assistant text preserved", assistant["content"])
+	}
+	calls, ok := assistant["tool_calls"].([]map[string]any)
+	if !ok || len(calls) != 2 || calls[0]["id"] != string(callIDs[0]) || calls[1]["id"] != string(callIDs[1]) {
+		t.Fatalf("assistant tool_calls = %#v, want both calls in order", assistant["tool_calls"])
 	}
 }
 

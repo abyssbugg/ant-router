@@ -371,6 +371,9 @@ func (a *Accumulator) completeMessage() error {
 func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 	state, exists := a.tools[call.Index]
 	if !exists {
+		if len(a.tools) >= canonical.MaxResponseItems {
+			return protocolErr("tool_calls.limit")
+		}
 		itemID, err := a.ids.ItemID()
 		if err != nil {
 			return protocolErr("event.id")
@@ -390,6 +393,11 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 		// The canonical item must start with a valid tool name; fragments
 		// that arrive before any name are buffered and replayed after start.
 		if state.name == "" {
+			// Nothing has been emitted yet, so the streaming machine cannot
+			// enforce its argument limit; bound the replay buffer here.
+			if state.args.Len()+len(call.Function.Arguments) > canonical.MaxJSONBytes {
+				return protocolErr("tool.arguments_limit")
+			}
 			state.args.WriteString(call.Function.Arguments)
 			return nil
 		}

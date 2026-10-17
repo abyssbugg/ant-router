@@ -77,17 +77,26 @@ func encodeMessages(items []canonical.Item) ([]map[string]any, error) {
 			if !ok || call.Namespace() != "" {
 				return nil, unsupported(path)
 			}
+			encodedCall := map[string]any{
+				"id":   string(call.CallID()),
+				"type": "function",
+				"function": map[string]any{
+					"name":      call.Name(),
+					"arguments": string(call.Arguments().Bytes()),
+				},
+			}
+			// Chat Completions requires every tool message to directly follow
+			// the assistant turn that issued its call, so adjacent calls (and
+			// the assistant text that precedes them) share one assistant turn.
+			if last := len(messages) - 1; last >= 0 && messages[last]["role"] == "assistant" {
+				existing, _ := messages[last]["tool_calls"].([]map[string]any)
+				messages[last]["tool_calls"] = append(existing, encodedCall)
+				continue
+			}
 			messages = append(messages, map[string]any{
-				"role":    "assistant",
-				"content": nil,
-				"tool_calls": []map[string]any{{
-					"id":   string(call.CallID()),
-					"type": "function",
-					"function": map[string]any{
-						"name":      call.Name(),
-						"arguments": string(call.Arguments().Bytes()),
-					},
-				}},
+				"role":       "assistant",
+				"content":    nil,
+				"tool_calls": []map[string]any{encodedCall},
 			})
 		case canonical.ItemType("tool_result"):
 			result, ok := item.ToolResult()
