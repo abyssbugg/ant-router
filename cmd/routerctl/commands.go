@@ -9,6 +9,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/buildinfo"
 	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
+	"github.com/abyssbugg/ant-router/internal/controltransport"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 	"github.com/abyssbugg/ant-router/internal/runtimepaths"
 )
@@ -166,6 +167,10 @@ func describeCLIError(err error) cliErrorDetail {
 	switch exit {
 	case ExitUsage:
 		code, message = "usage", "invalid command or arguments"
+		var ctErr *controltransport.Error
+		if errors.As(err, &ctErr) && ctErr != nil && ctErr.Code == controltransport.CodeInvalidInstance {
+			message = "invalid instance name"
+		}
 	case ExitConnection:
 		code, message = "connection", "unable to connect to daemon"
 	case ExitAuthentication:

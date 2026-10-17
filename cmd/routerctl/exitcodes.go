@@ -7,6 +7,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
+	"github.com/abyssbugg/ant-router/internal/controltransport"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
@@ -31,6 +32,10 @@ func exitCode(err error) int {
 		return ExitSuccess
 	}
 	if errors.Is(err, errUsage) {
+		return ExitUsage
+	}
+	var ctErr *controltransport.Error
+	if errors.As(err, &ctErr) && ctErr != nil && ctErr.Code == controltransport.CodeInvalidInstance {
 		return ExitUsage
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errConnection) {

@@ -17,7 +17,7 @@ type Service struct {
 	state        State
 	diagnostic   error
 	initialized  bool
-	onActivation func(config.Snapshot)
+	onActivation func(config.Snapshot) error
 }
 
 func New(manager *config.Manager, store configstore.Store) (*Service, error) {
@@ -72,22 +72,39 @@ func (s *Service) Validate(ctx context.Context, tomlBytes []byte) (ValidationRes
 	return ValidationResult{Revision: candidate.RevisionID(), BaseGeneration: generation, CanonicalSize: len(candidate.Canonical())}, nil
 }
 
-// SetActivationCallback registers a callback invoked after every successful
-// configuration activation. The callback runs outside the service lock and
-// must not call service methods that take it.
-func (s *Service) SetActivationCallback(callback func(config.Snapshot)) {
+// SetActivationCallback registers a callback invoked after each successful
+// Apply or Rollback activation; Initialize does not invoke it, so callers
+// build their initial runtime from the manager themselves. The callback runs
+// outside the service lock and must not call service methods that take it.
+// A callback error does not undo the persisted activation; it is recorded as
+// the service diagnostic, surfaced by the returned result and Current, until
+// a later activation's callback succeeds.
+func (s *Service) SetActivationCallback(callback func(config.Snapshot) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onActivation = callback
 }
 
-func (s *Service) notifyActivation(snapshot config.Snapshot) {
+func (s *Service) notifyActivation(snapshot config.Snapshot) CurrentResult {
 	s.mu.RLock()
 	callback := s.onActivation
 	s.mu.RUnlock()
+	var callbackErr error
 	if callback != nil {
-		callback(snapshot)
+		callbackErr = callback(snapshot)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if callbackErr != nil {
+		s.diagnostic = &Error{Code: CodeRuntimeNotUpdated, Err: callbackErr}
+	} else {
+		s.diagnostic = nil
+	}
+	result := resultFromSnapshot(StateRunning, snapshot)
+	if s.diagnostic != nil {
+		result.Diagnostic = s.diagnostic.Error()
+	}
+	return result
 }
 
 func (s *Service) Apply(ctx context.Context, request ApplyRequest) (CurrentResult, error) {
@@ -95,8 +112,7 @@ func (s *Service) Apply(ctx context.Context, request ApplyRequest) (CurrentResul
 	if err != nil {
 		return CurrentResult{}, err
 	}
-	s.notifyActivation(snapshot)
-	return resultFromSnapshot(StateRunning, snapshot), nil
+	return s.notifyActivation(snapshot), nil
 }
 
 func (s *Service) apply(ctx context.Context, request ApplyRequest) (config.Snapshot, error) {
@@ -172,8 +188,7 @@ func (s *Service) Rollback(ctx context.Context) (CurrentResult, error) {
 		return CurrentResult{}, mapError(err)
 	}
 	s.mu.Unlock()
-	s.notifyActivation(snapshot)
-	return resultFromSnapshot(StateRunning, snapshot), nil
+	return s.notifyActivation(snapshot), nil
 }
 
 func resultFromSnapshot(state State, snapshot config.Snapshot) CurrentResult {
