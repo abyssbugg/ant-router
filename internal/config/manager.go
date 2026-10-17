@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/abyssbugg/ant-router/internal/configstore"
+	"github.com/abyssbugg/ant-router/internal/revision"
 )
 
 // Manager validates and transactionally activates configuration snapshots.
@@ -69,13 +70,6 @@ func (m *Manager) Activate(ctx context.Context, candidate Candidate) (Snapshot, 
 	if current != nil && candidate.RevisionID() == current.revisionID {
 		return *current, nil
 	}
-	if err := m.store.PutRevision(ctx, candidate.RevisionID(), candidate.Canonical()); err != nil {
-		return Snapshot{}, err
-	}
-	if err := managerContextError(ctx); err != nil {
-		return Snapshot{}, err
-	}
-
 	manifest := configstore.Manifest{
 		FormatVersion: configstore.ManifestFormatVersion,
 		Generation:    generation + 1,
@@ -85,7 +79,7 @@ func (m *Manager) Activate(ctx context.Context, candidate Candidate) (Snapshot, 
 	if current != nil {
 		manifest.Previous = current.revisionID
 	}
-	if err := m.store.WriteManifest(ctx, manifest); err != nil {
+	if err := m.commitRevision(ctx, candidate.RevisionID(), candidate.Canonical(), manifest); err != nil {
 		return Snapshot{}, err
 	}
 
@@ -221,12 +215,6 @@ func (m *Manager) LoadStartup(ctx context.Context, sourcePath string) (Snapshot,
 			return *next, nil
 		}
 
-		if err := m.store.PutRevision(ctx, sourceCandidate.RevisionID(), sourceCandidate.Canonical()); err != nil {
-			return Snapshot{}, err
-		}
-		if err := managerContextError(ctx); err != nil {
-			return Snapshot{}, err
-		}
 		nextManifest := configstore.Manifest{
 			FormatVersion: configstore.ManifestFormatVersion,
 			Generation:    1,
@@ -237,7 +225,7 @@ func (m *Manager) LoadStartup(ctx context.Context, sourcePath string) (Snapshot,
 			nextManifest.Generation = manifest.Generation + 1
 			nextManifest.Previous = manifest.Current
 		}
-		if err := m.store.WriteManifest(ctx, nextManifest); err != nil {
+		if err := m.commitRevision(ctx, sourceCandidate.RevisionID(), sourceCandidate.Canonical(), nextManifest); err != nil {
 			return Snapshot{}, err
 		}
 		next := &Snapshot{
@@ -286,4 +274,24 @@ func managerContextError(ctx context.Context) error {
 	default:
 		return nil
 	}
+}
+
+// commitRevision stores a revision and publishes a manifest referencing it.
+// Stores implementing configstore.RevisionCommitter do both under one lock so
+// another store sharing the root cannot collect the revision in between;
+// other stores fall back to PutRevision followed by WriteManifest.
+func (m *Manager) commitRevision(ctx context.Context, id revision.ID, data []byte, manifest configstore.Manifest) error {
+	if committer, ok := m.store.(configstore.RevisionCommitter); ok {
+		if err := managerContextError(ctx); err != nil {
+			return err
+		}
+		return committer.CommitRevision(ctx, id, data, manifest)
+	}
+	if err := m.store.PutRevision(ctx, id, data); err != nil {
+		return err
+	}
+	if err := managerContextError(ctx); err != nil {
+		return err
+	}
+	return m.store.WriteManifest(ctx, manifest)
 }
