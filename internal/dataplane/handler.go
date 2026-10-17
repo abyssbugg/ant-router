@@ -237,10 +237,15 @@ func writeResponsesError(w http.ResponseWriter, err error) {
 }
 func writeExecutionError(w http.ResponseWriter, err error) {
 	status := http.StatusBadGateway
-	if code := execution.CodeOf(err); code == execution.CodeInvalidModel || code == execution.CodeInvalidRequest {
+	code := execution.CodeOf(err)
+	errorType := "server_error"
+	if code == execution.CodeInvalidModel || code == execution.CodeInvalidRequest {
 		status = http.StatusBadRequest
 	}
-	writeAPIError(w, status, "server_error", string(execution.CodeOf(err)), "model", "request could not be executed")
+	if code == execution.CodeInvalidRequest {
+		errorType = "invalid_request_error"
+	}
+	writeAPIError(w, status, errorType, string(code), "model", "request could not be executed")
 }
 func writeAPIError(w http.ResponseWriter, status int, kind, code, param, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]any{"type": kind, "code": code, "param": param, "message": message}})
