@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
@@ -165,7 +166,9 @@ func TestChatWireExecutesAgainstCompatibleEndpoint(t *testing.T) {
 }
 
 func TestChatWireMapsHTTPErrorsWithoutRetry(t *testing.T) {
+	var callCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		callCount.Add(1)
 		writer.Header().Set("Retry-After", "5")
 		writer.WriteHeader(http.StatusTooManyRequests)
 		_, _ = io.WriteString(writer, `{"error":{"message":"slow down"}}`)
@@ -178,6 +181,9 @@ func TestChatWireMapsHTTPErrorsWithoutRetry(t *testing.T) {
 	_, err = provider.Execute(context.Background(), "deepseek-chat", chatWireRequest(t))
 	if execution.CodeOf(err) != execution.CodeRateLimited {
 		t.Fatalf("error = %v, want rate_limited", err)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("upstream calls = %d, want exactly 1 (no retries)", got)
 	}
 }
 
