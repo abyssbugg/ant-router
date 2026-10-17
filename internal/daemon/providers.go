@@ -39,7 +39,20 @@ func newReloadableProviders(initial *providerRuntime) *reloadableProviders {
 
 func (r *reloadableProviders) load() *providerRuntime { return r.current.Load() }
 
-func (r *reloadableProviders) swap(runtime *providerRuntime) { r.current.Store(runtime) }
+// swap installs runtime unless a newer configuration generation is already
+// active. Activation callbacks run after the config service releases its
+// lock, so an older activation can be delivered after a newer one.
+func (r *reloadableProviders) swap(runtime *providerRuntime) {
+	for {
+		current := r.current.Load()
+		if current != nil && current.configGeneration > runtime.configGeneration {
+			return
+		}
+		if r.current.CompareAndSwap(current, runtime) {
+			return
+		}
+	}
+}
 
 func (r *reloadableProviders) Execute(ctx context.Context, request canonical.Request) (streaming.EventSource, error) {
 	return r.load().registry.Execute(ctx, request)

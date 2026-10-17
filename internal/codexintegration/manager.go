@@ -223,9 +223,10 @@ func (manager *Manager) recoverDisabled(ctx context.Context, pending pendingTran
 	return manager.clearPending()
 }
 
-// verifyPlannedState re-observes both target files and fails when either no
-// longer matches the plan, so a non-cooperating concurrent writer is never
-// silently overwritten.
+// verifyPlannedState re-observes both target files immediately before
+// mutation and fails when either no longer matches the plan. This narrows,
+// but cannot eliminate, the window in which a non-cooperating writer could
+// be overwritten.
 func (manager *Manager) verifyPlannedState(ctx context.Context, input PlanInput) error {
 	profileObservation, _, err := observeFile(ctx, input.ProfilePath, codexownership.MaxProfileBytes)
 	if err != nil {

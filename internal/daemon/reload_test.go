@@ -125,3 +125,17 @@ func TestConfigApplyReloadsProvidersWithoutRestart(t *testing.T) {
 		t.Fatalf("running daemon Run() failed: %v", err)
 	}
 }
+
+func TestReloadableProvidersIgnoresOutOfOrderOlderGeneration(t *testing.T) {
+	newer := &providerRuntime{configGeneration: 2}
+	reloadable := newReloadableProviders(newer)
+	reloadable.swap(&providerRuntime{configGeneration: 1})
+	if got := reloadable.load(); got != newer {
+		t.Fatalf("runtime generation = %d, want stale generation 1 rejected in favor of 2", got.configGeneration)
+	}
+	newest := &providerRuntime{configGeneration: 3}
+	reloadable.swap(newest)
+	if got := reloadable.load(); got != newest {
+		t.Fatalf("runtime generation = %d, want newer generation 3 installed", got.configGeneration)
+	}
+}
