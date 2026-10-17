@@ -51,7 +51,11 @@ func encodeRequestInternal(request canonical.Request, upstreamModel string, stre
 	}
 	if len(tools) > 0 {
 		body["tools"] = tools
-		body["tool_choice"] = encodeToolChoice(request.ToolChoice())
+		choice, err := encodeToolChoice(request.ToolChoice(), nameMap)
+		if err != nil {
+			return nil, nil, err
+		}
+		body["tool_choice"] = choice
 		body["parallel_tool_calls"] = request.Output().ParallelToolCalls()
 	}
 	if output := request.Output(); output.Format() != canonical.OutputFormat("text") {
@@ -86,30 +90,20 @@ func encodeMessages(items []canonical.Item) ([]map[string]any, error) {
 			messages = append(messages, encoded)
 		case canonical.ItemType("tool_call"):
 			call, ok := item.ToolCall()
-			if !ok || call.Namespace() != "" {
+			if !ok {
 				return nil, unsupported(path)
 			}
-			encodedCall := map[string]any{
-				"id":   string(call.CallID()),
-				"type": "function",
-				"function": map[string]any{
-					"name":      call.Name(),
-					"arguments": string(call.Arguments().Bytes()),
-				},
+			messages = appendAssistantToolCall(messages, string(call.CallID()), upstreamFunctionName(call.Namespace(), call.Name()), string(call.Arguments().Bytes()))
+		case canonical.ItemType("custom_tool_call"):
+			call, ok := item.CustomToolCall()
+			if !ok {
+				return nil, unsupported(path)
 			}
-			// Chat Completions requires every tool message to directly follow
-			// the assistant turn that issued its call, so adjacent calls (and
-			// the assistant text that precedes them) share one assistant turn.
-			if last := len(messages) - 1; last >= 0 && messages[last]["role"] == "assistant" {
-				existing, _ := messages[last]["tool_calls"].([]map[string]any)
-				messages[last]["tool_calls"] = append(existing, encodedCall)
-				continue
+			arguments, err := json.Marshal(customToolArguments{Input: call.Input()})
+			if err != nil {
+				return nil, invalid(path+".input", "custom tool input cannot be encoded")
 			}
-			messages = append(messages, map[string]any{
-				"role":       "assistant",
-				"content":    nil,
-				"tool_calls": []map[string]any{encodedCall},
-			})
+			messages = appendAssistantToolCall(messages, string(call.CallID()), upstreamFunctionName(call.Namespace(), call.Name()), string(arguments))
 		case canonical.ItemType("tool_result"):
 			result, ok := item.ToolResult()
 			if !ok {
@@ -177,18 +171,56 @@ func blocksToText(blocks []canonical.ContentBlock, path string) (string, error) 
 	return text, nil
 }
 
-func encodeToolChoice(choice canonical.ToolChoice) any {
+// customToolArguments is the function-arguments object that carries a
+// freeform custom tool input on the chat wire.
+type customToolArguments struct {
+	Input string `json:"input"`
+}
+
+// appendAssistantToolCall adds one function tool call to the conversation.
+// Chat Completions requires every tool message to directly follow the
+// assistant turn that issued its call, so adjacent calls (and the assistant
+// text that precedes them) share one assistant turn.
+func appendAssistantToolCall(messages []map[string]any, callID, name, arguments string) []map[string]any {
+	encodedCall := map[string]any{
+		"id":   callID,
+		"type": "function",
+		"function": map[string]any{
+			"name":      name,
+			"arguments": arguments,
+		},
+	}
+	if last := len(messages) - 1; last >= 0 && messages[last]["role"] == "assistant" {
+		existing, _ := messages[last]["tool_calls"].([]map[string]any)
+		messages[last]["tool_calls"] = append(existing, encodedCall)
+		return messages
+	}
+	return append(messages, map[string]any{
+		"role":       "assistant",
+		"content":    nil,
+		"tool_calls": []map[string]any{encodedCall},
+	})
+}
+
+// encodeToolChoice encodes the canonical tool choice; specific choices are
+// resolved to the upstream function name of an encoded tool.
+func encodeToolChoice(choice canonical.ToolChoice, nameMap ToolNameMap) (any, error) {
 	switch choice.Kind() {
 	case "auto":
-		return "auto"
+		return "auto", nil
 	case "none":
-		return "none"
+		return "none", nil
 	case "required":
-		return "required"
+		return "required", nil
 	case "specific":
-		return map[string]any{"type": "function", "function": map[string]any{"name": choice.Name()}}
+		name := upstreamFunctionName(choice.Namespace(), choice.Name())
+		info, ok := nameMap[name]
+		if !ok || info.Name != choice.Name() || info.Namespace != choice.Namespace() {
+			return nil, invalid("request.tool_choice", "tool choice does not name an encoded tool")
+		}
+		return map[string]any{"type": "function", "function": map[string]any{"name": name}}, nil
 	default:
-		return "auto"
+		return "auto", nil
 	}
 }
 
