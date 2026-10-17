@@ -59,18 +59,6 @@ func TestDecodeOlderSchemaRejectsEndpointFields(t *testing.T) {
 	}
 }
 
-func TestValidateChatWireRejectsDeferredCapabilities(t *testing.T) {
-	for _, capability := range []string{"continuation", "image_input"} {
-		cfg := Default()
-		provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
-		provider.Models[0].Capabilities = []string{"text", capability}
-		cfg.Providers = []ProviderConfig{provider}
-		if err := cfg.Validate(); err == nil {
-			t.Fatalf("chat wire accepted capability %q", capability)
-		}
-	}
-}
-
 func TestValidateCompatibleEndpointRules(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -209,5 +197,20 @@ func TestCanonicalPreservesEndpointRoundTrip(t *testing.T) {
 	again, err := Canonical(decoded)
 	if err != nil || string(again) != string(encoded) {
 		t.Fatalf("canonical encoding is not stable: %q vs %q", again, encoded)
+	}
+}
+
+func TestValidateChatWireImageInputAcceptedContinuationDeferred(t *testing.T) {
+	cfg := Default()
+	provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
+	provider.Models[0].Capabilities = []string{"image_input", "text"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("chat wire rejected image_input: %v", err)
+	}
+	provider.Models[0].Capabilities = []string{"continuation", "text"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("chat wire accepted continuation")
 	}
 }
