@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/config"
+	"github.com/abyssbugg/ant-router/internal/credential"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 )
 
@@ -79,6 +80,9 @@ func TestConfigApplyReloadsProvidersWithoutRestart(t *testing.T) {
 	}
 
 	options := daemonOptions(t, stateRoot, runtimeRoot)
+	// Resolve every credential as absent so the unavailable-provider
+	// assertion never depends on the host environment.
+	options.CredentialSource = credential.NewEnvSource(func(string) (string, bool) { return "", false })
 	options.DataPlaneListen = func(requested string) (net.Listener, error) {
 		if requested != address {
 			t.Fatalf("data-plane listen request = %q", requested)
