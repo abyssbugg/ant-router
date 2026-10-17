@@ -47,6 +47,11 @@ func (s *SSESink) Send(ctx context.Context, event canonical.Event) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Reject unmappable events before the machine or sink bookkeeping advances,
+	// so a rejected event leaves the stream exactly as it was.
+	if err := s.preflightMapEvent(event); err != nil {
+		return err
+	}
 	transition, err := s.machine.Accept(event)
 	if err != nil {
 		return newError(CodeInternal, "stream.event", errors.New("canonical event sequence is invalid"))
@@ -64,6 +69,33 @@ func (s *SSESink) Send(ctx context.Context, event canonical.Event) error {
 	if terminal {
 		if err := s.writeData(ctx, "data: [DONE]\n\n"); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// preflightMapEvent runs the fallible, state-independent parts of mapEvent
+// without mutating the sink. Other event types cannot fail mapping once the
+// machine has accepted them.
+func (s *SSESink) preflightMapEvent(event canonical.Event) error {
+	switch event.Type() {
+	case canonical.EventType("item_started"):
+		payload, _ := event.ItemStarted()
+		_, err := startedOutputItem(payload, s.reasoningEntries)
+		if err != nil {
+			return newError(CodeInternal, "stream.item", errors.New("started item is unsupported"))
+		}
+	case canonical.EventType("item_completed"):
+		payload, _ := event.ItemCompleted()
+		_, err := encodeOutputItem(payload.Item(), s.reasoningEntries)
+		if err != nil {
+			return newError(CodeInternal, "stream.item", errors.New("completed item is invalid"))
+		}
+	case canonical.EventType("continuation_updated"):
+		payload, _ := event.ContinuationUpdated()
+		_, err := continuationOutputIndex(payload.Continuation())
+		if err != nil {
+			return newError(CodeInternal, "stream.continuation", errors.New("response continuation is invalid"))
 		}
 	}
 	return nil

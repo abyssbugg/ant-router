@@ -56,7 +56,7 @@ func DecodeChunk(data []byte) (Chunk, error) {
 type toolStreamState struct {
 	itemID  canonical.ItemID
 	callID  canonical.ToolCallID
-	name    string
+	name    strings.Builder
 	started bool
 	args    strings.Builder
 }
@@ -382,17 +382,21 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 		if err != nil {
 			return protocolErr("event.id")
 		}
-		state = &toolStreamState{itemID: itemID, callID: callID, name: call.Function.Name}
+		state = &toolStreamState{itemID: itemID, callID: callID}
 		a.tools[call.Index] = state
 		a.toolOrder = append(a.toolOrder, call.Index)
 	}
-	if call.Function.Name != "" && state.name == "" {
-		state.name = call.Function.Name
+	// Some compatible endpoints split the function name across chunks. Name
+	// fragments accumulate until the first arguments fragment (or the call's
+	// completion) starts the item; a name fragment after that is malformed.
+	if call.Function.Name != "" {
+		if state.started || state.name.Len()+len(call.Function.Name) > canonical.MaxToolNameBytes {
+			return protocolErr("tool.name")
+		}
+		state.name.WriteString(call.Function.Name)
 	}
 	if !state.started {
-		// The canonical item must start with a valid tool name; fragments
-		// that arrive before any name are buffered and replayed after start.
-		if state.name == "" {
+		if state.name.Len() == 0 || call.Function.Arguments == "" {
 			// Nothing has been emitted yet, so the streaming machine cannot
 			// enforce its argument limit; bound the replay buffer here.
 			if state.args.Len()+len(call.Function.Arguments) > canonical.MaxJSONBytes {
@@ -401,18 +405,8 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 			state.args.WriteString(call.Function.Arguments)
 			return nil
 		}
-		if err := a.startItem(canonical.ItemStartParams{ID: state.itemID, Type: canonical.ItemType("tool_call"), CallID: state.callID, Name: state.name}); err != nil {
+		if err := a.startTool(state); err != nil {
 			return err
-		}
-		state.started = true
-		if state.args.Len() > 0 {
-			buffered := state.args.String()
-			state.args.Reset()
-			if buffered != "" {
-				if err := a.emitToolArguments(state, buffered); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	if call.Function.Arguments != "" {
@@ -438,12 +432,35 @@ func (a *Accumulator) emitToolArguments(state *toolStreamState, delta string) er
 	return nil
 }
 
+// startTool opens the canonical item for a call whose name is complete and
+// replays argument fragments buffered before the start.
+func (a *Accumulator) startTool(state *toolStreamState) error {
+	if err := a.startItem(canonical.ItemStartParams{ID: state.itemID, Type: canonical.ItemType("tool_call"), CallID: state.callID, Name: state.name.String()}); err != nil {
+		return err
+	}
+	state.started = true
+	if state.args.Len() == 0 {
+		return nil
+	}
+	buffered := state.args.String()
+	state.args.Reset()
+	return a.emitToolArguments(state, buffered)
+}
+
 func (a *Accumulator) completeTool(state *toolStreamState) error {
+	if !state.started {
+		if state.name.Len() == 0 {
+			return protocolErr("tool.name")
+		}
+		if err := a.startTool(state); err != nil {
+			return err
+		}
+	}
 	arguments, err := canonicaljson.Parse([]byte(state.args.String()), canonicaljson.DefaultLimits())
 	if err != nil {
 		return protocolErr("tool.arguments")
 	}
-	toolCall, err := canonical.NewToolCall(state.itemID, state.callID, state.name, arguments)
+	toolCall, err := canonical.NewToolCall(state.itemID, state.callID, state.name.String(), arguments)
 	if err != nil {
 		return protocolErr("tool.item")
 	}
