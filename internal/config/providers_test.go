@@ -298,18 +298,25 @@ func TestDataPlaneRequiresAnyEnabledProvider(t *testing.T) {
 }
 
 func TestCredentialNameRequiresProviderPrefix(t *testing.T) {
+	// When a provider has a custom BaseURL, credential names must use
+	// the kind-scoped prefix (OPENAI_ or ANTHROPIC_).
+	// Official endpoints accept any valid env var name for backwards compatibility.
 	for _, tc := range []struct {
-		kind  ProviderKind
-		name  string
-		valid bool
+		kind    ProviderKind
+		name    string
+		baseURL string
+		valid   bool
 	}{
-		{ProviderKindOpenAI, "OPENAI_API_KEY", true},
-		{ProviderKindOpenAI, "OPENAI_TEST_KEY", true},
-		{ProviderKindOpenAI, "ANTHROPIC_API_KEY", false},
-		{ProviderKindOpenAI, "PATH", false},
-		{ProviderKindAnthropic, "ANTHROPIC_API_KEY", true},
-		{ProviderKindAnthropic, "OPENAI_API_KEY", false},
-		{ProviderKindAnthropic, "GITHUB_TOKEN", false},
+		// Official endpoints: accept any valid name
+		{ProviderKindOpenAI, "OPENAI_API_KEY", "", true},
+		{ProviderKindOpenAI, "OPENAI_TEST_KEY", "", true},
+		{ProviderKindOpenAI, "ANTHROPIC_API_KEY", "", true},
+		{ProviderKindOpenAI, "PATH", "", true},
+		// Custom endpoints: require prefix
+		{ProviderKindOpenAI, "OPENAI_API_KEY", "https://api.example.com/v1", true},
+		{ProviderKindOpenAI, "OPENAI_TEST_KEY", "https://api.example.com/v1", true},
+		{ProviderKindOpenAI, "ANTHROPIC_API_KEY", "https://api.example.com/v1", false},
+		{ProviderKindOpenAI, "PATH", "https://api.example.com/v1", false},
 	} {
 		var provider ProviderConfig
 		switch tc.kind {
@@ -319,14 +326,71 @@ func TestCredentialNameRequiresProviderPrefix(t *testing.T) {
 			provider = validAnthropicProvider("anthropic", "anthropic/model")
 		}
 		provider.Credential.Name = tc.name
+		if tc.baseURL != "" {
+			provider.BaseURL = tc.baseURL
+		}
 		cfg := Default()
 		cfg.Providers = []ProviderConfig{provider}
 		err := cfg.Validate()
 		if tc.valid && err != nil {
-			t.Errorf("%s credential %q rejected: %v", tc.kind, tc.name, err)
+			t.Errorf("%s credential %q (baseURL=%q) rejected: %v", tc.kind, tc.name, tc.baseURL, err)
 		}
 		if !tc.valid && err == nil {
-			t.Errorf("%s credential %q accepted", tc.kind, tc.name)
+			t.Errorf("%s credential %q (baseURL=%q) accepted", tc.kind, tc.name, tc.baseURL)
 		}
+	}
+}
+
+func TestBaseURLValidationBareQueryAndFragment(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		baseURL string
+	}{
+		{"bare question mark", "https://api.example.com/v1?"},
+		{"bare hash", "https://api.example.com/v1#"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := validOpenAIProvider("openai", "gpt-4")
+			provider.BaseURL = tc.baseURL
+			cfg := Default()
+			cfg.Providers = []ProviderConfig{provider}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("BaseURL %q should be rejected, got no error", tc.baseURL)
+			}
+		})
+	}
+}
+
+func TestCredentialPrefixOnlyRequiredForCustomBaseURL(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		baseURL    string
+		credName   string
+		shouldFail bool
+	}{
+		// Official endpoint (no BaseURL): accept any valid env var name
+		{"openai official with DEEPSEEK_API_KEY", "", "DEEPSEEK_API_KEY", false},
+		{"openai official with OPENAI_API_KEY", "", "OPENAI_API_KEY", false},
+		// Custom endpoint: require OPENAI_ prefix
+		{"openai custom with OPENAI_API_KEY", "https://api.example.com/v1", "OPENAI_API_KEY", false},
+		{"openai custom with DEEPSEEK_API_KEY", "https://api.example.com/v1", "DEEPSEEK_API_KEY", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			provider := validOpenAIProvider("openai", "gpt-4")
+			if tc.baseURL != "" {
+				provider.BaseURL = tc.baseURL
+			}
+			provider.Credential.Name = tc.credName
+			cfg.Providers = []ProviderConfig{provider}
+			err := cfg.Validate()
+			if tc.shouldFail && err == nil {
+				t.Errorf("should have failed for %s", tc.credName)
+			}
+			if !tc.shouldFail && err != nil {
+				t.Errorf("should have passed for %s: %v", tc.credName, err)
+			}
+		})
 	}
 }

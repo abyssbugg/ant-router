@@ -16,6 +16,7 @@ const (
 	CodeNoPreviousRevision       Code = "no_previous_revision"
 	CodeConfigurationUnavailable Code = "configuration_unavailable"
 	CodeCancelled                Code = "cancelled"
+	CodeRuntimeNotUpdated        Code = "runtime_not_updated"
 )
 
 type Error struct {

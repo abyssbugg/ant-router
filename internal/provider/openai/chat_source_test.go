@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
@@ -165,7 +166,9 @@ func TestChatWireExecutesAgainstCompatibleEndpoint(t *testing.T) {
 }
 
 func TestChatWireMapsHTTPErrorsWithoutRetry(t *testing.T) {
+	var callCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		callCount.Add(1)
 		writer.Header().Set("Retry-After", "5")
 		writer.WriteHeader(http.StatusTooManyRequests)
 		_, _ = io.WriteString(writer, `{"error":{"message":"slow down"}}`)
@@ -178,6 +181,9 @@ func TestChatWireMapsHTTPErrorsWithoutRetry(t *testing.T) {
 	_, err = provider.Execute(context.Background(), "deepseek-chat", chatWireRequest(t))
 	if execution.CodeOf(err) != execution.CodeRateLimited {
 		t.Fatalf("error = %v, want rate_limited", err)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("upstream calls = %d, want exactly 1 (no retries)", got)
 	}
 }
 
@@ -204,5 +210,42 @@ func TestChatWireFailsOnTruncatedStream(t *testing.T) {
 		if recvErr != nil {
 			break
 		}
+	}
+}
+
+// SSE allows one event's data to span several data: fields joined by "\n".
+func TestChatWireJoinsMultilineDataFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"id\":\"c1\",\ndata: \"choices\":[{\"index\":0,\"delta\":{\"content\":\"multi\"}}]}\n\n"+
+			"data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"line\"}}]}\n"+
+			"data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{}}]}\n\n"+
+			"data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	provider, err := NewProviderForIDWithEndpoint("deepseek", credential.NewEnvSource(func(string) (string, bool) { return "k", true }), mustChatCredentialRef(t), Endpoint{BaseURL: server.URL, Chat: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := provider.Execute(context.Background(), "deepseek-chat", chatWireRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = source.Close() }()
+	var text strings.Builder
+	for {
+		event, recvErr := source.Recv(context.Background())
+		if recvErr == io.EOF {
+			break
+		}
+		if recvErr != nil {
+			t.Fatalf("Recv() failed: %v", recvErr)
+		}
+		if delta, ok := event.TextDelta(); ok {
+			text.WriteString(delta.Delta())
+		}
+	}
+	if text.String() != "multiline" {
+		t.Fatalf("text = %q, want %q", text.String(), "multiline")
 	}
 }

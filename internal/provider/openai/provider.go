@@ -71,7 +71,7 @@ func newProvider(source credential.Source, ref credential.Ref, starter streamSta
 // endpoint. Chat-wire endpoints speak the Chat Completions dialect; responses
 // endpoints use the official Responses API.
 func NewProviderForIDWithEndpoint(providerID string, source credential.Source, ref credential.Ref, endpoint Endpoint) (*Provider, error) {
-	if nilInterface(source) || !ref.Valid() {
+	if providerID == "" || nilInterface(source) || !ref.Valid() {
 		return nil, execution.NewError(execution.CodeInternal, "provider.openai.options", 0, nil)
 	}
 	baseURL := endpoint.BaseURL
