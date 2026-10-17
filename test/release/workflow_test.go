@@ -98,7 +98,7 @@ func TestReleaseWorkflowUsesArePinned(t *testing.T) {
 
 	lines := strings.Split(string(data), "\n")
 	// Match lines like "      - uses: owner/repo@<40-hex> # v1.2.3"
-	pinRx := regexp.MustCompile(`^\s*-\s+uses:\s+([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)@([0-9a-f]{40})(\s*#\s*v[\d.]+)?`)
+	pinRx := regexp.MustCompile(`^\s*-\s+uses:\s+([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*)@([0-9a-f]{40})\s+#\s*v\d+\.\d+\.\d+\s*$`)
 
 	foundUses := 0
 	for i, line := range lines {
@@ -112,18 +112,6 @@ func TestReleaseWorkflowUsesArePinned(t *testing.T) {
 		}
 
 		foundUses++
-		action := match[1]
-		sha := match[2]
-		comment := match[3]
-
-		if comment == "" {
-			t.Fatalf("line %d: action %s@%s missing version comment (expected # vX.Y.Z)", i+1, action, sha)
-		}
-
-		// Verify SHA is exactly 40 hex digits
-		if len(sha) != 40 {
-			t.Fatalf("line %d: SHA not 40 hex digits: %s", i+1, sha)
-		}
 	}
 
 	// We expect at least 4 uses: (checkout, setup-go, cosign-installer, goreleaser-action)
@@ -361,4 +349,49 @@ func findStepByUses(steps []any, usesPartial string) map[string]any {
 		}
 	}
 	return nil
+}
+
+// TestReleaseWorkflowInstallsSyftForSBOMs verifies that when GoReleaser is
+// configured to generate SBOMs (which shells out to syft), the workflow
+// installs syft, puts it on PATH without interpolating step outputs into the
+// script, and does so before GoReleaser runs.
+func TestReleaseWorkflowInstallsSyftForSBOMs(t *testing.T) {
+	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^sboms:`).Match(cfg) {
+		t.Skip("goreleaser does not generate SBOMs")
+	}
+	steps := getSteps(t, loadReleaseWorkflow(t))
+	syftIdx, pathIdx, goreleaserIdx := -1, -1, -1
+	for i, raw := range steps {
+		step, _ := raw.(map[string]any)
+		uses, _ := step["uses"].(string)
+		run, _ := step["run"].(string)
+		switch {
+		case strings.HasPrefix(uses, "anchore/sbom-action/download-syft@"):
+			syftIdx = i
+			if step["id"] != "syft" {
+				t.Errorf("download-syft step must have id syft, got %v", step["id"])
+			}
+		case strings.Contains(run, "GITHUB_PATH") && strings.Contains(run, "SYFT_CMD"):
+			pathIdx = i
+			if strings.Contains(run, "${{") {
+				t.Errorf("PATH step must not interpolate expressions into run: %q", run)
+			}
+			env, _ := step["env"].(map[string]any)
+			if env["SYFT_CMD"] != "${{ steps.syft.outputs.cmd }}" {
+				t.Errorf("PATH step env SYFT_CMD = %v", env["SYFT_CMD"])
+			}
+		case strings.Contains(uses, "goreleaser-action"):
+			goreleaserIdx = i
+		}
+	}
+	if syftIdx < 0 || pathIdx < 0 || goreleaserIdx < 0 {
+		t.Fatalf("steps: download-syft=%d path=%d goreleaser=%d; all required", syftIdx, pathIdx, goreleaserIdx)
+	}
+	if !(syftIdx < pathIdx && pathIdx < goreleaserIdx) {
+		t.Fatalf("order must be download-syft (%d) < PATH (%d) < goreleaser (%d)", syftIdx, pathIdx, goreleaserIdx)
+	}
 }
