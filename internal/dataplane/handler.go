@@ -259,14 +259,19 @@ func writeResponsesError(w http.ResponseWriter, err error) {
 func writeExecutionError(w http.ResponseWriter, err error) {
 	status := http.StatusBadGateway
 	code := execution.CodeOf(err)
-	errorType := "server_error"
+	errorType, param := "server_error", "model"
 	if code == execution.CodeInvalidModel || code == execution.CodeInvalidRequest {
 		status = http.StatusBadRequest
 	}
 	if code == execution.CodeInvalidRequest {
 		errorType = "invalid_request_error"
+		// Execution error paths are fixed, non-secret field names.
+		var executionErr *execution.Error
+		if errors.As(err, &executionErr) && executionErr.Path != "" {
+			param = executionErr.Path
+		}
 	}
-	writeAPIError(w, status, errorType, string(code), "model", "request could not be executed")
+	writeAPIError(w, status, errorType, string(code), param, "request could not be executed")
 }
 func writeAPIError(w http.ResponseWriter, status int, kind, code, param, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]any{"type": kind, "code": code, "param": param, "message": message}})
