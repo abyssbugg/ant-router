@@ -134,6 +134,21 @@ func TestResponsesReturnsSafeStrictErrors(t *testing.T) {
 	}
 }
 
+func TestWriteExecutionErrorReportsInvalidRequestPath(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	writeExecutionError(recorder, execution.NewError(execution.CodeInvalidRequest, "request.continuation", 0, nil))
+	var body struct {
+		Error struct{ Param string } `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Param != "request.continuation" {
+		t.Fatalf("param = %q, want request.continuation", body.Error.Param)
+	}
+}
+
 func TestWriteExecutionErrorClassifiesByCode(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
