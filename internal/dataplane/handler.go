@@ -41,10 +41,21 @@ type HandlerOptions struct {
 	Executor         execution.Executor
 	Catalog          execution.ModelCatalog
 	AffinityResolver responses.AffinityResolver
-	ListenAddress    string
-	MaxConcurrent    int
-	RequestTimeout   time.Duration
-	Clock            func() time.Time
+	// Runtime, when set, is called once per responses request; the returned
+	// runtime serves both affinity resolution and execution so a concurrent
+	// configuration activation cannot split them across provider generations.
+	Runtime        func() RequestRuntime
+	ListenAddress  string
+	MaxConcurrent  int
+	RequestTimeout time.Duration
+	Clock          func() time.Time
+}
+
+// RequestRuntime executes requests and resolves model affinity from one
+// consistent provider configuration.
+type RequestRuntime interface {
+	execution.Executor
+	responses.AffinityResolver
 }
 
 type handler struct {
@@ -52,6 +63,7 @@ type handler struct {
 	executor         execution.Executor
 	catalog          execution.ModelCatalog
 	affinityResolver responses.AffinityResolver
+	runtime          func() RequestRuntime
 	listenAddress    string
 	clock            func() time.Time
 	requestTimeout   time.Duration
@@ -64,7 +76,7 @@ func NewHandler(options HandlerOptions) (http.Handler, error) {
 	if nilInterface(options.TokenSource) || nilInterface(options.Executor) || nilInterface(options.Catalog) || options.ListenAddress == "" || options.MaxConcurrent < 1 || options.MaxConcurrent > 1024 || options.RequestTimeout <= 0 || options.Clock == nil {
 		return nil, errors.New("data-plane options are invalid")
 	}
-	h := &handler{tokens: options.TokenSource, executor: options.Executor, catalog: options.Catalog, affinityResolver: options.AffinityResolver, listenAddress: options.ListenAddress, clock: options.Clock, requestTimeout: options.RequestTimeout, semaphore: make(chan struct{}, options.MaxConcurrent), mux: http.NewServeMux()}
+	h := &handler{tokens: options.TokenSource, executor: options.Executor, catalog: options.Catalog, affinityResolver: options.AffinityResolver, runtime: options.Runtime, listenAddress: options.ListenAddress, clock: options.Clock, requestTimeout: options.RequestTimeout, semaphore: make(chan struct{}, options.MaxConcurrent), mux: http.NewServeMux()}
 	h.mux.HandleFunc("/v1/models", h.models)
 	h.mux.HandleFunc("/v1/responses", h.responses)
 	return http.HandlerFunc(h.serve), nil
@@ -135,9 +147,18 @@ func (h *handler) responses(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusRequestTimeout, "server_error", "request_timeout", "request", "request timed out")
 		return
 	}
+	executor, affinityResolver := h.executor, h.affinityResolver
+	if h.runtime != nil {
+		runtime := h.runtime()
+		if nilInterface(runtime) {
+			writeAPIError(w, http.StatusInternalServerError, "server_error", "internal", "request", "request failed")
+			return
+		}
+		executor, affinityResolver = runtime, runtime
+	}
 	var parsed responses.ParsedRequest
-	if h.affinityResolver != nil {
-		parsed, err = responses.DecodeWithAffinity(r.Body, randomRequestIDs{}, h.affinityResolver)
+	if affinityResolver != nil {
+		parsed, err = responses.DecodeWithAffinity(r.Body, randomRequestIDs{}, affinityResolver)
 	} else {
 		parsed, err = responses.Decode(r.Body, randomRequestIDs{})
 	}
@@ -180,7 +201,7 @@ func (h *handler) responses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	source, err := h.executor.Execute(ctx, parsed.Request)
+	source, err := executor.Execute(ctx, parsed.Request)
 	if err != nil {
 		writeExecutionError(w, err)
 		return

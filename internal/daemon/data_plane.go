@@ -54,6 +54,7 @@ func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, providers
 		Executor:         providers,
 		Catalog:          providers,
 		AffinityResolver: providers,
+		Runtime:          func() dataplane.RequestRuntime { return providers.load().registry },
 		ListenAddress:    configuration.DataPlane.Listen,
 		MaxConcurrent:    configuration.DataPlane.MaxConcurrentRequests,
 		RequestTimeout:   dataPlaneRequestTimeout,
