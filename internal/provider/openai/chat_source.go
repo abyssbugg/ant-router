@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -68,6 +69,7 @@ const maxChatSSELine = 1 << 20
 type chatEventSource struct {
 	body        io.ReadCloser
 	scanner     *bufio.Scanner
+	data        strings.Builder // data fields of the event being assembled
 	accumulator *chat.Accumulator
 	events      []canonical.Event
 	done        bool
@@ -97,6 +99,12 @@ func (s *chatEventSource) Recv(ctx context.Context) (canonical.Event, error) {
 			if err := s.scanner.Err(); err != nil {
 				return canonical.Event{}, err
 			}
+			if s.data.Len() > 0 {
+				if err := s.dispatch(); err != nil {
+					return canonical.Event{}, err
+				}
+				continue
+			}
 			// Upstream closed the connection. A stream that reached a finish
 			// reason completes normally even without [DONE]; anything else is
 			// interrupted, not completed.
@@ -111,40 +119,35 @@ func (s *chatEventSource) Recv(ctx context.Context) (canonical.Event, error) {
 			s.events = append(s.events, finalEvents...)
 			break
 		}
-		line := strings.TrimSpace(s.scanner.Text())
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "[DONE]" {
-			s.done = true
-			if !s.sawFinish {
-				return canonical.Event{}, errors.New("chat stream completed without a finish reason")
-			}
-			finalEvents, err := s.accumulator.Finish()
-			if err != nil {
+		line := strings.TrimRight(s.scanner.Text(), "\r")
+		if strings.TrimSpace(line) == "" {
+			if err := s.dispatch(); err != nil {
 				return canonical.Event{}, err
 			}
-			s.events = append(s.events, finalEvents...)
-			break
+			continue
 		}
-		chunk, err := chat.DecodeChunk([]byte(payload))
-		if err != nil {
-			return canonical.Event{}, err
+		if strings.HasPrefix(line, ":") || !strings.HasPrefix(line, "data:") {
+			continue
 		}
-		for _, choice := range chunk.Choices {
-			if choice.FinishReason != "" {
-				s.sawFinish = true
+		value := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+		// SSE joins an event's data fields with "\n" and ends the event at a
+		// blank line. Some servers omit the blank line, so a buffer that is
+		// already a complete payload is dispatched before the next field.
+		if s.data.Len() > 0 && completeChatPayload(s.data.String()) {
+			if err := s.dispatch(); err != nil {
+				return canonical.Event{}, err
+			}
+			if s.done {
+				break
 			}
 		}
-		events, err := s.accumulator.Accept(chunk)
-		if err != nil {
-			return canonical.Event{}, err
+		if s.data.Len() > 0 {
+			s.data.WriteByte('\n')
 		}
-		s.events = append(s.events, events...)
+		if s.data.Len()+len(value) > maxChatSSELine {
+			return canonical.Event{}, errors.New("chat stream event exceeds the size limit")
+		}
+		s.data.WriteString(value)
 	}
 	if len(s.events) == 0 {
 		return canonical.Event{}, io.EOF
@@ -152,6 +155,48 @@ func (s *chatEventSource) Recv(ctx context.Context) (canonical.Event, error) {
 	next := s.events[0]
 	s.events = s.events[1:]
 	return next, nil
+}
+
+// dispatch decodes the buffered event data, if any, as one chat chunk or the
+// [DONE] sentinel.
+func (s *chatEventSource) dispatch() error {
+	payload := strings.TrimSpace(s.data.String())
+	s.data.Reset()
+	if payload == "" {
+		return nil
+	}
+	if payload == "[DONE]" {
+		s.done = true
+		if !s.sawFinish {
+			return errors.New("chat stream completed without a finish reason")
+		}
+		finalEvents, err := s.accumulator.Finish()
+		if err != nil {
+			return err
+		}
+		s.events = append(s.events, finalEvents...)
+		return nil
+	}
+	chunk, err := chat.DecodeChunk([]byte(payload))
+	if err != nil {
+		return err
+	}
+	for _, choice := range chunk.Choices {
+		if choice.FinishReason != "" {
+			s.sawFinish = true
+		}
+	}
+	events, err := s.accumulator.Accept(chunk)
+	if err != nil {
+		return err
+	}
+	s.events = append(s.events, events...)
+	return nil
+}
+
+func completeChatPayload(data string) bool {
+	trimmed := strings.TrimSpace(data)
+	return trimmed == "[DONE]" || json.Valid([]byte(trimmed))
 }
 
 func (s *chatEventSource) Close() error {

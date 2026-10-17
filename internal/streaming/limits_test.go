@@ -42,17 +42,18 @@ func TestMachineRejectsEventsBeyondTrackedLimit(t *testing.T) {
 	}
 	b.sequence++
 	b.mustAccept(itemStart)
-	before := b.machine.Snapshot()
 	content, err := canonical.NewContentStartedEvent(b.nextEventID(), b.responseID, b.sequence, messageID, 0, canonical.ContentType("text"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.sequence++
+	before := b.machine.Snapshot()
 	if _, err := b.machine.Accept(content); codeOfStream(err) != CodeEventLimitExceeded {
 		t.Fatalf("code=%q error=%v", codeOfStream(err), err)
 	}
-	if b.machine.Snapshot() != before {
-		t.Error("tracked-event limit rejection mutated machine")
+	after := b.machine.Snapshot()
+	if after != before {
+		t.Error("tracked-event limit rejection mutated machine state - transactional rejection violated")
 	}
 }
 
