@@ -68,6 +68,9 @@ func exitCode(err error) int {
 			return ExitInternal
 		}
 	}
+	if code, ok := serviceErrorExit(err); ok {
+		return code
+	}
 	var clientErr *control.ClientError
 	if errors.As(err, &clientErr) && clientErr != nil {
 		switch clientErr.Kind {
