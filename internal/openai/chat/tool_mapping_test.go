@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -248,6 +249,72 @@ func TestCustomArgumentsMustBeExactInputObject(t *testing.T) {
 	}
 	if input, err := decodeCustomInput(` { "input" : "ok" } `); err != nil || input != "ok" {
 		t.Fatalf("whitespace-tolerant decode = %q, %v", input, err)
+	}
+}
+
+// TestAccumulatorBoundsTotalRetainedToolArguments proves the per-stream
+// bound: many concurrent calls that each stay under the per-call limit must
+// not let an untrusted upstream make the accumulator retain unbounded memory.
+func TestAccumulatorBoundsTotalRetainedToolArguments(t *testing.T) {
+	fragment := strings.Repeat("a", 256<<10)
+	perCall := canonical.MaxJSONBytes/len(fragment) - 1
+	calls := maxRetainedToolArgumentBytes/(perCall*len(fragment)) + 2
+	chunks := []string{`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant"}}]}`}
+	for call := 0; call < calls; call++ {
+		index := strconv.Itoa(call)
+		chunks = append(chunks, `{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":`+index+`,"id":"call_`+index+`","function":{"name":"lookup","arguments":""}}]}}]}`)
+		for written := 0; written < perCall; written++ {
+			chunks = append(chunks, `{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":`+index+`,"function":{"arguments":"`+fragment+`"}}]}}]}`)
+		}
+	}
+	ids := &countingIDs{}
+	responseID, err := ids.ResponseID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accumulator := NewAccumulator(responseID, "public/model", ids, nil)
+	for _, raw := range chunks {
+		chunk, decodeErr := DecodeChunk([]byte(raw))
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		if _, err = accumulator.Accept(chunk); err != nil {
+			break
+		}
+	}
+	if err == nil || !strings.Contains(err.Error(), "arguments_total_limit") {
+		t.Fatalf("err = %v, want arguments_total_limit protocol error", err)
+	}
+}
+
+// TestAccumulatorCountsReplayedPreNameArgumentsOnce fills the per-stream
+// bound exactly. One call's arguments arrive before its name and are replayed
+// after the item starts; counting them twice would falsely reject the stream.
+func TestAccumulatorCountsReplayedPreNameArgumentsOnce(t *testing.T) {
+	fragment := strings.Repeat("a", 512<<10)
+	calls := maxRetainedToolArgumentBytes / len(fragment)
+	chunks := []string{
+		`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","function":{"arguments":"` + fragment + `"}}]}}]}`,
+		`{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"lookup"}}]}}]}`,
+	}
+	for call := 1; call < calls; call++ {
+		index := strconv.Itoa(call)
+		chunks = append(chunks, `{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":`+index+`,"id":"call_`+index+`","function":{"name":"lookup","arguments":"`+fragment+`"}}]}}]}`)
+	}
+	ids := &countingIDs{}
+	responseID, err := ids.ResponseID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accumulator := NewAccumulator(responseID, "public/model", ids, nil)
+	for position, raw := range chunks {
+		chunk, decodeErr := DecodeChunk([]byte(raw))
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		if _, err := accumulator.Accept(chunk); err != nil {
+			t.Fatalf("chunk %d rejected at exactly the bound: %v", position, err)
+		}
 	}
 }
 

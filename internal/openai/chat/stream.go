@@ -85,6 +85,9 @@ type Accumulator struct {
 	finishReason     string
 	usage            canonical.Usage
 	orderedItemIDs   []canonical.ItemID
+	// retainedToolArgumentBytes counts argument bytes held across all tool
+	// calls; it is bounded by maxRetainedToolArgumentBytes.
+	retainedToolArgumentBytes int
 }
 
 // NewAccumulator constructs one chunk accumulator for a single stream.
@@ -396,7 +399,7 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 		// The canonical item must start with a valid tool name; fragments
 		// that arrive before any name are buffered and replayed after start.
 		if state.name == "" {
-			return bufferToolArguments(state, call.Function.Arguments)
+			return a.retainToolArguments(state, call.Function.Arguments)
 		}
 		state.tool = resolveTool(a.names, state.name)
 		if err := a.startItem(canonical.ItemStartParams{ID: state.itemID, Type: state.tool.itemType(), CallID: state.callID, Namespace: state.tool.namespace, Name: state.tool.name}); err != nil {
@@ -405,6 +408,7 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 		state.started = true
 		if !state.tool.custom() && state.args.Len() > 0 {
 			buffered := state.args.String()
+			a.retainedToolArgumentBytes -= state.args.Len()
 			state.args.Reset()
 			if buffered != "" {
 				if err := a.emitToolArguments(state, buffered); err != nil {
@@ -416,7 +420,7 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 	if state.tool.custom() {
 		// Custom input travels inside a JSON object that cannot be decoded
 		// incrementally; it is decoded once the call completes.
-		return bufferToolArguments(state, call.Function.Arguments)
+		return a.retainToolArguments(state, call.Function.Arguments)
 	}
 	if call.Function.Arguments != "" {
 		if err := a.emitToolArguments(state, call.Function.Arguments); err != nil {
@@ -426,13 +430,23 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 	return nil
 }
 
-// bufferToolArguments holds argument fragments that cannot be emitted yet.
-// Nothing reaches the streaming machine while they are buffered, so the
-// buffer is bounded here.
-func bufferToolArguments(state *toolStreamState, fragment string) error {
+// maxRetainedToolArgumentBytes bounds the tool-call arguments one stream may
+// retain across all of its calls. A response whose calls exceed it could not be
+// replayed as the next request anyway, since requests are capped at
+// canonical.MaxRequestBytes.
+const maxRetainedToolArgumentBytes = canonical.MaxRequestBytes
+
+// retainToolArguments appends one argument fragment to a call, enforcing the
+// per-call bound and the per-stream bound across every call. Buffered
+// fragments never reach the streaming machine, so the bounds live here.
+func (a *Accumulator) retainToolArguments(state *toolStreamState, fragment string) error {
 	if state.args.Len()+len(fragment) > canonical.MaxJSONBytes {
 		return protocolErr("tool.arguments_limit")
 	}
+	if a.retainedToolArgumentBytes+len(fragment) > maxRetainedToolArgumentBytes {
+		return protocolErr("tool.arguments_total_limit")
+	}
+	a.retainedToolArgumentBytes += len(fragment)
 	state.args.WriteString(fragment)
 	return nil
 }
@@ -446,8 +460,10 @@ func (a *Accumulator) emitToolArguments(state *toolStreamState, delta string) er
 	if err != nil {
 		return protocolErr("event.tool_arguments_delta")
 	}
+	if err := a.retainToolArguments(state, delta); err != nil {
+		return err
+	}
 	a.sequence++
-	state.args.WriteString(delta)
 	a.events = append(a.events, deltaEvent)
 	return nil
 }
