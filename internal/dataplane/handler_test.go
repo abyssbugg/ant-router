@@ -157,7 +157,7 @@ func TestWriteExecutionErrorClassifiesByCode(t *testing.T) {
 		errorType string
 	}{
 		{execution.CodeInvalidRequest, http.StatusBadRequest, "invalid_request_error"},
-		{execution.CodeInvalidModel, http.StatusBadRequest, "server_error"},
+		{execution.CodeInvalidModel, http.StatusBadRequest, "invalid_request_error"},
 		{execution.CodeInternal, http.StatusBadGateway, "server_error"},
 	}
 	for _, tc := range cases {

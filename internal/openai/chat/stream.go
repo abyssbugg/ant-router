@@ -456,7 +456,12 @@ func (a *Accumulator) completeTool(state *toolStreamState) error {
 			return err
 		}
 	}
-	arguments, err := canonicaljson.Parse([]byte(state.args.String()), canonicaljson.DefaultLimits())
+	// Treat empty arguments (after trimming ASCII whitespace) as empty JSON object.
+	argsStr := strings.TrimSpace(state.args.String())
+	if argsStr == "" {
+		argsStr = "{}"
+	}
+	arguments, err := canonicaljson.Parse([]byte(argsStr), canonicaljson.DefaultLimits())
 	if err != nil {
 		return protocolErr("tool.arguments")
 	}

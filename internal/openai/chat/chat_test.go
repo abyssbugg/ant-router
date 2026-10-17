@@ -487,3 +487,34 @@ func TestDecodeChunkRejectsErrorPayload(t *testing.T) {
 		t.Fatalf("error chunk = %v", err)
 	}
 }
+
+func TestBuildResponseTreatsEmptyToolArgumentsAsEmptyObject(t *testing.T) {
+	for _, arguments := range []string{``, ` `} {
+		completion, err := DecodeCompletion([]byte(`{"id":"chatcmpl-1","model":"deepseek-chat","choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_files","arguments":"` + arguments + `"}}]}}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := &countingIDs{}
+		responseID, err := ids.ResponseID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := BuildResponse(responseID, "deepseek-chat", completion, ids)
+		if err != nil {
+			t.Fatalf("BuildResponse(arguments=%q) error = %v", arguments, err)
+		}
+		call, ok := response.Items()[len(response.Items())-1].ToolCall()
+		if !ok || call.Name() != "list_files" || string(call.Arguments().Bytes()) != `{}` {
+			t.Fatalf("tool call = %#v ok=%v, want list_files with {}", call, ok)
+		}
+	}
+	completion, err := DecodeCompletion([]byte(`{"id":"chatcmpl-1","model":"deepseek-chat","choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{"}}]}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := &countingIDs{}
+	responseID, _ := ids.ResponseID()
+	if _, err := BuildResponse(responseID, "deepseek-chat", completion, ids); err == nil {
+		t.Fatal("BuildResponse accepted truncated tool arguments")
+	}
+}
