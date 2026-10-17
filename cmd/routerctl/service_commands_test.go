@@ -317,3 +317,55 @@ func TestServiceErrorsAreMappedAndRedacted(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceInstallTightensExistingLogDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	h := newServiceHarness(t)
+	options := testServiceOptions(t)
+	paths, err := resolveCLIPaths(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logDir := filepath.Join(paths.InstanceDir, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runServiceCLI(t, h, options, "install", "--routerd", h.routerd); code != ExitSuccess {
+		t.Fatalf("code = %d stderr = %q", code, stderr)
+	}
+	info, err := os.Stat(logDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("existing log dir mode = %#o, want 0700", info.Mode().Perm())
+	}
+}
+
+func TestServiceInstallRejectsSymlinkedLogDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on Windows")
+	}
+	h := newServiceHarness(t)
+	options := testServiceOptions(t)
+	paths, err := resolveCLIPaths(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(paths.InstanceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(paths.InstanceDir, "logs")); err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ := runServiceCLI(t, h, options, "install", "--routerd", h.routerd)
+	if code != ExitInternal || h.manager.installed != nil {
+		t.Fatalf("code = %d installed = %v; a symlinked log dir must be refused", code, h.manager.installed != nil)
+	}
+}

@@ -149,7 +149,7 @@ func buildDaemonSpec(paths runtimepaths.Paths, command cliCommand, deps serviceD
 		return service.Spec{}, service.ErrNotRegularFile{Path: executable}
 	}
 	logDir := filepath.Join(paths.InstanceDir, "logs")
-	if err := os.MkdirAll(logDir, 0o700); err != nil {
+	if err := ensurePrivateDir(logDir); err != nil {
 		return service.Spec{}, errors.Join(errServiceOperation, err)
 	}
 	spec, err := service.DaemonSpec(service.DaemonOptions{
@@ -171,6 +171,26 @@ func writeServiceResult(writer io.Writer, options cliOptions, result serviceResu
 	}
 	_, err := fmt.Fprintf(writer, "service %s: %s %s\n", result.Action, result.Label, result.State)
 	return err
+}
+
+// ensurePrivateDir creates dir with mode 0700, or tightens an existing real
+// directory to 0700. A symlink or non-directory at dir is refused so service
+// logs are never redirected outside the instance state directory.
+func ensurePrivateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	if runtime.GOOS == "windows" || info.Mode().Perm() == 0o700 {
+		return nil
+	}
+	return os.Chmod(dir, 0o700)
 }
 
 // siblingRouterd finds routerd next to the running routerctl executable.
