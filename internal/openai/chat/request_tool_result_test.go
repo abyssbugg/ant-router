@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
@@ -42,13 +43,10 @@ func TestToolResultIsErrorRejected(t *testing.T) {
 		t.Errorf("encodeMessages with error result should fail, got %v", messages)
 	}
 
-	// Verify the error mentions is_error
-	if err != nil && err.Error() != "unsupported at request.input[0].is_error: input is unavailable on the chat wire" {
-		t.Logf("encodeMessages error: %v", err)
-		// Just verify it's an error and check if unsupported is in it
-		if err.Error() != "unsupported at request.input[0].is_error: input is unavailable on the chat wire" {
-			t.Logf("error message different but acceptable: %v", err)
-		}
+	// Verify the error has correct type, code, and path
+	var target *Error
+	if !errors.As(err, &target) || target.Code != "unsupported" || target.Path != "request.input[0].is_error" {
+		t.Fatalf("expected unsupported error at request.input[0].is_error, got: %v (type: %T, code: %v, path: %v)", err, target, target.Code, target.Path)
 	}
 }
 

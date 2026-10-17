@@ -103,11 +103,21 @@ func TestAccumulatorStartsNameOnlyToolAtCompletion(t *testing.T) {
 		toolChunk(`"function":{"name":"","arguments":""}`),
 		toolChunkFinish,
 	})
-	// With no argument fragments the item starts only at completion; the empty
-	// argument string then fails JSON decoding rather than reporting a missing
-	// name, which proves the joined name reached completeTool.
-	if got := protocolPath(err); got != "tool.arguments" {
-		t.Fatalf("items=%d error=%v (path %q), want tool.arguments", len(items), err, got)
+	if err != nil {
+		t.Fatalf("runToolStream failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	call, ok := items[0].ToolCall()
+	if !ok {
+		t.Fatalf("item is not a tool call")
+	}
+	if call.Name() != "list_files" {
+		t.Fatalf("tool call name = %q, want list_files", call.Name())
+	}
+	if got := string(call.Arguments().Bytes()); got != "{}" {
+		t.Fatalf("arguments = %q, want {}", got)
 	}
 }
 
