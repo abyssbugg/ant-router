@@ -98,15 +98,19 @@ func (e *toolEncoder) add(path string, tool canonical.ToolDefinition, namespace,
 	function := map[string]any{"name": name, "description": description}
 	switch tool.Kind() {
 	case canonical.ToolDefinitionKindFunction:
-		function["parameters"] = json.RawMessage(tool.InputSchema().Bytes())
+		schema := tool.InputSchema().Bytes()
 		if tool.Enforcement() == canonical.SchemaEnforcementStrict {
+			if err := validateStrictSchema(path+".parameters", schema); err != nil {
+				return err
+			}
 			function["strict"] = true
 		}
+		function["parameters"] = json.RawMessage(schema)
 	case canonical.ToolDefinitionKindCustom:
 		function["parameters"] = customToolParameters
 		if format := tool.CustomFormat(); format.Kind() == canonical.CustomToolFormatKindGrammar {
 			function["description"] = fmt.Sprintf("%s\n\nThe input field must follow this %s grammar:\n%s",
-				tool.Description(), format.Syntax(), format.Definition())
+				description, format.Syntax(), format.Definition())
 		}
 	default:
 		return unsupported(path)

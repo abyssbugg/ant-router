@@ -7,7 +7,6 @@ package chat
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // Error is a stable, redacted translation failure. It never carries wire
@@ -46,14 +45,13 @@ func IsUnsupported(err error) bool {
 	return false
 }
 
-// IsInvalidRequestInput reports whether err is a client-caused invalid request error
-// (e.g., tool name too long, collision, or unknown tool_choice).
-func IsInvalidRequestInput(err error) bool {
+// IsInvalid reports whether err is a client-caused invalid input error.
+// Every invalid(...) error produced by request encoding is client-caused and
+// should map to CodeInvalidRequest at the provider layer.
+func IsInvalid(err error) bool {
 	var target *Error
-	if errors.As(err, &target) && target.Code == "invalid" {
-		// Map invalid errors in request.tools or request.tool_choice paths to CodeInvalidRequest
-		return target.Path == "request.tool_choice" || target.Path == "request.upstream_model" ||
-			strings.HasPrefix(target.Path, "request.tools")
+	if errors.As(err, &target) {
+		return target.Code == "invalid"
 	}
 	return false
 }

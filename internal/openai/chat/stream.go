@@ -88,13 +88,15 @@ type Accumulator struct {
 	// retainedToolArgumentBytes counts argument bytes held across all tool
 	// calls; it is bounded by maxRetainedToolArgumentBytes.
 	retainedToolArgumentBytes int
+	// customToolsDeclared caches names.declaresCustomTool().
+	customToolsDeclared bool
 }
 
 // NewAccumulator constructs one chunk accumulator for a single stream.
 // names maps upstream function names back to the canonical tools they were
 // encoded from; nil means every call is a plain function tool call.
 func NewAccumulator(responseID canonical.ResponseID, publicModel string, ids IDGenerator, names ToolNameMap) *Accumulator {
-	return &Accumulator{responseID: responseID, publicModel: publicModel, ids: ids, names: names, tools: make(map[int]*toolStreamState)}
+	return &Accumulator{responseID: responseID, publicModel: publicModel, ids: ids, names: names, customToolsDeclared: names.declaresCustomTool(), tools: make(map[int]*toolStreamState)}
 }
 
 // Accept consumes one chunk and returns the canonical events it produced.
@@ -433,15 +435,11 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 const maxRetainedToolArgumentBytes = canonical.MaxRequestBytes
 
 // retainToolArguments appends one argument fragment to a call, enforcing the
-// custom-input size limit (2 MiB per call, not the 1 MiB JSON parsing limit).
-// The per-stream bound across every call also applies. Buffered fragments
-// never reach the streaming machine, so the bounds live here.
+// per-call bound for the call's tool kind and the per-stream bound across all
+// calls. Buffered fragments never reach the streaming machine, so the bounds
+// live here.
 func (a *Accumulator) retainToolArguments(state *toolStreamState, fragment string) error {
-	// Use the custom-input size limit, which is the same as MaxRequestBytes (2 MiB)
-	// This allows custom inputs up to the documented limit even if their
-	// JSON encoding exceeds the DefaultLimits parsing threshold
-	const maxCustomInputBytes = canonical.MaxRequestBytes
-	if state.args.Len()+len(fragment) > maxCustomInputBytes {
+	if state.args.Len()+len(fragment) > a.maxRetainedCallArguments(state) {
 		return protocolErr("tool.arguments_limit")
 	}
 	if a.retainedToolArgumentBytes+len(fragment) > maxRetainedToolArgumentBytes {
@@ -450,6 +448,23 @@ func (a *Accumulator) retainToolArguments(state *toolStreamState, fragment strin
 	a.retainedToolArgumentBytes += len(fragment)
 	state.args.WriteString(fragment)
 	return nil
+}
+
+// maxRetainedCallArguments is the argument bound for one call. A resolved
+// custom call may carry a maximal escaped custom input; a resolved function
+// call is JSON bounded by canonical.MaxJSONBytes. Before the name is known the
+// larger custom bound applies only when the request declared a custom tool.
+func (a *Accumulator) maxRetainedCallArguments(state *toolStreamState) int {
+	if state.started {
+		if state.tool.custom() {
+			return MaxCustomArgumentBytes
+		}
+		return canonical.MaxJSONBytes
+	}
+	if a.customToolsDeclared {
+		return MaxCustomArgumentBytes
+	}
+	return canonical.MaxJSONBytes
 }
 
 func (a *Accumulator) emitToolArguments(state *toolStreamState, delta string) error {

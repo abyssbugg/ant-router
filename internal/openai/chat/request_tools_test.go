@@ -34,7 +34,7 @@ func mustCustomGrammarTool(t *testing.T, name, description string, syntax canoni
 
 func mustJSONSchema(t *testing.T) canonicaljson.Value {
 	t.Helper()
-	schema := `{"type":"object","properties":{"arg":{"type":"string"}},"required":["arg"]}`
+	schema := `{"type":"object","properties":{"arg":{"type":"string"}},"required":["arg"],"additionalProperties":false}`
 	val, err := canonicaljson.Parse([]byte(schema), canonicaljson.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)

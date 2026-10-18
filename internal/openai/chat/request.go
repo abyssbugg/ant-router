@@ -74,7 +74,14 @@ func encodeRequestInternal(request canonical.Request, upstreamModel string, stre
 		body["max_tokens"] = maxTokens
 	}
 	encoded, err := json.Marshal(body)
-	return encoded, nameMap, err
+	if err != nil {
+		return nil, nil, protocolErr("request")
+	}
+	// Bound the fully encoded Chat Completions body before sending it
+	if len(encoded) > canonical.MaxRequestBytes {
+		return nil, nil, invalid("request", "encoded chat request exceeds limit")
+	}
+	return encoded, nameMap, nil
 }
 
 func encodeMessages(items []canonical.Item) ([]map[string]any, error) {
