@@ -659,6 +659,9 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) (stdo
 		if out, ok := f.stdoutMap[key]; ok {
 			return out, nil, nil
 		}
+		if key == "--version" {
+			return []byte("systemd 252 (252.22-1)\n+PAM +AUDIT\n"), nil, nil
+		}
 	}
 
 	return nil, nil, nil

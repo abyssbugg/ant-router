@@ -143,6 +143,19 @@ func isLaunchdNotLoaded(stderr []byte) bool {
 	return strings.Contains(stderrStr, "Could not find service") || strings.Contains(stderrStr, "No such process")
 }
 
+func (b *LaunchdBackend) target(label string) string {
+	return "gui/" + strconv.Itoa(b.uid) + "/" + label
+}
+
+// bootout unloads target, treating an already-unloaded job as success.
+func (b *LaunchdBackend) bootout(ctx context.Context, target string) error {
+	_, stderr, err := b.runner.Run(ctx, "launchctl", "bootout", target)
+	if err != nil && !isLaunchdNotLoaded(stderr) {
+		return commandError("bootout service", err, stderr)
+	}
+	return nil
+}
+
 // LaunchdBackend manages service lifecycle via launchctl.
 type LaunchdBackend struct {
 	home   string
@@ -176,6 +189,11 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 	agentsDir := filepath.Join(b.home, "Library", "LaunchAgents")
 	plistPath := filepath.Join(agentsDir, spec.Label+".plist")
 
+	// Refuse to replace a definition we do not own before any side effect.
+	if err := requireReplaceable(plistPath); err != nil {
+		return err
+	}
+
 	// Create directory
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
 		return fmt.Errorf("create LaunchAgents dir: %w", err)
@@ -187,15 +205,6 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("create log directory: %w", err)
 	}
 
-	// Check if file exists and is owned
-	if existing, err := os.ReadFile(plistPath); err == nil {
-		if !bytes.Contains(existing, []byte(OwnershipMarker)) {
-			return ErrNotOwned{Path: plistPath}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read plist: %w", err)
-	}
-
 	// Atomic write
 	_, err = atomicfile.Write(ctx, plistPath, plist, 0o644)
 	if err != nil {
@@ -203,20 +212,12 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 	}
 
 	// Bootout (ignore not-loaded error only)
-	guid := "gui/" + strconv.Itoa(b.uid)
-	label := guid + "/" + spec.Label
-	bootoutStdout, bootoutStderr, bootoutErr := b.runner.Run(ctx, "launchctl", "bootout", label)
-	_ = bootoutStdout
-	if bootoutErr != nil {
-		stderrStr := string(bootoutStderr)
-		// Only ignore "not loaded" errors; other errors indicate a real problem
-		if !strings.Contains(stderrStr, "Could not find service") && !strings.Contains(stderrStr, "No such process") {
-			return commandError("bootout service", bootoutErr, bootoutStderr)
-		}
+	if err := b.bootout(ctx, b.target(spec.Label)); err != nil {
+		return err
 	}
 
 	// Bootstrap
-	_, bootstrapStderr, err := b.runner.Run(ctx, "launchctl", "bootstrap", guid, plistPath)
+	_, bootstrapStderr, err := b.runner.Run(ctx, "launchctl", "bootstrap", "gui/"+strconv.Itoa(b.uid), plistPath)
 	if err != nil {
 		return commandError("bootstrap service", err, bootstrapStderr)
 	}
@@ -232,26 +233,14 @@ func (b *LaunchdBackend) Uninstall(ctx context.Context, label string) error {
 	agentsDir := filepath.Join(b.home, "Library", "LaunchAgents")
 	plistPath := filepath.Join(agentsDir, label+".plist")
 
-	// Check if file exists and is owned
-	data, err := os.ReadFile(plistPath)
-	if err == nil {
-		if !bytes.Contains(data, []byte(OwnershipMarker)) {
-			return ErrNotOwned{Path: plistPath}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read plist: %w", err)
+	// Uninstall is idempotent for a missing definition but never touches a
+	// definition we do not own.
+	if err := requireReplaceable(plistPath); err != nil {
+		return err
 	}
 
-	// Bootout (ignore "not loaded" error only)
-	guid := "gui/" + strconv.Itoa(b.uid)
-	bootoutLabel := guid + "/" + label
-	_, bootoutStderr, bootoutErr := b.runner.Run(ctx, "launchctl", "bootout", bootoutLabel)
-
-	if bootoutErr != nil {
-		stderrStr := string(bootoutStderr)
-		if !strings.Contains(stderrStr, "Could not find service") && !strings.Contains(stderrStr, "No such process") {
-			return commandError("bootout service", bootoutErr, bootoutStderr)
-		}
+	if err := b.bootout(ctx, b.target(label)); err != nil {
+		return err
 	}
 
 	// Remove file
@@ -275,9 +264,23 @@ func (b *LaunchdBackend) Start(ctx context.Context, label string) error {
 		return err
 	}
 
-	guid := "gui/" + strconv.Itoa(b.uid)
-	kickstartLabel := guid + "/" + label
-	_, stderr, err := b.runner.Run(ctx, "launchctl", "kickstart", "-k", kickstartLabel)
+	target := b.target(label)
+	_, stderr, err := b.runner.Run(ctx, "launchctl", "print", target)
+	if err != nil {
+		if !isLaunchdNotLoaded(stderr) {
+			return commandError("query service", err, stderr)
+		}
+		// Stop unloads the job; bootstrapping reloads it and RunAtLoad
+		// starts it.
+		_, stderr, err = b.runner.Run(ctx, "launchctl", "bootstrap", "gui/"+strconv.Itoa(b.uid), plistPath)
+		if err != nil {
+			return commandError("start service", err, stderr)
+		}
+		return nil
+	}
+	// Loaded: kickstart without -k starts the job if needed and leaves a
+	// running job undisturbed.
+	_, stderr, err = b.runner.Run(ctx, "launchctl", "kickstart", target)
 	if err != nil {
 		return commandError("start service", err, stderr)
 	}
@@ -297,13 +300,9 @@ func (b *LaunchdBackend) Stop(ctx context.Context, label string) error {
 		return err
 	}
 
-	guid := "gui/" + strconv.Itoa(b.uid)
-	killLabel := guid + "/" + label
-	_, stderr, err := b.runner.Run(ctx, "launchctl", "kill", "SIGTERM", killLabel)
-	if err != nil {
-		return commandError("stop service", err, stderr)
-	}
-	return nil
+	// KeepAlive{SuccessfulExit=false} restarts a signalled job, so stopping
+	// means unloading it. An already-unloaded job is already stopped.
+	return b.bootout(ctx, b.target(label))
 }
 
 // Status returns the status of a service.
@@ -311,16 +310,17 @@ func (b *LaunchdBackend) Status(ctx context.Context, label string) (Status, erro
 	if err := ValidateLabel(label); err != nil {
 		return Status{}, err
 	}
-	guid := "gui/" + strconv.Itoa(b.uid)
-	printLabel := guid + "/" + label
-	stdout, stderr, err := b.runner.Run(ctx, "launchctl", "print", printLabel)
+	stdout, stderr, err := b.runner.Run(ctx, "launchctl", "print", b.target(label))
 
 	if err != nil {
-		stderrStr := string(stderr)
-		if strings.Contains(stderrStr, "Could not find service") {
-			return Status{State: StateNotInstalled}, nil
+		if !isLaunchdNotLoaded(stderr) {
+			return Status{}, commandError("query service", err, stderr)
 		}
-		return Status{}, commandError("query service", err, stderr)
+		plistPath := filepath.Join(b.home, "Library", "LaunchAgents", label+".plist")
+		if _, statErr := os.Stat(plistPath); statErr == nil {
+			return Status{State: StateStopped}, nil
+		}
+		return Status{State: StateNotInstalled}, nil
 	}
 
 	outputStr := string(stdout)

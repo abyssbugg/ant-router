@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -157,6 +158,27 @@ func readOwnedDefinition(path string) error {
 		return ErrNotOwned{Path: path}
 	}
 	return nil
+}
+
+// ErrUnsupportedSystemd reports a systemd too old for the append: output
+// directives the rendered unit relies on.
+type ErrUnsupportedSystemd struct {
+	Version int
+}
+
+func (e ErrUnsupportedSystemd) Error() string {
+	return fmt.Sprintf("systemd %d is not supported: StandardOutput=append: requires systemd 240 or newer", e.Version)
+}
+
+// requireReplaceable permits a missing definition and refuses one that
+// exists without the ownership marker.
+func requireReplaceable(path string) error {
+	err := readOwnedDefinition(path)
+	var missing ErrNotInstalled
+	if errors.As(err, &missing) {
+		return nil
+	}
+	return err
 }
 
 // Spec defines a service specification.

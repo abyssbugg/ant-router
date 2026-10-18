@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/atomicfile"
@@ -30,6 +31,11 @@ func renderSystemdUnit(spec Spec) ([]byte, error) {
 	}
 	if strings.ContainsAny(spec.LogPath, "$") {
 		return nil, ErrUnsupportedLogPath{Path: spec.LogPath, Reason: "contains dollar, which systemd cannot express in StandardOutput/StandardError"}
+	}
+	// The path is unquoted: systemd reads backslash as an escape and a
+	// trailing backslash as a line continuation.
+	if strings.Contains(spec.LogPath, `\`) {
+		return nil, ErrUnsupportedLogPath{Path: spec.LogPath, Reason: "contains backslash, which systemd cannot express in StandardOutput/StandardError"}
 	}
 
 	var buf bytes.Buffer
@@ -125,6 +131,28 @@ func NewSystemdBackend(configDir string, runner Runner) *SystemdBackend {
 }
 
 // Install installs a service.
+// requireAppendSupport probes the systemd version and rejects versions that
+// predate StandardOutput=append: (systemd 240).
+func (b *SystemdBackend) requireAppendSupport(ctx context.Context) error {
+	stdout, stderr, err := b.runner.Run(ctx, "systemctl", "--version")
+	if err != nil {
+		return commandError("query systemd version", err, stderr)
+	}
+	line, _, _ := strings.Cut(string(stdout), "\n")
+	fields := strings.Fields(line)
+	if len(fields) < 2 || fields[0] != "systemd" {
+		return fmt.Errorf("query systemd version: unrecognised output %q", line)
+	}
+	version, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return fmt.Errorf("query systemd version: unrecognised version %q", fields[1])
+	}
+	if version < 240 {
+		return ErrUnsupportedSystemd{Version: version}
+	}
+	return nil
+}
+
 func (b *SystemdBackend) Install(ctx context.Context, spec Spec) error {
 	if err := ValidateLabel(spec.Label); err != nil {
 		return err
@@ -143,6 +171,16 @@ func (b *SystemdBackend) Install(ctx context.Context, spec Spec) error {
 		return err
 	}
 
+	// Refuse to replace a unit we do not own before any side effect.
+	if err := requireReplaceable(unitPath); err != nil {
+		return err
+	}
+
+	// The unit's append: output directives need systemd 240+.
+	if err := b.requireAppendSupport(ctx); err != nil {
+		return err
+	}
+
 	// Create parent directory
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
@@ -152,15 +190,6 @@ func (b *SystemdBackend) Install(ctx context.Context, spec Spec) error {
 	logDir := filepath.Dir(spec.LogPath)
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return fmt.Errorf("create log directory: %w", err)
-	}
-
-	// Check if file exists and is owned
-	if existing, err := os.ReadFile(unitPath); err == nil {
-		if !bytes.Contains(existing, []byte(OwnershipMarker)) {
-			return ErrNotOwned{Path: unitPath}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read unit: %w", err)
 	}
 
 	// Write unit atomically
@@ -193,15 +222,10 @@ func (b *SystemdBackend) Uninstall(ctx context.Context, label string) error {
 	unitName := label + ".service"
 	unitPath := filepath.Join(b.configDir, "systemd", "user", unitName)
 
-	// Check if file exists and is owned
-	data, err := os.ReadFile(unitPath)
-	switch {
-	case err == nil:
-		if !bytes.Contains(data, []byte(OwnershipMarker)) {
-			return ErrNotOwned{Path: unitPath}
-		}
-	case !errors.Is(err, fs.ErrNotExist):
-		return fmt.Errorf("read unit: %w", err)
+	// Uninstall is idempotent for a missing unit but never touches a unit we
+	// do not own.
+	if err := requireReplaceable(unitPath); err != nil {
+		return err
 	}
 
 	// Disable and stop (ignore "not loaded" / "does not exist" errors)

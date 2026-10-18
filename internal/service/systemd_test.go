@@ -356,6 +356,7 @@ func TestSystemdBackendInstall(t *testing.T) {
 
 	// Verify runner was called with daemon-reload, enable --now
 	expectedCalls := [][]string{
+		{"systemctl", "--version"},
 		{"systemctl", "--user", "daemon-reload"},
 		{"systemctl", "--user", "enable", "--now", "test-service.service"},
 	}
@@ -633,6 +634,9 @@ func (m *mockRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	}
 	call := append([]string{name}, args...)
 	m.calls = append(m.calls, call)
+	if len(args) == 1 && args[0] == "--version" {
+		return []byte("systemd 252 (252.22-1)\n"), nil, nil
+	}
 	return m.resp, nil, m.err
 }
 
