@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"reflect"
+	"sync/atomic"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/config"
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/credential"
 	"github.com/abyssbugg/ant-router/internal/execution"
+	"github.com/abyssbugg/ant-router/internal/openai/responses"
 	anthropicprovider "github.com/abyssbugg/ant-router/internal/provider/anthropic"
 	mockprovider "github.com/abyssbugg/ant-router/internal/provider/mock"
 	openaiprovider "github.com/abyssbugg/ant-router/internal/provider/openai"
@@ -20,6 +22,48 @@ type providerRuntime struct {
 	kinds            map[string]config.ProviderKind
 	codexMetadata    map[string]config.CodexModelConfig
 	configGeneration uint64
+}
+
+// reloadableProviders serves the active provider runtime and swaps it
+// atomically when a configuration activation rebuilds it. In-flight requests
+// keep the runtime they started with.
+type reloadableProviders struct {
+	current atomic.Pointer[providerRuntime]
+}
+
+func newReloadableProviders(initial *providerRuntime) *reloadableProviders {
+	reloadable := &reloadableProviders{}
+	reloadable.current.Store(initial)
+	return reloadable
+}
+
+func (r *reloadableProviders) load() *providerRuntime { return r.current.Load() }
+
+// swap installs runtime unless a newer configuration generation is already
+// active. Activation callbacks run after the config service releases its
+// lock, so an older activation can be delivered after a newer one.
+func (r *reloadableProviders) swap(runtime *providerRuntime) {
+	for {
+		current := r.current.Load()
+		if current != nil && current.configGeneration > runtime.configGeneration {
+			return
+		}
+		if r.current.CompareAndSwap(current, runtime) {
+			return
+		}
+	}
+}
+
+func (r *reloadableProviders) Execute(ctx context.Context, request canonical.Request) (streaming.EventSource, error) {
+	return r.load().registry.Execute(ctx, request)
+}
+
+func (r *reloadableProviders) Models(ctx context.Context) ([]execution.Model, error) {
+	return r.load().registry.Models(ctx)
+}
+
+func (r *reloadableProviders) ResolveModel(alias string) (string, string, error) {
+	return r.load().registry.ResolveModel(alias)
 }
 
 func buildProviderRuntime(configuration config.Config, source credential.Source) (*providerRuntime, error) {
@@ -76,7 +120,7 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 		if err != nil {
 			return execution.Registration{}, err
 		}
-		provider, err := openaiprovider.NewProviderForID(providerConfig.ID, source, ref)
+		provider, err := openaiprovider.NewProviderForIDWithEndpoint(providerConfig.ID, source, ref, openaiprovider.Endpoint{BaseURL: providerConfig.BaseURL, Chat: providerConfig.Wire == config.ProviderWireChat})
 		if err != nil {
 			return execution.Registration{}, err
 		}
@@ -182,3 +226,6 @@ func nilInterface(value any) bool {
 }
 
 var _ execution.ProviderAdapter = mockAdapter{}
+var _ execution.Executor = (*reloadableProviders)(nil)
+var _ execution.ModelCatalog = (*reloadableProviders)(nil)
+var _ responses.AffinityResolver = (*reloadableProviders)(nil)

@@ -14,8 +14,11 @@ import (
 // RepairRevision atomically replaces an existing corrupt revision with bytes
 // that hash to the same revision ID.
 func (fs *FileStore) RepairRevision(ctx context.Context, id revision.ID, data []byte) error {
-	fs.mutationMu.Lock()
-	defer fs.mutationMu.Unlock()
+	unlock, err := fs.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	if err := contextError(ctx); err != nil {
 		return err

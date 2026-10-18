@@ -32,4 +32,5 @@ type CurrentResult struct {
 	Generation  uint64
 	Status      config.SnapshotStatus
 	ActivatedAt time.Time
+	Diagnostic  string
 }

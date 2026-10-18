@@ -75,7 +75,7 @@ func (r *Router) configRollback(writer http.ResponseWriter, request *http.Reques
 }
 
 func currentResponse(result configservice.CurrentResult) ConfigCurrentResponse {
-	response := ConfigCurrentResponse{State: string(result.State), Revision: result.Revision.String(), Generation: result.Generation, Status: string(result.Status)}
+	response := ConfigCurrentResponse{State: string(result.State), Revision: result.Revision.String(), Generation: result.Generation, Status: string(result.Status), Diagnostic: result.Diagnostic}
 	if !result.ActivatedAt.IsZero() {
 		activatedAt := result.ActivatedAt
 		response.ActivatedAt = &activatedAt

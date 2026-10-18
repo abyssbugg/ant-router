@@ -28,7 +28,7 @@ func providerRegistryConfig() config.Config {
 			Enabled: false,
 			Credential: &config.CredentialRef{
 				Source: config.CredentialSourceEnv,
-				Name:   "DISABLED_KEY",
+				Name:   "OPENAI_DISABLED_KEY",
 			},
 			Models: []config.ProviderModelConfig{{Alias: "openai/disabled", Upstream: "disabled", Capabilities: []string{"text"}}},
 		},

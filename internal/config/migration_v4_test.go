@@ -7,8 +7,8 @@ import (
 )
 
 func TestDefaultUsesSchemaV6FromV4Migration(t *testing.T) {
-	if got := Default().SchemaVersion; got != 6 {
-		t.Fatalf("schema version = %d, want 6", got)
+	if got := Default().SchemaVersion; got != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", got, SchemaVersion)
 	}
 }
 
@@ -29,8 +29,8 @@ capabilities = ["text"]
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if cfg.SchemaVersion != 6 {
-		t.Fatalf("schema version = %d, want 6", cfg.SchemaVersion)
+	if cfg.SchemaVersion != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", cfg.SchemaVersion, SchemaVersion)
 	}
 	model := cfg.Providers[0].Models[0]
 	if model.DefaultMaxOutputTokens != 0 || model.MaxOutputTokens != 0 {
@@ -79,7 +79,7 @@ func TestSchemaV6CanonicalRoundTripAnthropic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(encoded), "schema_version = 6") || !strings.Contains(string(encoded), "kind = 'anthropic'") {
+	if !strings.Contains(string(encoded), "schema_version = 7") || !strings.Contains(string(encoded), "kind = 'anthropic'") {
 		t.Fatalf("canonical config = %s", encoded)
 	}
 	decoded, err := Decode(strings.NewReader(string(encoded)))

@@ -57,19 +57,24 @@ func (k TerminalKind) Valid() bool {
 	return k == TerminalNone || k == TerminalCompleted || k == TerminalFailed || k == TerminalCancelled
 }
 
+// DefaultMaxTrackedEvents bounds the duplicate-event-ID index so an
+// adversarial stream of tiny deltas cannot grow machine memory without limit.
+const DefaultMaxTrackedEvents = 1 << 18
+
 // MachineOptions bounds deterministic stream reconstruction state.
 type MachineOptions struct {
 	MaxResponseBytes      int
 	MaxActiveItems        int
 	MaxOpenContentPerItem int
+	MaxTrackedEvents      int
 }
 
 // DefaultMachineOptions returns limits derived from the canonical protocol.
 func DefaultMachineOptions() MachineOptions {
-	return MachineOptions{MaxResponseBytes: canonical.MaxRequestBytes, MaxActiveItems: canonical.MaxResponseItems, MaxOpenContentPerItem: canonical.MaxContentBlocks}
+	return MachineOptions{MaxResponseBytes: canonical.MaxRequestBytes, MaxActiveItems: canonical.MaxResponseItems, MaxOpenContentPerItem: canonical.MaxContentBlocks, MaxTrackedEvents: DefaultMaxTrackedEvents}
 }
 
 // Valid reports whether every machine limit is positive.
 func (o MachineOptions) Valid() bool {
-	return o.MaxResponseBytes > 0 && o.MaxActiveItems > 0 && o.MaxOpenContentPerItem > 0
+	return o.MaxResponseBytes > 0 && o.MaxActiveItems > 0 && o.MaxOpenContentPerItem > 0 && o.MaxTrackedEvents > 0
 }

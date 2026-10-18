@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -31,6 +32,26 @@ type CredentialSourceKind string
 
 const CredentialSourceEnv CredentialSourceKind = "env"
 
+// ProviderWire identifies the upstream protocol an OpenAI-kind provider speaks.
+type ProviderWire string
+
+const (
+	// ProviderWireResponses is the OpenAI Responses API (the official wire).
+	ProviderWireResponses ProviderWire = "responses"
+	// ProviderWireChat is the OpenAI Chat Completions protocol spoken by
+	// compatible endpoints such as DeepSeek, Kimi, GLM, Grok, Qwen,
+	// OpenRouter, MiniMax, Venice, Nous, Ollama, and LM Studio.
+	ProviderWireChat ProviderWire = "chat"
+)
+
+// Valid reports whether the wire protocol is supported.
+func (w ProviderWire) Valid() bool {
+	return w == ProviderWireResponses || w == ProviderWireChat
+}
+
+// MaxBaseURLBytes bounds a configured provider endpoint URL.
+const MaxBaseURLBytes = 512
+
 // CredentialRef names a credential without storing its secret value.
 type CredentialRef struct {
 	Source CredentialSourceKind `toml:"source"`
@@ -53,7 +74,48 @@ type ProviderConfig struct {
 	Kind       ProviderKind          `toml:"kind"`
 	Enabled    bool                  `toml:"enabled"`
 	Credential *CredentialRef        `toml:"credential,omitempty"`
+	BaseURL    string                `toml:"base_url,omitempty"`
+	Wire       ProviderWire          `toml:"wire,omitempty"`
 	Models     []ProviderModelConfig `toml:"models,omitempty"`
+}
+
+// validateProviderEndpoint checks the optional base_url and wire fields.
+// Only the OpenAI kind supports custom endpoints; base_url defaults to the
+// official API and wire defaults to the Responses protocol. Loopback http is
+// allowed so tests can run against local endpoint doubles.
+func validateProviderEndpoint(provider ProviderConfig, prefix string) error {
+	if provider.Kind != ProviderKindOpenAI {
+		if provider.Wire != "" {
+			return providerValidationError(prefix+".wire", "wire is only available for the OpenAI provider kind")
+		}
+		if provider.BaseURL != "" {
+			return providerValidationError(prefix+".base_url", "base_url is only available for the OpenAI provider kind")
+		}
+		return nil
+	}
+	switch provider.Wire {
+	case "", ProviderWireResponses, ProviderWireChat:
+	default:
+		return providerValidationError(prefix+".wire", "unknown wire protocol")
+	}
+	if provider.BaseURL == "" {
+		return nil
+	}
+	if len(provider.BaseURL) > MaxBaseURLBytes {
+		return providerValidationError(prefix+".base_url", "base_url is too long")
+	}
+	parsed, err := url.Parse(provider.BaseURL)
+	if err != nil || parsed.Host == "" {
+		return providerValidationError(prefix+".base_url", "invalid base_url")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery || strings.ContainsRune(provider.BaseURL, '#') {
+		return providerValidationError(prefix+".base_url", "base_url must not contain credentials, a query, or a fragment")
+	}
+	loopback := parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1" || parsed.Hostname() == "localhost"
+	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && loopback) {
+		return providerValidationError(prefix+".base_url", "base_url must use https (or http on loopback)")
+	}
+	return nil
 }
 
 var (
@@ -272,6 +334,9 @@ func validateProviders(c Config) error {
 			return providerValidationError(prefix+".id", "duplicate provider identifier")
 		}
 		providerIDs[provider.ID] = struct{}{}
+		if err := validateProviderEndpoint(provider, prefix); err != nil {
+			return err
+		}
 		switch provider.Kind {
 		case ProviderKindMock:
 			if mockSeen || provider.ID != "mock" {
@@ -293,6 +358,23 @@ func validateProviders(c Config) error {
 			}
 			if len(provider.Credential.Name) == 0 || len(provider.Credential.Name) > MaxCredentialName || !envNamePattern.MatchString(provider.Credential.Name) {
 				return providerValidationError(prefix+".credential.name", "invalid environment variable name")
+			}
+			// When using a custom endpoint (non-empty BaseURL), credentials
+			// reach only that endpoint, so a mis-scoped name would silently
+			// ship another secret's value there; require the kind-scoped prefix.
+			// For official endpoints, any valid env var name is accepted for
+			// backwards compatibility with pre-v7 configurations.
+			if provider.BaseURL != "" {
+				switch provider.Kind {
+				case ProviderKindOpenAI:
+					if !strings.HasPrefix(provider.Credential.Name, "OPENAI_") {
+						return providerValidationError(prefix+".credential.name", "openai credential must use an OPENAI_ prefixed environment variable")
+					}
+				case ProviderKindAnthropic:
+					if !strings.HasPrefix(provider.Credential.Name, "ANTHROPIC_") {
+						return providerValidationError(prefix+".credential.name", "anthropic credential must use an ANTHROPIC_ prefixed environment variable")
+					}
+				}
 			}
 			if len(provider.Models) == 0 || len(provider.Models) > MaxModelsPerProvider {
 				return providerValidationError(prefix+".models", "invalid model count")
@@ -359,6 +441,19 @@ func validateProviders(c Config) error {
 				if parallelIndex >= 0 && !hasTools {
 					path := fmt.Sprintf("%s.capabilities[%d]", modelPrefix, parallelIndex)
 					return providerValidationError(path, "parallel tools requires tools capability")
+				}
+				if provider.Kind == ProviderKindOpenAI && provider.Wire == ProviderWireChat {
+					if customIndex >= 0 || namespaceIndex >= 0 || hostedSearchIndex >= 0 {
+						return providerValidationError(modelPrefix+".capabilities", "capability is unavailable on the chat wire")
+					}
+					for _, capability := range model.Capabilities {
+						if capability == "continuation" || capability == "image_input" {
+							return providerValidationError(modelPrefix+".capabilities", "capability is deferred for the chat wire")
+						}
+					}
+				}
+				if provider.Kind == ProviderKindOpenAI && provider.Wire == ProviderWireChat && model.Codex != nil && model.Codex.Enabled {
+					return providerValidationError(modelPrefix+".codex", "Codex integration requires the Responses wire")
 				}
 				if err := validateCodexModel(model.Codex, modelPrefix+".codex"); err != nil {
 					return err

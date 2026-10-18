@@ -57,6 +57,7 @@ func FuzzCredentialEnvironmentName(f *testing.F) {
 		cfg := Default()
 		cfg.Providers = []ProviderConfig{provider}
 		err := cfg.Validate()
+		// For official endpoints (no BaseURL), any valid env var name is accepted.
 		valid := len(value) > 0 && len(value) <= MaxCredentialName && envNamePattern.MatchString(value)
 		if valid && err != nil {
 			t.Fatalf("valid environment name %q failed validation: %v", value, err)

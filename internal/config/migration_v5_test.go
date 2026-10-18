@@ -9,8 +9,8 @@ import (
 )
 
 func TestDefaultUsesSchemaV6FromV5Migration(t *testing.T) {
-	if got := Default().SchemaVersion; got != 6 {
-		t.Fatalf("schema version = %d, want 6", got)
+	if got := Default().SchemaVersion; got != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", got, SchemaVersion)
 	}
 }
 
@@ -31,8 +31,8 @@ capabilities = ["text"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 6 {
-		t.Fatalf("schema version = %d, want 6", cfg.SchemaVersion)
+	if cfg.SchemaVersion != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", cfg.SchemaVersion, SchemaVersion)
 	}
 	if cfg.Providers[0].Models[0].Codex != nil {
 		t.Fatal("migration guessed Codex metadata")
@@ -144,7 +144,7 @@ func TestSchemaV5CodexPayloadMigratesToV6Baseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if cfg.SchemaVersion != 6 || cfg.Providers[0].Models[0].Codex == nil {
+	if cfg.SchemaVersion != SchemaVersion || cfg.Providers[0].Models[0].Codex == nil {
 		t.Fatalf("migrated config = %#v", cfg)
 	}
 	want := []string{"custom_tools", "hosted_web_search", "namespace_tools", "parallel_tools", "text", "tools"}
@@ -291,7 +291,7 @@ visibility = "list"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 6 || cfg.Providers[0].Models[0].Codex == nil {
+	if cfg.SchemaVersion != SchemaVersion || cfg.Providers[0].Models[0].Codex == nil {
 		t.Fatalf("config = %#v", cfg)
 	}
 }

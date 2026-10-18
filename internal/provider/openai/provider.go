@@ -31,13 +31,23 @@ func (s *sdkStreamStarter) Start(ctx context.Context, secret credential.Secret, 
 	return stream, nil
 }
 
-// Provider executes canonical requests through the official OpenAI Responses API.
-// It is safe for concurrent use when its credential source is safe for concurrent use.
+// Endpoint selects the upstream dialect for one provider instance.
+type Endpoint struct {
+	// BaseURL overrides the official API origin; empty uses the official one.
+	BaseURL string
+	// Chat selects the Chat Completions wire for compatible endpoints.
+	Chat bool
+}
+
+// Provider executes canonical requests through the OpenAI Responses API or,
+// for compatible endpoints, the Chat Completions wire. It is safe for
+// concurrent use when its credential source is safe for concurrent use.
 type Provider struct {
 	providerID  string
 	credentials credential.Source
 	credential  credential.Ref
 	starter     streamStarter
+	chat        chatStarter
 	ids         streamIDGenerator
 }
 
@@ -55,6 +65,28 @@ func NewProviderForID(providerID string, source credential.Source, ref credentia
 
 func newProvider(source credential.Source, ref credential.Ref, starter streamStarter, ids streamIDGenerator) (*Provider, error) {
 	return newProviderWithID("openai-test", source, ref, starter, ids)
+}
+
+// NewProviderForIDWithEndpoint constructs a provider for one configured
+// endpoint. Chat-wire endpoints speak the Chat Completions dialect; responses
+// endpoints use the official Responses API.
+func NewProviderForIDWithEndpoint(providerID string, source credential.Source, ref credential.Ref, endpoint Endpoint) (*Provider, error) {
+	if providerID == "" || nilInterface(source) || !ref.Valid() {
+		return nil, execution.NewError(execution.CodeInternal, "provider.openai.options", 0, nil)
+	}
+	baseURL := endpoint.BaseURL
+	if baseURL == "" {
+		baseURL = officialBaseURL
+	}
+	factory, err := newClientFactory(baseURL, newSecureHTTPClient())
+	if err != nil {
+		return nil, execution.NewError(execution.CodeInternal, "provider.openai.endpoint", 0, err)
+	}
+	provider := &Provider{providerID: providerID, credentials: source, credential: ref, starter: &sdkStreamStarter{factory: factory}, ids: randomStreamIDs{}}
+	if endpoint.Chat {
+		provider.chat = &httpChatStarter{factory: factory}
+	}
+	return provider, nil
 }
 
 func newProviderWithID(providerID string, source credential.Source, ref credential.Ref, starter streamStarter, ids streamIDGenerator) (*Provider, error) {
@@ -89,6 +121,9 @@ func (p *Provider) Execute(ctx context.Context, upstreamModel string, request ca
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if p.chat != nil {
+		return p.executeChat(ctx, upstreamModel, request)
 	}
 	params, err := mapRequest(request, upstreamModel)
 	if err != nil {

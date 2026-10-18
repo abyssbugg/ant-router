@@ -30,6 +30,10 @@ func TestApplyRepairsIdenticalCorruptRevision(t *testing.T) {
 	if err == nil || state != StateDegraded {
 		t.Fatalf("degraded Initialize() = %q, %v", state, err)
 	}
+	current := degraded.Current()
+	if current.State != StateDegraded || current.Diagnostic == "" {
+		t.Fatalf("degraded Current() = %#v, want non-empty diagnostic", current)
+	}
 	proof, err := degraded.Validate(context.Background(), data)
 	if err != nil {
 		t.Fatalf("Validate() failed: %v", err)

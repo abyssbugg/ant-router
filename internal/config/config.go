@@ -8,7 +8,8 @@ const (
 	ProviderRegistrySchemaVersion = 3
 	AnthropicSchemaVersion        = 4
 	CodexSchemaVersion            = 5
-	SchemaVersion                 = 6
+	BaselineSchemaVersion         = 6
+	SchemaVersion                 = 7
 	DefaultShutdownTimeout        = 30 * time.Second
 )
 

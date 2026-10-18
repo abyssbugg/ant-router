@@ -40,8 +40,8 @@ capabilities = [%s]
 }
 
 func TestDefaultUsesSchemaV6(t *testing.T) {
-	if got := Default().SchemaVersion; got != 6 {
-		t.Fatalf("schema version = %d, want 6", got)
+	if got := Default().SchemaVersion; got != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", got, SchemaVersion)
 	}
 }
 
@@ -50,8 +50,8 @@ func TestSchemaV5MigratesToV6WithoutInferringCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 6 {
-		t.Fatalf("schema version = %d, want 6", cfg.SchemaVersion)
+	if cfg.SchemaVersion != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", cfg.SchemaVersion, SchemaVersion)
 	}
 	want := []string{"hosted_web_search", "text", "tools"}
 	if !slices.Equal(cfg.Providers[0].Models[0].Capabilities, want) {
@@ -87,7 +87,7 @@ func TestSchemaV6AcceptsCompleteCodexBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SchemaVersion != 6 || cfg.Providers[0].Models[0].Codex == nil {
+	if cfg.SchemaVersion != SchemaVersion || cfg.Providers[0].Models[0].Codex == nil {
 		t.Fatalf("config = %#v", cfg)
 	}
 }
@@ -111,5 +111,34 @@ func TestSchemaV6CanonicalRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(encodedAgain, encoded) {
 		t.Fatal("canonical schema-v6 encoding changed after round trip")
+	}
+}
+
+func TestSchemaV6DecodesOpenAIWithNonPrefixedCredentialName(t *testing.T) {
+	// Pre-v7, schema v6 allowed any valid env var name for credentials.
+	// This test ensures backward compatibility: v6 documents with non-prefixed
+	// names (e.g., DEEPSEEK_API_KEY) on openai providers decode successfully.
+	toml := `schema_version = 6
+[[providers]]
+id = "openai-primary"
+kind = "openai"
+enabled = true
+[providers.credential]
+source = "env"
+name = "DEEPSEEK_API_KEY"
+[[providers.models]]
+alias = "openai/gpt-test"
+upstream = "gpt-test"
+capabilities = ["text", "tools"]
+`
+	cfg, err := Decode(strings.NewReader(toml))
+	if err != nil {
+		t.Fatalf("Decode v6 with DEEPSEEK_API_KEY failed: %v", err)
+	}
+	if cfg.SchemaVersion != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", cfg.SchemaVersion, SchemaVersion)
+	}
+	if cfg.Providers[0].Credential.Name != "DEEPSEEK_API_KEY" {
+		t.Fatalf("credential name = %q, want %q", cfg.Providers[0].Credential.Name, "DEEPSEEK_API_KEY")
 	}
 }

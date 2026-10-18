@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abyssbugg/ant-router/internal/execution"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 	"github.com/abyssbugg/ant-router/internal/provider/mock"
 )
@@ -130,6 +131,47 @@ func TestResponsesReturnsSafeStrictErrors(t *testing.T) {
 	}
 	if body.Error.Type != "invalid_request_error" || body.Error.Code != "unknown_field" || body.Error.Param != "unknown" || body.Error.Message == "" {
 		t.Fatalf("error = %#v", body.Error)
+	}
+}
+
+func TestWriteExecutionErrorReportsInvalidRequestPath(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	writeExecutionError(recorder, execution.NewError(execution.CodeInvalidRequest, "request.continuation", 0, nil))
+	var body struct {
+		Error struct{ Param string } `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Param != "request.continuation" {
+		t.Fatalf("param = %q, want request.continuation", body.Error.Param)
+	}
+}
+
+func TestWriteExecutionErrorClassifiesByCode(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		code      execution.ErrorCode
+		status    int
+		errorType string
+	}{
+		{execution.CodeInvalidRequest, http.StatusBadRequest, "invalid_request_error"},
+		{execution.CodeInvalidModel, http.StatusBadRequest, "invalid_request_error"},
+		{execution.CodeInternal, http.StatusBadGateway, "server_error"},
+	}
+	for _, tc := range cases {
+		recorder := httptest.NewRecorder()
+		writeExecutionError(recorder, execution.NewError(tc.code, "test", 0, nil))
+		var body struct {
+			Error struct{ Type, Code string } `json:"error"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if recorder.Code != tc.status || body.Error.Type != tc.errorType || body.Error.Code != string(tc.code) {
+			t.Errorf("%s: status=%d type=%q code=%q, want %d %q", tc.code, recorder.Code, body.Error.Type, body.Error.Code, tc.status, tc.errorType)
+		}
 	}
 }
 

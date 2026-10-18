@@ -66,6 +66,9 @@ func (m *Machine) Accept(event canonical.Event) (Transition, error) {
 	if _, duplicate := m.eventIDs[event.ID()]; duplicate {
 		return Transition{}, m.error(CodeDuplicateEvent, "event.id")
 	}
+	if len(m.eventIDs) >= m.options.MaxTrackedEvents {
+		return Transition{}, m.error(CodeEventLimitExceeded, "event.count")
+	}
 	if event.Sequence() != m.nextSequence {
 		return Transition{}, m.error(CodeInvalidSequence, "event.sequence")
 	}

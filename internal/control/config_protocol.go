@@ -10,6 +10,7 @@ type ConfigCurrentResponse struct {
 	Generation  uint64     `json:"generation,omitempty"`
 	Status      string     `json:"status,omitempty"`
 	ActivatedAt *time.Time `json:"activated_at,omitempty"`
+	Diagnostic  string     `json:"diagnostic,omitempty"`
 }
 
 type ConfigValidateRequest struct {

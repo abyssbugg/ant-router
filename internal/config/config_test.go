@@ -8,8 +8,8 @@ import (
 )
 
 func TestSchemaVersionConstant(t *testing.T) {
-	if SchemaVersion != 6 {
-		t.Errorf("SchemaVersion = %d, want 6", SchemaVersion)
+	if SchemaVersion != 7 {
+		t.Errorf("SchemaVersion = %d, want 7", SchemaVersion)
 	}
 }
 
@@ -28,7 +28,7 @@ func TestConfigType(t *testing.T) {
 	}
 
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("Config.SchemaVersion = %d, want 6", cfg.SchemaVersion)
+		t.Errorf("Config.SchemaVersion = %d, want 7", cfg.SchemaVersion)
 	}
 }
 
@@ -46,7 +46,7 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := Default()
 
 	if cfg.SchemaVersion != SchemaVersion {
-		t.Errorf("Default().SchemaVersion = %d, want 6", cfg.SchemaVersion)
+		t.Errorf("Default().SchemaVersion = %d, want 7", cfg.SchemaVersion)
 	}
 
 	if cfg.Daemon.ShutdownTimeout != (Duration{30 * time.Second}) {
@@ -105,9 +105,9 @@ func TestConfigValidate(t *testing.T) {
 			errPath: "schema_version",
 		},
 		{
-			name: "unsupported schema version 7",
+			name: "unsupported schema version 8",
 			config: Config{
-				SchemaVersion: 7,
+				SchemaVersion: 8,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{30 * time.Second},
 				},
@@ -171,7 +171,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestConfigValidateErrorMessage(t *testing.T) {
 	cfg := Config{
-		SchemaVersion: 7,
+		SchemaVersion: 8,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
@@ -188,7 +188,7 @@ func TestConfigValidateErrorMessage(t *testing.T) {
 		t.Error("Error message is empty")
 	}
 	// Verify it doesn't expose internal values
-	if strings.Contains(errMsg, "SchemaVersion: 7") {
+	if strings.Contains(errMsg, "SchemaVersion: 8") {
 		t.Error("Error message should not contain config source content")
 	}
 }
