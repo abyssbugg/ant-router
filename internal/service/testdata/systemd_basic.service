@@ -1,5 +1,6 @@
 [Unit]
 Description=Ant Router daemon (managed by github.com/abyssbugg/ant-router)
+X-AntRouter-Owner=github.com/abyssbugg/ant-router
 After=network-online.target
 
 [Service]

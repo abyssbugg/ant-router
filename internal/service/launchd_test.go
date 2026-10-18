@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,7 +34,7 @@ func TestRenderLaunchdPlistBasic(t *testing.T) {
 		t.Fatalf("renderLaunchdPlist: %v", err)
 	}
 
-	if !bytes.Contains(plist, []byte(OwnershipMarker)) {
+	if !hasOwnerLine(plist, launchdOwnerLine) {
 		t.Error("plist missing ownership marker")
 	}
 	if !bytes.Contains(plist, []byte("com.example.test")) {
@@ -189,7 +190,7 @@ func TestSpecValidation(t *testing.T) {
 			name: "missing executable",
 			spec: Spec{
 				Label:      "test",
-				Executable: "/nonexistent/exe",
+				Executable: filepath.Join(t.TempDir(), "missing-exe"),
 				LogPath:    "/abs/log",
 			},
 			wantErr: "is not a regular file",
@@ -386,15 +387,19 @@ func TestExecRunnerBoundedOutput(t *testing.T) {
 
 	// Run a command that outputs >64KiB (if possible)
 	// Use dd to generate large output
-	stdout, stderr, err := runner.Run(ctx, "sh", "-c", "dd if=/dev/zero bs=1024 count=100 2>/dev/null | head -c 100000")
-	_ = stderr
-	if err != nil {
-		// Some systems may not have dd; that's OK for this test
-		t.Skip("sh/dd not available")
+	_ = runner
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
 	}
-
-	if len(stdout) > maxOutputSize {
-		t.Errorf("stdout exceeds limit: %d > %d", len(stdout), maxOutputSize)
+	// runBounded is the exec path behind ExecRunner.Run, which itself only
+	// permits launchctl and systemctl.
+	stdout, _, err := runBounded(ctx, "sh", "-c", "dd if=/dev/zero bs=1000 count=100 2>/dev/null")
+	if err != nil {
+		t.Fatalf("runBounded: %v", err)
+	}
+	// 100,000 bytes were written; exactly the first 64 KiB must be kept.
+	if !bytes.Equal(stdout, make([]byte, maxOutputSize)) {
+		t.Fatalf("stdout = %d bytes, want exactly %d zero bytes", len(stdout), maxOutputSize)
 	}
 }
 
@@ -438,7 +443,7 @@ func TestFakeRunnerInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plist not written: %v", err)
 	}
-	if !bytes.Contains(data, []byte(OwnershipMarker)) {
+	if !hasOwnerLine(data, launchdOwnerLine) {
 		t.Error("plist missing ownership marker")
 	}
 }
@@ -450,9 +455,9 @@ func TestFakeRunnerUninstall(t *testing.T) {
 
 	// Create an unowned plist
 	agentsDir := filepath.Join(homeDir, "Library", "LaunchAgents")
-	os.MkdirAll(agentsDir, 0755)
+	mustMkdirAll(t, agentsDir, 0755)
 	unownedPath := filepath.Join(agentsDir, "com.test.other.plist")
-	os.WriteFile(unownedPath, []byte("<?xml version=\"1.0\"?><plist></plist>"), 0644)
+	mustWriteFile(t, unownedPath, []byte("<?xml version=\"1.0\"?><plist></plist>"), 0644)
 
 	fake := newFakeRunner()
 	backend := NewLaunchdBackend(homeDir, 501, fake)
@@ -478,15 +483,18 @@ func TestUninstallNotLoadedIgnoresError(t *testing.T) {
 	logPath := filepath.Join(tmpDir, "app.log")
 
 	agentsDir := filepath.Join(homeDir, "Library", "LaunchAgents")
-	os.MkdirAll(agentsDir, 0755)
+	mustMkdirAll(t, agentsDir, 0755)
 	plistPath := filepath.Join(agentsDir, "com.test.app.plist")
 	spec := Spec{
 		Label:      "com.test.app",
 		Executable: exe,
 		LogPath:    logPath,
 	}
-	plist, _ := renderLaunchdPlist(spec)
-	os.WriteFile(plistPath, plist, 0644)
+	plist, err := renderLaunchdPlist(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, plistPath, plist, 0644)
 
 	fake := newFakeRunner()
 	fake.errMap = map[string]error{"bootout": fmt.Errorf("bootout failed")}
@@ -494,7 +502,7 @@ func TestUninstallNotLoadedIgnoresError(t *testing.T) {
 
 	backend := NewLaunchdBackend(homeDir, 501, fake)
 	ctx := context.Background()
-	err := backend.Uninstall(ctx, "com.test.app")
+	err = backend.Uninstall(ctx, "com.test.app")
 	if err != nil {
 		t.Errorf("Uninstall: expected nil for not-loaded error, got %v", err)
 	}
@@ -515,15 +523,18 @@ func TestUninstallBootoutErrorKeepsFile(t *testing.T) {
 	logPath := filepath.Join(tmpDir, "app.log")
 
 	agentsDir := filepath.Join(homeDir, "Library", "LaunchAgents")
-	os.MkdirAll(agentsDir, 0755)
+	mustMkdirAll(t, agentsDir, 0755)
 	plistPath := filepath.Join(agentsDir, "com.test.app.plist")
 	spec := Spec{
 		Label:      "com.test.app",
 		Executable: exe,
 		LogPath:    logPath,
 	}
-	plist, _ := renderLaunchdPlist(spec)
-	os.WriteFile(plistPath, plist, 0644)
+	plist, err := renderLaunchdPlist(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, plistPath, plist, 0644)
 
 	fake := newFakeRunner()
 	fake.errMap = map[string]error{"bootout": fmt.Errorf("permission denied")}
@@ -531,7 +542,7 @@ func TestUninstallBootoutErrorKeepsFile(t *testing.T) {
 
 	backend := NewLaunchdBackend(homeDir, 501, fake)
 	ctx := context.Background()
-	err := backend.Uninstall(ctx, "com.test.app")
+	err = backend.Uninstall(ctx, "com.test.app")
 	if err == nil {
 		t.Error("Uninstall: expected error for permission denied, got nil")
 	}
@@ -648,7 +659,11 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) (stdo
 
 	// Check for configured error/output
 	if len(args) > 0 {
+		// Key on the subcommand; systemd calls lead with --user.
 		key := args[0]
+		if key == "--user" && len(args) > 1 {
+			key = args[1]
+		}
 		if e, ok := f.errMap[key]; ok {
 			stderrOut := []byte("Could not find service")
 			if s, ok := f.stderrMap[key]; ok {

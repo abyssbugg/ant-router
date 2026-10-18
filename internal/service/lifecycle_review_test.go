@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func writeOwnedPlist(t *testing.T, home, label string) string {
@@ -17,10 +19,24 @@ func writeOwnedPlist(t *testing.T, home, label string) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, label+".plist")
-	if err := os.WriteFile(path, []byte("<!-- "+OwnershipMarker+" -->"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(launchdOwnerLine+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func mustMkdirAll(t *testing.T, dir string, perm os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(dir, perm); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustWriteFile(t *testing.T, path string, data []byte, perm os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, data, perm); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func testSpec(t *testing.T, dir string) Spec {
@@ -220,5 +236,190 @@ func TestSystemdInstallRequiresAppendCapableSystemd(t *testing.T) {
 		if want := [][]string{{"systemctl", "--version"}}; !reflect.DeepEqual(fake.calls, want) {
 			t.Fatalf("%q: calls = %v, want only the version probe", tc.version, fake.calls)
 		}
+	}
+}
+
+// A foreign definition that merely mentions the marker as data (a program
+// argument, a description) is not owned: ownership is a dedicated line.
+func TestOwnershipRequiresStructuralMarker(t *testing.T) {
+	dir := t.TempDir()
+	spec := testSpec(t, dir)
+	spec.Args = []string{"--note", OwnershipMarker}
+
+	t.Run("launchd", func(t *testing.T) {
+		home := t.TempDir()
+		plist, err := renderLaunchdPlist(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foreign := strings.Replace(string(plist), launchdOwnerLine+"\n", "", 1)
+		if foreign == string(plist) {
+			t.Fatal("owner line not found in rendered plist")
+		}
+		agents := filepath.Join(home, "Library", "LaunchAgents")
+		if err := os.MkdirAll(agents, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(agents, spec.Label+".plist"), []byte(foreign), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fake := newFakeRunner()
+		err = NewLaunchdBackend(home, 501, fake).Uninstall(context.Background(), spec.Label)
+		if !isErrNotOwned(err) {
+			t.Fatalf("Uninstall = %v, want ErrNotOwned", err)
+		}
+		if len(fake.calls) != 0 {
+			t.Fatalf("no launchctl calls expected, got %v", fake.calls)
+		}
+	})
+
+	t.Run("systemd", func(t *testing.T) {
+		config := t.TempDir()
+		unit, err := renderSystemdUnit(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foreign := strings.Replace(string(unit), systemdOwnerLine+"\n", "", 1)
+		if foreign == string(unit) {
+			t.Fatal("owner line not found in rendered unit")
+		}
+		unitDir := filepath.Join(config, "systemd", "user")
+		if err := os.MkdirAll(unitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(unitDir, spec.Label+".service"), []byte(foreign), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fake := newFakeRunner()
+		err = NewSystemdBackend(config, fake).Uninstall(context.Background(), spec.Label)
+		if !isErrNotOwned(err) {
+			t.Fatalf("Uninstall = %v, want ErrNotOwned", err)
+		}
+		if len(fake.calls) != 0 {
+			t.Fatalf("no systemctl calls expected, got %v", fake.calls)
+		}
+	})
+
+	t.Run("systemd owner line inside a continued value", func(t *testing.T) {
+		data := []byte("[Unit]\nDescription=x \\\n" + systemdOwnerLine + "\n")
+		if hasOwnerLine(data, systemdOwnerLine) {
+			t.Fatal("an owner line continuing a previous value must not count")
+		}
+	})
+}
+
+// Without our definition the label may belong to a unit or agent loaded from
+// another directory, so Uninstall must not issue label-based commands.
+func TestUninstallMissingDefinitionNeverTouchesLabel(t *testing.T) {
+	t.Run("launchd", func(t *testing.T) {
+		fake := newFakeRunner()
+		if err := NewLaunchdBackend(t.TempDir(), 501, fake).Uninstall(context.Background(), "com.example.app"); err != nil {
+			t.Fatalf("Uninstall = %v, want nil", err)
+		}
+		if len(fake.calls) != 0 {
+			t.Fatalf("no launchctl calls expected, got %v", fake.calls)
+		}
+	})
+	t.Run("systemd only reloads", func(t *testing.T) {
+		fake := newFakeRunner()
+		if err := NewSystemdBackend(t.TempDir(), fake).Uninstall(context.Background(), "example"); err != nil {
+			t.Fatalf("Uninstall = %v, want nil", err)
+		}
+		// daemon-reload is label-free and completes an earlier uninstall
+		// whose reload failed after the unit file was removed.
+		want := [][]string{{"systemctl", "--user", "daemon-reload"}}
+		if !reflect.DeepEqual(fake.calls, want) {
+			t.Fatalf("calls = %v, want %v", fake.calls, want)
+		}
+	})
+}
+
+func TestSystemdInstallUndoesEnableWhenStartFails(t *testing.T) {
+	dir := t.TempDir()
+	spec := testSpec(t, dir)
+	fake := newFakeRunner()
+	fake.errMap["enable"] = errors.New("exit status 1")
+	fake.stderrMap["enable"] = []byte("Job for x.service failed")
+	err := NewSystemdBackend(filepath.Join(dir, "config"), fake).Install(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "enable") {
+		t.Fatalf("Install = %v, want enable error", err)
+	}
+	last := fake.calls[len(fake.calls)-1]
+	want := []string{"systemctl", "--user", "disable", spec.Label + ".service"}
+	if !reflect.DeepEqual(last, want) {
+		t.Fatalf("last call = %v, want %v", last, want)
+	}
+}
+
+func TestExecRunnerOnlyRunsServiceManagers(t *testing.T) {
+	_, _, err := (&ExecRunner{}).Run(context.Background(), "sh", "-c", "true")
+	if err == nil || !strings.Contains(err.Error(), "not permitted") {
+		t.Fatalf("Run(sh) = %v, want not permitted", err)
+	}
+}
+
+// lockingRunner blocks the first matching command until released so a test
+// can observe whether a concurrent lifecycle call proceeds meanwhile.
+type lockingRunner struct {
+	mu      sync.Mutex
+	calls   [][]string
+	blockOn string
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *lockingRunner) Run(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, append([]string{name}, args...))
+	block := len(args) > 1 && args[1] == r.blockOn
+	if block {
+		r.blockOn = ""
+	}
+	r.mu.Unlock()
+	if block {
+		close(r.entered)
+		<-r.release
+	}
+	if len(args) > 0 && args[0] == "--version" {
+		return []byte("systemd 252\n"), nil, nil
+	}
+	return nil, nil, nil
+}
+
+func (r *lockingRunner) snapshot() [][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]string(nil), r.calls...)
+}
+
+func TestSystemdLifecycleSerializedPerLabel(t *testing.T) {
+	dir := t.TempDir()
+	spec := testSpec(t, dir)
+	runner := &lockingRunner{blockOn: "enable", entered: make(chan struct{}), release: make(chan struct{})}
+	backend := NewSystemdBackend(filepath.Join(dir, "config"), runner)
+
+	installErr := make(chan error, 1)
+	go func() { installErr <- backend.Install(context.Background(), spec) }()
+	<-runner.entered
+
+	uninstallErr := make(chan error, 1)
+	go func() { uninstallErr <- backend.Uninstall(context.Background(), spec.Label) }()
+	time.Sleep(200 * time.Millisecond)
+	for _, call := range runner.snapshot() {
+		if len(call) > 2 && call[2] == "disable" {
+			t.Fatalf("Uninstall ran while Install held the label: %v", runner.snapshot())
+		}
+	}
+	close(runner.release)
+	if err := <-installErr; err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := <-uninstallErr; err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	calls := runner.snapshot()
+	last := calls[len(calls)-1]
+	if !reflect.DeepEqual(last, []string{"systemctl", "--user", "daemon-reload"}) {
+		t.Fatalf("Uninstall did not complete after Install: %v", calls)
 	}
 }

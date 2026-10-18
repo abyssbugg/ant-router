@@ -1,14 +1,16 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"unicode/utf8"
+
+	"github.com/abyssbugg/ant-router/internal/filelock"
 )
 
 // OwnershipMarker is the marker constant for service ownership.
@@ -141,12 +143,36 @@ func ValidateLabel(label string) error {
 	return nil
 }
 
+// Ownership is recorded as a dedicated line in each definition format so it
+// cannot be forged by data that merely mentions the marker. In a plist, '<'
+// inside a string value is escaped, so a raw comment line is structural; in a
+// unit file, X- prefixed keys are ignored by systemd.
+const (
+	launchdOwnerLine = "<!-- owned by " + OwnershipMarker + " -->"
+	systemdOwnerLine = "X-AntRouter-Owner=" + OwnershipMarker
+)
+
+// hasOwnerLine reports whether data contains ownerLine as a complete line
+// (surrounding whitespace ignored) that does not continue a previous line
+// ending in a backslash.
+func hasOwnerLine(data []byte, ownerLine string) bool {
+	continued := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if !continued && line == ownerLine {
+			return true
+		}
+		continued = strings.HasSuffix(line, `\`)
+	}
+	return false
+}
+
 // readOwnedDefinition checks if a service definition file exists and is owned.
 // Returns nil if file exists and contains OwnershipMarker.
 // Returns ErrNotInstalled if file does not exist.
 // Returns ErrNotOwned if file exists but does not contain OwnershipMarker.
 // Returns wrapped error for other read errors.
-func readOwnedDefinition(path string) error {
+func readOwnedDefinition(path, ownerLine string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -154,7 +180,7 @@ func readOwnedDefinition(path string) error {
 		}
 		return fmt.Errorf("read definition: %w", err)
 	}
-	if !bytes.Contains(data, []byte(OwnershipMarker)) {
+	if !hasOwnerLine(data, ownerLine) {
 		return ErrNotOwned{Path: path}
 	}
 	return nil
@@ -172,13 +198,34 @@ func (e ErrUnsupportedSystemd) Error() string {
 
 // requireReplaceable permits a missing definition and refuses one that
 // exists without the ownership marker.
-func requireReplaceable(path string) error {
-	err := readOwnedDefinition(path)
+func requireReplaceable(path, ownerLine string) error {
+	err := readOwnedDefinition(path, ownerLine)
 	var missing ErrNotInstalled
 	if errors.As(err, &missing) {
 		return nil
 	}
 	return err
+}
+
+// isNotInstalled reports whether err says the definition file is missing.
+func isNotInstalled(err error) bool {
+	var missing ErrNotInstalled
+	return errors.As(err, &missing)
+}
+
+// lockLabel serializes lifecycle operations for one label across processes,
+// so an Install and an Uninstall can never interleave their steps. The lock
+// file sits beside the definitions; launchd and systemd only load files with
+// their own definition suffixes.
+func lockLabel(ctx context.Context, dir, label string) (*filelock.Lock, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create %s: %w", dir, err)
+	}
+	lock, err := filelock.Acquire(ctx, filepath.Join(filepath.Clean(dir), "."+label+".lock"))
+	if err != nil {
+		return nil, fmt.Errorf("lock service %s: %w", label, err)
+	}
+	return lock, nil
 }
 
 // Spec defines a service specification.

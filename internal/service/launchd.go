@@ -31,10 +31,7 @@ func renderLaunchdPlist(spec Spec) ([]byte, error) {
 	buf.WriteString("\n")
 
 	// ownership marker
-	buf.WriteString(`  <!-- owned by `)
-	buf.WriteString(escapeXMLString(OwnershipMarker))
-	buf.WriteString(` -->`)
-	buf.WriteString("\n")
+	buf.WriteString("  " + launchdOwnerLine + "\n")
 
 	// Label
 	buf.WriteString(`  <key>Label</key>`)
@@ -190,13 +187,18 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 	plistPath := filepath.Join(agentsDir, spec.Label+".plist")
 
 	// Refuse to replace a definition we do not own before any side effect.
-	if err := requireReplaceable(plistPath); err != nil {
+	if err := requireReplaceable(plistPath, launchdOwnerLine); err != nil {
 		return err
 	}
 
-	// Create directory
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return fmt.Errorf("create LaunchAgents dir: %w", err)
+	lock, err := lockLabel(ctx, agentsDir, spec.Label)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release() }()
+	// Re-check under the lock: another process may have changed the file.
+	if err := requireReplaceable(plistPath, launchdOwnerLine); err != nil {
+		return err
 	}
 
 	// Create log directory if needed
@@ -230,25 +232,41 @@ func (b *LaunchdBackend) Uninstall(ctx context.Context, label string) error {
 	if err := ValidateLabel(label); err != nil {
 		return err
 	}
+	// Uninstall never touches a definition we do not own. Without our plist
+	// the label may name an agent loaded from another directory (for example
+	// /Library/LaunchAgents), so a missing plist means there is nothing to do.
+	err := b.withOwnedPlist(ctx, label, func(plistPath string) error {
+		if err := b.bootout(ctx, b.target(label)); err != nil {
+			return err
+		}
+		if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove plist: %w", err)
+		}
+		return nil
+	})
+	if isNotInstalled(err) {
+		return nil
+	}
+	return err
+}
+
+// withOwnedPlist runs fn while holding the label lock, after verifying the
+// plist is ours both before and after acquiring it.
+func (b *LaunchdBackend) withOwnedPlist(ctx context.Context, label string, fn func(plistPath string) error) error {
 	agentsDir := filepath.Join(b.home, "Library", "LaunchAgents")
 	plistPath := filepath.Join(agentsDir, label+".plist")
-
-	// Uninstall is idempotent for a missing definition but never touches a
-	// definition we do not own.
-	if err := requireReplaceable(plistPath); err != nil {
+	if err := readOwnedDefinition(plistPath, launchdOwnerLine); err != nil {
 		return err
 	}
-
-	if err := b.bootout(ctx, b.target(label)); err != nil {
+	lock, err := lockLabel(ctx, agentsDir, label)
+	if err != nil {
 		return err
 	}
-
-	// Remove file
-	if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove plist: %w", err)
+	defer func() { _ = lock.Release() }()
+	if err := readOwnedDefinition(plistPath, launchdOwnerLine); err != nil {
+		return err
 	}
-
-	return nil
+	return fn(plistPath)
 }
 
 // Start starts a service.
@@ -256,35 +274,29 @@ func (b *LaunchdBackend) Start(ctx context.Context, label string) error {
 	if err := ValidateLabel(label); err != nil {
 		return err
 	}
-	agentsDir := filepath.Join(b.home, "Library", "LaunchAgents")
-	plistPath := filepath.Join(agentsDir, label+".plist")
-
-	// Check if file exists and is owned
-	if err := readOwnedDefinition(plistPath); err != nil {
-		return err
-	}
-
-	target := b.target(label)
-	_, stderr, err := b.runner.Run(ctx, "launchctl", "print", target)
-	if err != nil {
-		if !isLaunchdNotLoaded(stderr) {
-			return commandError("query service", err, stderr)
+	return b.withOwnedPlist(ctx, label, func(plistPath string) error {
+		target := b.target(label)
+		_, stderr, err := b.runner.Run(ctx, "launchctl", "print", target)
+		if err != nil {
+			if !isLaunchdNotLoaded(stderr) {
+				return commandError("query service", err, stderr)
+			}
+			// Stop unloads the job; bootstrapping reloads it and RunAtLoad
+			// starts it.
+			_, stderr, err = b.runner.Run(ctx, "launchctl", "bootstrap", "gui/"+strconv.Itoa(b.uid), plistPath)
+			if err != nil {
+				return commandError("start service", err, stderr)
+			}
+			return nil
 		}
-		// Stop unloads the job; bootstrapping reloads it and RunAtLoad
-		// starts it.
-		_, stderr, err = b.runner.Run(ctx, "launchctl", "bootstrap", "gui/"+strconv.Itoa(b.uid), plistPath)
+		// Loaded: kickstart without -k starts the job if needed and leaves a
+		// running job undisturbed.
+		_, stderr, err = b.runner.Run(ctx, "launchctl", "kickstart", target)
 		if err != nil {
 			return commandError("start service", err, stderr)
 		}
 		return nil
-	}
-	// Loaded: kickstart without -k starts the job if needed and leaves a
-	// running job undisturbed.
-	_, stderr, err = b.runner.Run(ctx, "launchctl", "kickstart", target)
-	if err != nil {
-		return commandError("start service", err, stderr)
-	}
-	return nil
+	})
 }
 
 // Stop stops a service.
@@ -292,17 +304,11 @@ func (b *LaunchdBackend) Stop(ctx context.Context, label string) error {
 	if err := ValidateLabel(label); err != nil {
 		return err
 	}
-	agentsDir := filepath.Join(b.home, "Library", "LaunchAgents")
-	plistPath := filepath.Join(agentsDir, label+".plist")
-
-	// Check if file exists and is owned
-	if err := readOwnedDefinition(plistPath); err != nil {
-		return err
-	}
-
 	// KeepAlive{SuccessfulExit=false} restarts a signalled job, so stopping
 	// means unloading it. An already-unloaded job is already stopped.
-	return b.bootout(ctx, b.target(label))
+	return b.withOwnedPlist(ctx, label, func(string) error {
+		return b.bootout(ctx, b.target(label))
+	})
 }
 
 // Status returns the status of a service.
