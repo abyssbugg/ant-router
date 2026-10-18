@@ -731,3 +731,223 @@ func TestLaunchdBackendRejectsUnsafeLabelsBeforeAnySideEffect(t *testing.T) {
 		t.Fatalf("unsafe labels created plists: %v", created)
 	}
 }
+
+// TestLaunchdInstallRefusesUnownedPlist verifies Install refuses to overwrite unowned plists.
+func TestLaunchdInstallRefusesUnownedPlist(t *testing.T) {
+	tmpDir := t.TempDir()
+	exe := filepath.Join(tmpDir, "app")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh"), 0755); err != nil {
+		t.Fatalf("WriteFile exe: %v", err)
+	}
+	logPath := filepath.Join(tmpDir, "app.log")
+
+	// Create an unowned plist at the target path
+	agentsDir := filepath.Join(tmpDir, "Library", "LaunchAgents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	plistPath := filepath.Join(agentsDir, "com.test.app.plist")
+	unownedContent := []byte("<?xml version=\"1.0\"?><plist><dict><key>Label</key><string>com.test.app</string></dict></plist>")
+	if err := os.WriteFile(plistPath, unownedContent, 0644); err != nil {
+		t.Fatalf("WriteFile unowned: %v", err)
+	}
+
+	spec := Spec{
+		Label:      "com.test.app",
+		Executable: exe,
+		Args:       []string{},
+		LogPath:    logPath,
+	}
+
+	fake := newFakeRunner()
+	backend := NewLaunchdBackend(tmpDir, 501, fake)
+
+	ctx := context.Background()
+	err := backend.Install(ctx, spec)
+
+	// Should return ErrNotOwned
+	if !isErrNotOwned(err) {
+		t.Fatalf("Install: expected ErrNotOwned, got %v", err)
+	}
+
+	// Plist should be unchanged (byte-identical)
+	updated, err := os.ReadFile(plistPath)
+	if err != nil {
+		t.Fatalf("ReadFile plist after Install: %v", err)
+	}
+	if !bytes.Equal(updated, unownedContent) {
+		t.Errorf("plist was modified: expected %q, got %q", unownedContent, updated)
+	}
+
+	// No bootstrap should have been called
+	bootstrapCall := findCall(fake.calls, "launchctl", "bootstrap")
+	if bootstrapCall != nil {
+		t.Error("bootstrap was called despite refusing Install")
+	}
+}
+
+// TestLaunchdStartRefusesUnownedAndIssuesNoCommand verifies Start refuses unowned plists.
+func TestLaunchdStartRefusesUnownedAndIssuesNoCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create an unowned plist
+	agentsDir := filepath.Join(tmpDir, "Library", "LaunchAgents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	plistPath := filepath.Join(agentsDir, "com.test.app.plist")
+	if err := os.WriteFile(plistPath, []byte("<?xml version=\"1.0\"?><plist><dict></dict></plist>"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fake := newFakeRunner()
+	backend := NewLaunchdBackend(tmpDir, 501, fake)
+
+	ctx := context.Background()
+	err := backend.Start(ctx, "com.test.app")
+
+	// Should return ErrNotOwned
+	if !isErrNotOwned(err) {
+		t.Fatalf("Start: expected ErrNotOwned, got %v", err)
+	}
+
+	// No launchctl commands should have been recorded
+	if len(fake.calls) != 0 {
+		t.Errorf("Start issued commands despite refusing: %v", fake.calls)
+	}
+}
+
+// TestLaunchdStopRefusesUnownedAndIssuesNoCommand verifies Stop refuses unowned plists.
+func TestLaunchdStopRefusesUnownedAndIssuesNoCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create an unowned plist
+	agentsDir := filepath.Join(tmpDir, "Library", "LaunchAgents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	plistPath := filepath.Join(agentsDir, "com.test.app.plist")
+	if err := os.WriteFile(plistPath, []byte("<?xml version=\"1.0\"?><plist><dict></dict></plist>"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fake := newFakeRunner()
+	backend := NewLaunchdBackend(tmpDir, 501, fake)
+
+	ctx := context.Background()
+	err := backend.Stop(ctx, "com.test.app")
+
+	// Should return ErrNotOwned
+	if !isErrNotOwned(err) {
+		t.Fatalf("Stop: expected ErrNotOwned, got %v", err)
+	}
+
+	// No launchctl commands should have been recorded
+	if len(fake.calls) != 0 {
+		t.Errorf("Stop issued commands despite refusing: %v", fake.calls)
+	}
+}
+
+// TestLaunchdInstallPropagatesBootoutError verifies real bootout errors are propagated.
+func TestLaunchdInstallPropagatesBootoutError(t *testing.T) {
+	tmpDir := t.TempDir()
+	exe := filepath.Join(tmpDir, "app")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh"), 0755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	logPath := filepath.Join(tmpDir, "app.log")
+
+	spec := Spec{
+		Label:      "com.test.app",
+		Executable: exe,
+		Args:       []string{},
+		LogPath:    logPath,
+	}
+
+	// Mock runner that returns a real bootout error (not "not loaded")
+	fake := newFakeRunner()
+	fake.errMap = map[string]error{"bootout": fmt.Errorf("permission denied")}
+	fake.stderrMap = map[string][]byte{"bootout": []byte("permission denied")}
+
+	backend := NewLaunchdBackend(tmpDir, 501, fake)
+
+	ctx := context.Background()
+	err := backend.Install(ctx, spec)
+
+	// Should return an error (not silently ignore)
+	if err == nil {
+		t.Fatal("Install: expected error for bootout failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("Install: error should mention bootout failure, got %v", err)
+	}
+}
+
+// TestLaunchdInstallCreatesLogDirectory verifies log directory is created.
+func TestLaunchdInstallCreatesLogDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	exe := filepath.Join(tmpDir, "app")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh"), 0755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Specify a log path in a non-existent subdirectory
+	logPath := filepath.Join(tmpDir, "logs", "subdir", "app.log")
+
+	spec := Spec{
+		Label:      "com.test.app",
+		Executable: exe,
+		Args:       []string{},
+		LogPath:    logPath,
+	}
+
+	fake := newFakeRunner()
+	backend := NewLaunchdBackend(tmpDir, 501, fake)
+
+	ctx := context.Background()
+	err := backend.Install(ctx, spec)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// Log directory should exist
+	logDir := filepath.Dir(logPath)
+	info, err := os.Stat(logDir)
+	if err != nil {
+		t.Fatalf("log directory not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("log path is not a directory")
+	}
+}
+
+// TestSpecValidateRejectsNonExecutableFile verifies executable permission check.
+func TestSpecValidateRejectsNonExecutableFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a regular file without execute permission
+	nonExecPath := filepath.Join(tmpDir, "nonexec")
+	if err := os.WriteFile(nonExecPath, []byte("#!/bin/sh"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	spec := Spec{
+		Label:      "com.test.app",
+		Executable: nonExecPath,
+		Args:       []string{},
+		LogPath:    filepath.Join(tmpDir, "app.log"),
+	}
+
+	err := spec.Validate()
+	if err == nil {
+		t.Fatal("Validate: expected error for non-executable file, got nil")
+	}
+
+	var notRegularErr ErrNotRegularFile
+	if !errors.As(err, &notRegularErr) {
+		t.Fatalf("Validate: expected ErrNotRegularFile, got %T: %v", err, err)
+	}
+	if !strings.Contains(notRegularErr.Reason, "execute") {
+		t.Errorf("Validate: reason should mention execute permission, got %q", notRegularErr.Reason)
+	}
+}
