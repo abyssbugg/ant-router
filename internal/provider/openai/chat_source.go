@@ -62,7 +62,9 @@ func codeForChatStatus(status int) execution.ErrorCode {
 	}
 }
 
-const maxChatSSELine = 1 << 20
+// maxChatSSELine is raised to accommodate 2 MiB custom tool arguments
+// that may be emitted in a single SSE data line by providers.
+const maxChatSSELine = 2 << 20
 
 // chatEventSource converts one Chat Completions SSE stream into canonical
 // events. Recv is not safe for concurrent use.
@@ -214,7 +216,7 @@ var _ streaming.EventSource = (*chatEventSource)(nil)
 func (p *Provider) executeChat(ctx context.Context, upstreamModel string, request canonical.Request) (streaming.EventSource, error) {
 	body, names, err := chat.EncodeRequestWithTools(request, upstreamModel, true)
 	if err != nil {
-		if chat.IsUnsupported(err) {
+		if chat.IsUnsupported(err) || chat.IsInvalidRequestInput(err) {
 			return nil, execution.NewError(execution.CodeInvalidRequest, "request", 0, err)
 		}
 		return nil, execution.NewError(execution.CodeInternal, "request", 0, err)

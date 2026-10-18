@@ -58,13 +58,14 @@ func encodeToolsWithMap(tools []canonical.ToolDefinition) ([]map[string]any, Too
 		path := fmt.Sprintf("request.tools[%d]", index)
 		switch tool.Kind() {
 		case canonical.ToolDefinitionKindFunction, canonical.ToolDefinitionKindCustom:
-			if err := encoder.add(path, tool, ""); err != nil {
+			if err := encoder.add(path, tool, "", ""); err != nil {
 				return nil, nil, err
 			}
 		case canonical.ToolDefinitionKindNamespace:
+			namespaceDesc := tool.Description()
 			for memberIndex, member := range tool.Tools() {
 				memberPath := fmt.Sprintf("%s.tools[%d]", path, memberIndex)
-				if err := encoder.add(memberPath, member, tool.Name()); err != nil {
+				if err := encoder.add(memberPath, member, tool.Name(), namespaceDesc); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -80,7 +81,7 @@ type toolEncoder struct {
 	names   ToolNameMap
 }
 
-func (e *toolEncoder) add(path string, tool canonical.ToolDefinition, namespace string) error {
+func (e *toolEncoder) add(path string, tool canonical.ToolDefinition, namespace, namespaceDesc string) error {
 	name := upstreamFunctionName(namespace, tool.Name())
 	if !chatFunctionName.MatchString(name) {
 		return invalid(path+".name", fmt.Sprintf("function name %q must match %s", name, chatFunctionName))
@@ -88,7 +89,13 @@ func (e *toolEncoder) add(path string, tool canonical.ToolDefinition, namespace 
 	if _, exists := e.names[name]; exists {
 		return invalid(path+".name", fmt.Sprintf("function name %q is not unique", name))
 	}
-	function := map[string]any{"name": name, "description": tool.Description()}
+	// Include namespace description when available to provide context to the model
+	description := tool.Description()
+	if namespace != "" && namespaceDesc != "" {
+		// Prepend namespace description to member description for context
+		description = namespaceDesc + "\n\n" + tool.Description()
+	}
+	function := map[string]any{"name": name, "description": description}
 	switch tool.Kind() {
 	case canonical.ToolDefinitionKindFunction:
 		function["parameters"] = json.RawMessage(tool.InputSchema().Bytes())

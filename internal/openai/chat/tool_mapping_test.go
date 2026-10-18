@@ -18,6 +18,7 @@ func mappingNameMap() ToolNameMap {
 		"editor__write_file": {Kind: canonical.ToolDefinitionKindCustom, Name: "write_file", Namespace: "editor"},
 		"crm__lookup":        {Kind: canonical.ToolDefinitionKindFunction, Name: "lookup", Namespace: "crm"},
 		"lookup":             {Kind: canonical.ToolDefinitionKindFunction, Name: "lookup"},
+		"unmapped__tool":     {Kind: canonical.ToolDefinitionKindFunction, Name: "unmapped__tool"},
 	}
 }
 
@@ -211,7 +212,12 @@ func TestAccumulatorWithoutNameMapKeepsPlainCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index, item := range response.Items()[1:] {
+	items := response.Items()
+	// Expect initial message + 5 tool calls (from mappingWant())
+	if len(items) < 6 {
+		t.Fatalf("expected at least 6 items (1 message + 5 calls), got %d", len(items))
+	}
+	for index, item := range items[1:] {
 		call, ok := item.ToolCall()
 		if !ok || call.Namespace() != "" {
 			t.Fatalf("item %d = %q namespace %q; nil map must keep plain function calls", index, item.Type(), call.Namespace())
@@ -321,7 +327,8 @@ func TestAccumulatorCountsReplayedPreNameArgumentsOnce(t *testing.T) {
 func TestAccumulatorBoundsBufferedCustomArguments(t *testing.T) {
 	fragment := strings.Repeat("a", 64<<10)
 	chunks := []string{`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","function":{"name":"apply_patch","arguments":"{\"input\":\""}}]}}]}`}
-	for written := 0; written <= canonical.MaxJSONBytes; written += len(fragment) {
+	// Custom tool arguments are now bounded by MaxRequestBytes (2 MiB) to support larger inputs
+	for written := 0; written <= canonical.MaxRequestBytes; written += len(fragment) {
 		chunks = append(chunks, `{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"`+fragment+`"}}]}}]}`)
 	}
 	_, _, err := runMappingStream(t, chunks, mappingNameMap())

@@ -199,9 +199,11 @@ func TestAccumulatorBoundsPendingToolArgumentsBeforeName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for sent := 0; sent <= canonical.MaxJSONBytes; sent += len(fragment) {
+	// Tool arguments are now bounded by MaxRequestBytes (2 MiB) to support custom inputs,
+	// not MaxJSONBytes (1 MiB)
+	for sent := 0; sent <= canonical.MaxRequestBytes; sent += len(fragment) {
 		if _, err := accumulator.Accept(chunk); err != nil {
-			if sent+len(fragment) <= canonical.MaxJSONBytes {
+			if sent+len(fragment) <= canonical.MaxRequestBytes {
 				t.Fatalf("rejected within limit after %d bytes: %v", sent, err)
 			}
 			return

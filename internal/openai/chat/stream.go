@@ -433,10 +433,15 @@ func (a *Accumulator) acceptToolDelta(call ToolCallWire) error {
 const maxRetainedToolArgumentBytes = canonical.MaxRequestBytes
 
 // retainToolArguments appends one argument fragment to a call, enforcing the
-// per-call bound and the per-stream bound across every call. Buffered
-// fragments never reach the streaming machine, so the bounds live here.
+// custom-input size limit (2 MiB per call, not the 1 MiB JSON parsing limit).
+// The per-stream bound across every call also applies. Buffered fragments
+// never reach the streaming machine, so the bounds live here.
 func (a *Accumulator) retainToolArguments(state *toolStreamState, fragment string) error {
-	if state.args.Len()+len(fragment) > canonical.MaxJSONBytes {
+	// Use the custom-input size limit, which is the same as MaxRequestBytes (2 MiB)
+	// This allows custom inputs up to the documented limit even if their
+	// JSON encoding exceeds the DefaultLimits parsing threshold
+	const maxCustomInputBytes = canonical.MaxRequestBytes
+	if state.args.Len()+len(fragment) > maxCustomInputBytes {
 		return protocolErr("tool.arguments_limit")
 	}
 	if a.retainedToolArgumentBytes+len(fragment) > maxRetainedToolArgumentBytes {
@@ -467,7 +472,11 @@ func (a *Accumulator) emitToolArguments(state *toolStreamState, delta string) er
 // startTool opens the canonical item for a call whose name is complete and
 // replays argument fragments buffered before the start.
 func (a *Accumulator) startTool(state *toolStreamState) error {
-	state.tool = resolveTool(a.names, state.name.String())
+	tool, err := resolveTool(a.names, state.name.String())
+	if err != nil {
+		return err
+	}
+	state.tool = tool
 	if err := a.startItem(canonical.ItemStartParams{ID: state.itemID, Type: state.tool.itemType(), CallID: state.callID, Namespace: state.tool.namespace, Name: state.tool.name}); err != nil {
 		return err
 	}

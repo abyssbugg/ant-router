@@ -159,7 +159,11 @@ func BuildResponse(responseID canonical.ResponseID, model string, completion Com
 		if err != nil {
 			return canonical.Response{}, protocolErr("response.call_id")
 		}
-		item, err := buildToolCallItem(resolveTool(nameMap, call.Function.Name), itemID, callID, call.Function.Arguments)
+		tool, err := resolveTool(nameMap, call.Function.Name)
+		if err != nil {
+			return canonical.Response{}, err
+		}
+		item, err := buildToolCallItem(tool, itemID, callID, call.Function.Arguments)
 		if err != nil {
 			return canonical.Response{}, err
 		}
