@@ -43,14 +43,17 @@ type wireMockProvider struct {
 }
 
 type wireProvider struct {
-	ID         *string             `toml:"id"`
-	Kind       *string             `toml:"kind"`
-	Enabled    *bool               `toml:"enabled"`
-	Credential *wireCredential     `toml:"credential"`
-	BaseURL    *string             `toml:"base_url"`
-	Wire       *string             `toml:"wire"`
-	Models     []wireProviderModel `toml:"models"`
-	_          struct{}            `toml:"" json:"-"`
+	ID          *string             `toml:"id"`
+	Kind        *string             `toml:"kind"`
+	Enabled     *bool               `toml:"enabled"`
+	Credential  *wireCredential     `toml:"credential"`
+	Credentials *[]wireCredential   `toml:"credentials"`
+	Preset      *string             `toml:"preset"`
+	Proxy       *string             `toml:"proxy"`
+	BaseURL     *string             `toml:"base_url"`
+	Wire        *string             `toml:"wire"`
+	Models      []wireProviderModel `toml:"models"`
+	_           struct{}            `toml:"" json:"-"`
 }
 
 type wireCredential struct {
@@ -90,6 +93,33 @@ func rejectProviderEndpointFields(providers []wireProvider, version int) error {
 		}
 	}
 	return nil
+}
+
+// rejectSchemaV8ProviderFields rejects provider fields introduced in schema
+// version 8 when an older document declares them.
+func rejectSchemaV8ProviderFields(providers []wireProvider, version int) error {
+	for i, provider := range providers {
+		for _, field := range []struct {
+			name    string
+			present bool
+		}{{"preset", provider.Preset != nil}, {"proxy", provider.Proxy != nil}, {"credentials", provider.Credentials != nil}} {
+			if field.present {
+				return &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].%s", i, field.name), Err: fmt.Errorf("field is unavailable in schema version %d", version)}
+			}
+		}
+	}
+	return nil
+}
+
+func convertWireCredential(wire wireCredential) CredentialRef {
+	var ref CredentialRef
+	if wire.Source != nil {
+		ref.Source = CredentialSourceKind(*wire.Source)
+	}
+	if wire.Name != nil {
+		ref.Name = *wire.Name
+	}
+	return ref
 }
 
 func rejectProviderCapabilityBeforeVersion(providers []wireProvider, capability string, version int) error {
@@ -179,7 +209,7 @@ func Decode(r io.Reader) (Config, error) {
 		}
 	}
 
-	// Accept legacy v1-v5 as input and normalize every in-memory config to v6.
+	// Accept every earlier schema as input and normalize in-memory configs to SchemaVersion.
 	switch *wire.SchemaVersion {
 	case LegacySchemaVersion:
 		if wire.DataPlane != nil {
@@ -264,12 +294,22 @@ func Decode(r io.Reader) (Config, error) {
 				return Config{}, &Error{Code: CodeUnknownField, Path: fmt.Sprintf("providers[%d].wire", i), Err: fmt.Errorf("field is unavailable in schema version 6")}
 			}
 		}
-	case SchemaVersion:
+	case CustomEndpointSchemaVersion:
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 7")}
 		}
+	case SchemaVersion:
+		if wire.MockProvider != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 8")}
+		}
 	default:
 		return Config{}, &Error{Code: CodeUnsupportedSchema, Path: "schema_version", Err: fmt.Errorf("unsupported schema version %d", *wire.SchemaVersion)}
+	}
+
+	if *wire.SchemaVersion < SchemaVersion {
+		if err := rejectSchemaV8ProviderFields(wire.Providers, *wire.SchemaVersion); err != nil {
+			return Config{}, err
+		}
 	}
 
 	// Overlay daemon config if present
@@ -315,7 +355,7 @@ func Decode(r io.Reader) (Config, error) {
 	if *wire.SchemaVersion == PreviousSchemaVersion && wire.MockProvider != nil && wire.MockProvider.Enabled != nil && *wire.MockProvider.Enabled {
 		cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 	}
-	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == CodexSchemaVersion || *wire.SchemaVersion == BaselineSchemaVersion || *wire.SchemaVersion == SchemaVersion {
+	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == CodexSchemaVersion || *wire.SchemaVersion == BaselineSchemaVersion || *wire.SchemaVersion == CustomEndpointSchemaVersion || *wire.SchemaVersion == SchemaVersion {
 		if wire.Providers != nil {
 			cfg.Providers = make([]ProviderConfig, len(wire.Providers))
 		}
@@ -337,13 +377,20 @@ func Decode(r io.Reader) (Config, error) {
 				converted.Wire = ProviderWire(*provider.Wire)
 			}
 			if provider.Credential != nil {
-				converted.Credential = &CredentialRef{}
-				if provider.Credential.Source != nil {
-					converted.Credential.Source = CredentialSourceKind(*provider.Credential.Source)
+				ref := convertWireCredential(*provider.Credential)
+				converted.Credential = &ref
+			}
+			if provider.Credentials != nil {
+				converted.Credentials = make([]CredentialRef, len(*provider.Credentials))
+				for j, pooled := range *provider.Credentials {
+					converted.Credentials[j] = convertWireCredential(pooled)
 				}
-				if provider.Credential.Name != nil {
-					converted.Credential.Name = *provider.Credential.Name
-				}
+			}
+			if provider.Preset != nil {
+				converted.Preset = ProviderPreset(*provider.Preset)
+			}
+			if provider.Proxy != nil {
+				converted.Proxy = *provider.Proxy
 			}
 			if provider.Models != nil {
 				converted.Models = make([]ProviderModelConfig, len(provider.Models))

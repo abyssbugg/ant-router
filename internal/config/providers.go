@@ -70,13 +70,180 @@ type ProviderModelConfig struct {
 
 // ProviderConfig defines one provider instance and its public models.
 type ProviderConfig struct {
-	ID         string                `toml:"id"`
-	Kind       ProviderKind          `toml:"kind"`
-	Enabled    bool                  `toml:"enabled"`
-	Credential *CredentialRef        `toml:"credential,omitempty"`
-	BaseURL    string                `toml:"base_url,omitempty"`
-	Wire       ProviderWire          `toml:"wire,omitempty"`
-	Models     []ProviderModelConfig `toml:"models,omitempty"`
+	ID         string         `toml:"id"`
+	Kind       ProviderKind   `toml:"kind"`
+	Enabled    bool           `toml:"enabled"`
+	Credential *CredentialRef `toml:"credential,omitempty"`
+	// Credentials is a pool of interchangeable keys for one account or
+	// tenant; it replaces Credential and needs at least two entries.
+	Credentials []CredentialRef `toml:"credentials,omitempty"`
+	// Preset names a known OpenAI-compatible service and supplies the
+	// default base_url and wire; explicit fields override it.
+	Preset  ProviderPreset `toml:"preset,omitempty"`
+	BaseURL string         `toml:"base_url,omitempty"`
+	Wire    ProviderWire   `toml:"wire,omitempty"`
+	// Proxy selects the outbound proxy: empty connects directly,
+	// "environment" honors HTTP(S)_PROXY/NO_PROXY, and an http, https, or
+	// socks5 URL without credentials uses that proxy.
+	Proxy  string                `toml:"proxy,omitempty"`
+	Models []ProviderModelConfig `toml:"models,omitempty"`
+}
+
+// ProviderPreset names a known OpenAI-compatible service.
+type ProviderPreset string
+
+// ProxyEnvironment selects proxies from HTTP_PROXY, HTTPS_PROXY, and NO_PROXY.
+const ProxyEnvironment = "environment"
+
+// MaxCredentialsPerProvider bounds a provider's credential pool.
+const MaxCredentialsPerProvider = 16
+
+type providerPresetSpec struct {
+	baseURL string
+	wire    ProviderWire
+	// credentialPrefixes are vendor-scoped environment variable prefixes
+	// accepted in addition to OPENAI_ while the preset endpoint is in use.
+	credentialPrefixes []string
+}
+
+var providerPresets = map[ProviderPreset]providerPresetSpec{
+	"deepseek":   {baseURL: "https://api.deepseek.com/v1", wire: ProviderWireChat, credentialPrefixes: []string{"DEEPSEEK_"}},
+	"moonshot":   {baseURL: "https://api.moonshot.ai/v1", wire: ProviderWireChat, credentialPrefixes: []string{"MOONSHOT_", "KIMI_"}},
+	"zhipu":      {baseURL: "https://open.bigmodel.cn/api/paas/v4", wire: ProviderWireChat, credentialPrefixes: []string{"ZHIPU_", "GLM_"}},
+	"qwen":       {baseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", wire: ProviderWireChat, credentialPrefixes: []string{"DASHSCOPE_", "QWEN_"}},
+	"xai":        {baseURL: "https://api.x.ai/v1", wire: ProviderWireChat, credentialPrefixes: []string{"XAI_"}},
+	"openrouter": {baseURL: "https://openrouter.ai/api/v1", wire: ProviderWireChat, credentialPrefixes: []string{"OPENROUTER_"}},
+	"ollama":     {baseURL: "http://127.0.0.1:11434/v1", wire: ProviderWireChat, credentialPrefixes: []string{"OLLAMA_"}},
+}
+
+// ProviderEndpoint is a provider's effective endpoint after applying its
+// preset. An empty BaseURL means the provider kind's official API.
+type ProviderEndpoint struct {
+	BaseURL string
+	Wire    ProviderWire
+}
+
+// Endpoint resolves the effective endpoint: explicit base_url and wire win,
+// then preset defaults, then the official API over the Responses wire.
+func (p ProviderConfig) Endpoint() ProviderEndpoint {
+	endpoint := ProviderEndpoint{BaseURL: p.BaseURL, Wire: p.Wire}
+	if spec, ok := providerPresets[p.Preset]; ok {
+		if endpoint.BaseURL == "" {
+			endpoint.BaseURL = spec.baseURL
+		}
+		if endpoint.Wire == "" {
+			endpoint.Wire = spec.wire
+		}
+	}
+	if endpoint.Wire == "" {
+		endpoint.Wire = ProviderWireResponses
+	}
+	return endpoint
+}
+
+// CredentialRefs returns the provider's credentials in pool order: the pool
+// when configured, otherwise the single credential, otherwise none.
+func (p ProviderConfig) CredentialRefs() []CredentialRef {
+	if len(p.Credentials) > 0 {
+		return append([]CredentialRef(nil), p.Credentials...)
+	}
+	if p.Credential != nil {
+		return []CredentialRef{*p.Credential}
+	}
+	return nil
+}
+
+// validateProviderProxy checks the optional outbound proxy selection.
+func validateProviderProxy(provider ProviderConfig, prefix string) error {
+	if provider.Proxy == "" || provider.Proxy == ProxyEnvironment {
+		return nil
+	}
+	path := prefix + ".proxy"
+	if len(provider.Proxy) > MaxBaseURLBytes {
+		return providerValidationError(path, "proxy is too long")
+	}
+	parsed, err := url.Parse(provider.Proxy)
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" {
+		return providerValidationError(path, "proxy must be \"environment\" or an http, https, or socks5 URL")
+	}
+	switch parsed.Scheme {
+	case "http", "https", "socks5":
+	default:
+		return providerValidationError(path, "proxy must be \"environment\" or an http, https, or socks5 URL")
+	}
+	if parsed.User != nil {
+		return providerValidationError(path, "proxy URL must not contain credentials; use proxy = \"environment\" instead")
+	}
+	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery || strings.ContainsRune(provider.Proxy, '#') {
+		return providerValidationError(path, "proxy URL must not contain a path, query, or fragment")
+	}
+	return nil
+}
+
+// validateCredentialRef validates one credential reference at path. When
+// the provider sends credentials to a non-official endpoint the name must
+// carry a prefix scoped to that endpoint, so a mis-scoped name cannot ship
+// another service's secret there.
+func validateCredentialRef(provider ProviderConfig, ref CredentialRef, path string) error {
+	if ref.Source != CredentialSourceEnv {
+		return providerValidationError(path+".source", "unsupported credential source")
+	}
+	if len(ref.Name) == 0 || len(ref.Name) > MaxCredentialName || !envNamePattern.MatchString(ref.Name) {
+		return providerValidationError(path+".name", "invalid environment variable name")
+	}
+	if provider.BaseURL == "" && provider.Preset == "" {
+		// Official endpoints accept any valid name for compatibility with
+		// pre-v7 configurations.
+		return nil
+	}
+	switch provider.Kind {
+	case ProviderKindOpenAI:
+		if strings.HasPrefix(ref.Name, "OPENAI_") {
+			return nil
+		}
+		if spec, ok := providerPresets[provider.Preset]; ok && provider.BaseURL == "" {
+			for _, allowed := range spec.credentialPrefixes {
+				if strings.HasPrefix(ref.Name, allowed) {
+					return nil
+				}
+			}
+			return providerValidationError(path+".name", fmt.Sprintf("%s credential must use an OPENAI_ or %s prefixed environment variable", provider.Preset, strings.Join(spec.credentialPrefixes, "/")))
+		}
+		return providerValidationError(path+".name", "openai credential must use an OPENAI_ prefixed environment variable")
+	case ProviderKindAnthropic:
+		if !strings.HasPrefix(ref.Name, "ANTHROPIC_") {
+			return providerValidationError(path+".name", "anthropic credential must use an ANTHROPIC_ prefixed environment variable")
+		}
+	}
+	return nil
+}
+
+// validateProviderCredentials checks the single credential or the pool.
+func validateProviderCredentials(provider ProviderConfig, prefix string) error {
+	if provider.Credentials != nil {
+		if provider.Credential != nil {
+			return providerValidationError(prefix+".credentials", "credential and credentials are mutually exclusive")
+		}
+		if len(provider.Credentials) < 2 || len(provider.Credentials) > MaxCredentialsPerProvider {
+			return providerValidationError(prefix+".credentials", fmt.Sprintf("credential pool needs 2 to %d entries; use credential for a single key", MaxCredentialsPerProvider))
+		}
+		seen := make(map[string]struct{}, len(provider.Credentials))
+		for j, ref := range provider.Credentials {
+			path := fmt.Sprintf("%s.credentials[%d]", prefix, j)
+			if err := validateCredentialRef(provider, ref, path); err != nil {
+				return err
+			}
+			if _, duplicate := seen[ref.Name]; duplicate {
+				return providerValidationError(path+".name", "duplicate credential in pool")
+			}
+			seen[ref.Name] = struct{}{}
+		}
+		return nil
+	}
+	if provider.Credential == nil {
+		return providerValidationError(prefix+".credential", "credential reference is required")
+	}
+	return validateCredentialRef(provider, *provider.Credential, prefix+".credential")
 }
 
 // validateProviderEndpoint checks the optional base_url and wire fields.
@@ -84,6 +251,20 @@ type ProviderConfig struct {
 // official API and wire defaults to the Responses protocol. Loopback http is
 // allowed so tests can run against local endpoint doubles.
 func validateProviderEndpoint(provider ProviderConfig, prefix string) error {
+	if provider.Proxy != "" && provider.Kind != ProviderKindOpenAI && provider.Kind != ProviderKindAnthropic {
+		return providerValidationError(prefix+".proxy", "proxy is only available for network provider kinds")
+	}
+	if err := validateProviderProxy(provider, prefix); err != nil {
+		return err
+	}
+	if provider.Preset != "" {
+		if provider.Kind != ProviderKindOpenAI {
+			return providerValidationError(prefix+".preset", "preset is only available for the OpenAI provider kind")
+		}
+		if _, ok := providerPresets[provider.Preset]; !ok {
+			return providerValidationError(prefix+".preset", "unknown provider preset")
+		}
+	}
 	if provider.Kind != ProviderKindOpenAI {
 		if provider.Wire != "" {
 			return providerValidationError(prefix+".wire", "wire is only available for the OpenAI provider kind")
@@ -241,6 +422,9 @@ func (c Config) clone() Config {
 			credential := *c.Providers[i].Credential
 			cloned.Providers[i].Credential = &credential
 		}
+		if c.Providers[i].Credentials != nil {
+			cloned.Providers[i].Credentials = append([]CredentialRef(nil), c.Providers[i].Credentials...)
+		}
 		if c.Providers[i].Models != nil {
 			cloned.Providers[i].Models = make([]ProviderModelConfig, len(c.Providers[i].Models))
 		}
@@ -343,38 +527,15 @@ func validateProviders(c Config) error {
 				return providerValidationError(prefix+".kind", "only the fixed mock provider is supported")
 			}
 			mockSeen = true
-			if provider.Credential != nil {
+			if provider.Credential != nil || provider.Credentials != nil {
 				return providerValidationError(prefix+".credential", "mock provider does not accept credentials")
 			}
 			if err := validateMockCodexModels(provider.Models, prefix+".models"); err != nil {
 				return err
 			}
 		case ProviderKindOpenAI, ProviderKindAnthropic:
-			if provider.Credential == nil {
-				return providerValidationError(prefix+".credential", "credential reference is required")
-			}
-			if provider.Credential.Source != CredentialSourceEnv {
-				return providerValidationError(prefix+".credential.source", "unsupported credential source")
-			}
-			if len(provider.Credential.Name) == 0 || len(provider.Credential.Name) > MaxCredentialName || !envNamePattern.MatchString(provider.Credential.Name) {
-				return providerValidationError(prefix+".credential.name", "invalid environment variable name")
-			}
-			// When using a custom endpoint (non-empty BaseURL), credentials
-			// reach only that endpoint, so a mis-scoped name would silently
-			// ship another secret's value there; require the kind-scoped prefix.
-			// For official endpoints, any valid env var name is accepted for
-			// backwards compatibility with pre-v7 configurations.
-			if provider.BaseURL != "" {
-				switch provider.Kind {
-				case ProviderKindOpenAI:
-					if !strings.HasPrefix(provider.Credential.Name, "OPENAI_") {
-						return providerValidationError(prefix+".credential.name", "openai credential must use an OPENAI_ prefixed environment variable")
-					}
-				case ProviderKindAnthropic:
-					if !strings.HasPrefix(provider.Credential.Name, "ANTHROPIC_") {
-						return providerValidationError(prefix+".credential.name", "anthropic credential must use an ANTHROPIC_ prefixed environment variable")
-					}
-				}
+			if err := validateProviderCredentials(provider, prefix); err != nil {
+				return err
 			}
 			if len(provider.Models) == 0 || len(provider.Models) > MaxModelsPerProvider {
 				return providerValidationError(prefix+".models", "invalid model count")

@@ -116,11 +116,12 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 		}
 		return execution.Registration{ProviderID: providerConfig.ID, Adapter: mockAdapter{provider: provider}, Models: bindings}, nil
 	case config.ProviderKindOpenAI:
-		ref, err := credential.NewRef(credential.SourceEnv, providerConfig.Credential.Name)
+		ref, err := primaryCredentialRef(providerConfig)
 		if err != nil {
 			return execution.Registration{}, err
 		}
-		provider, err := openaiprovider.NewProviderForIDWithEndpoint(providerConfig.ID, source, ref, openaiprovider.Endpoint{BaseURL: providerConfig.BaseURL, Chat: providerConfig.Wire == config.ProviderWireChat})
+		endpoint := providerConfig.Endpoint()
+		provider, err := openaiprovider.NewProviderForIDWithEndpoint(providerConfig.ID, source, ref, openaiprovider.Endpoint{BaseURL: endpoint.BaseURL, Chat: endpoint.Wire == config.ProviderWireChat})
 		if err != nil {
 			return execution.Registration{}, err
 		}
@@ -142,7 +143,7 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 		}
 		return execution.Registration{ProviderID: providerConfig.ID, Adapter: provider, Models: bindings}, nil
 	case config.ProviderKindAnthropic:
-		ref, err := credential.NewRef(credential.SourceEnv, providerConfig.Credential.Name)
+		ref, err := primaryCredentialRef(providerConfig)
 		if err != nil {
 			return execution.Registration{}, err
 		}
@@ -172,6 +173,15 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 	default:
 		return execution.Registration{}, execution.NewError(execution.CodeInternal, "providers.kind", 0, nil)
 	}
+}
+
+// primaryCredentialRef returns the provider's first configured credential.
+func primaryCredentialRef(providerConfig config.ProviderConfig) (credential.Ref, error) {
+	refs := providerConfig.CredentialRefs()
+	if len(refs) == 0 {
+		return credential.Ref{}, execution.NewError(execution.CodeInternal, "providers.credential", 0, nil)
+	}
+	return credential.NewRef(credential.SourceEnv, refs[0].Name)
 }
 
 func (r *providerRuntime) summaries(ctx context.Context) ([]control.ProviderSummary, error) {

@@ -8,8 +8,8 @@ import (
 )
 
 func TestSchemaVersionConstant(t *testing.T) {
-	if SchemaVersion != 7 {
-		t.Errorf("SchemaVersion = %d, want 7", SchemaVersion)
+	if SchemaVersion != 8 {
+		t.Errorf("SchemaVersion = %d, want 8", SchemaVersion)
 	}
 }
 
@@ -105,9 +105,9 @@ func TestConfigValidate(t *testing.T) {
 			errPath: "schema_version",
 		},
 		{
-			name: "unsupported schema version 8",
+			name: "unsupported schema version 9",
 			config: Config{
-				SchemaVersion: 8,
+				SchemaVersion: 9,
 				Daemon: DaemonConfig{
 					ShutdownTimeout: Duration{30 * time.Second},
 				},
@@ -171,7 +171,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestConfigValidateErrorMessage(t *testing.T) {
 	cfg := Config{
-		SchemaVersion: 8,
+		SchemaVersion: 9,
 		Daemon: DaemonConfig{
 			ShutdownTimeout: Duration{30 * time.Second},
 		},
@@ -188,7 +188,7 @@ func TestConfigValidateErrorMessage(t *testing.T) {
 		t.Error("Error message is empty")
 	}
 	// Verify it doesn't expose internal values
-	if strings.Contains(errMsg, "SchemaVersion: 8") {
+	if strings.Contains(errMsg, "SchemaVersion: 9") {
 		t.Error("Error message should not contain config source content")
 	}
 }

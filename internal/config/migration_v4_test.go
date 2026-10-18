@@ -79,7 +79,7 @@ func TestSchemaV6CanonicalRoundTripAnthropic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(encoded), "schema_version = 7") || !strings.Contains(string(encoded), "kind = 'anthropic'") {
+	if !strings.Contains(string(encoded), "schema_version = 8") || !strings.Contains(string(encoded), "kind = 'anthropic'") {
 		t.Fatalf("canonical config = %s", encoded)
 	}
 	decoded, err := Decode(strings.NewReader(string(encoded)))

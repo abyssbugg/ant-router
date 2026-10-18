@@ -167,7 +167,7 @@ shutdown_timeout = "30s"
 }
 
 func TestDecodeUnsupportedSchema(t *testing.T) {
-	toml := `schema_version = 8
+	toml := `schema_version = 9
 [daemon]
 shutdown_timeout = "30s"
 `

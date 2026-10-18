@@ -9,8 +9,11 @@ const (
 	AnthropicSchemaVersion        = 4
 	CodexSchemaVersion            = 5
 	BaselineSchemaVersion         = 6
-	SchemaVersion                 = 7
-	DefaultShutdownTimeout        = 30 * time.Second
+	CustomEndpointSchemaVersion   = 7
+	// SchemaVersion 8 adds provider presets, outbound proxies, and
+	// credential pools.
+	SchemaVersion          = 8
+	DefaultShutdownTimeout = 30 * time.Second
 )
 
 // Config represents the root configuration structure.

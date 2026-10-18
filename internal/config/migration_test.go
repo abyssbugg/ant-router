@@ -54,7 +54,7 @@ func TestMigratedCanonicalIsSchemaV6(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(canonical), "schema_version = 7") {
+	if !strings.Contains(string(canonical), "schema_version = 8") {
 		t.Fatalf("canonical migrated config = %s", canonical)
 	}
 	roundTrip, err := Decode(strings.NewReader(string(canonical)))
@@ -67,7 +67,7 @@ func TestMigratedCanonicalIsSchemaV6(t *testing.T) {
 }
 
 func TestDecodeRejectsUnsupportedSchemaAfterMigrationWindow(t *testing.T) {
-	for _, version := range []int{0, 8, 99} {
+	for _, version := range []int{0, 9, 99} {
 		_, err := Decode(strings.NewReader("schema_version = " + strconv.Itoa(version) + "\n"))
 		var configErr *Error
 		if !errors.As(err, &configErr) || configErr.Code != CodeUnsupportedSchema {

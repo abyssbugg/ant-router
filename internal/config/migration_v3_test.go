@@ -55,7 +55,7 @@ func TestMigratedSchemaV2CanonicalizesAsV6(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(canonical)
-	if !strings.Contains(text, "schema_version = 7") || !strings.Contains(text, "[[providers]]") || strings.Contains(text, "mock_provider") {
+	if !strings.Contains(text, "schema_version = 8") || !strings.Contains(text, "[[providers]]") || strings.Contains(text, "mock_provider") {
 		t.Fatalf("canonical migrated config = %s", canonical)
 	}
 	roundTrip, err := Decode(strings.NewReader(text))
