@@ -213,9 +213,9 @@ func TestAccumulatorWithoutNameMapKeepsPlainCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := response.Items()
-	// Expect initial message + 5 tool calls (from mappingWant())
-	if len(items) < 6 {
-		t.Fatalf("expected at least 6 items (1 message + 5 calls), got %d", len(items))
+	// Initial message + the five mapped calls: a dropped call must fail here.
+	if len(items) != 6 {
+		t.Fatalf("got %d items, want 6 (1 message + 5 calls)", len(items))
 	}
 	for index, item := range items[1:] {
 		call, ok := item.ToolCall()
