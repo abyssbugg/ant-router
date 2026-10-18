@@ -37,6 +37,13 @@ type ModelLimits struct {
 	MaxOutputTokens        int64
 }
 
+// Options configures optional provider parameters.
+type Options struct {
+	// Proxy configures outbound proxy: "" for direct, "environment" for env vars,
+	// or http/https/socks5 URL.
+	Proxy string
+}
+
 type modelLimits struct {
 	defaultMax int64
 	maximum    int64
@@ -55,7 +62,20 @@ type Provider struct {
 // NewProvider constructs a retry-free production Anthropic provider using the
 // official endpoint and request-time environment credential resolution.
 func NewProvider(source credential.Source, ref credential.Ref, models []ModelLimits) (*Provider, error) {
-	return newProvider(source, ref, models, &sdkStreamStarter{factory: newProductionClientFactory()}, randomStreamIDs{})
+	return NewProviderWithOptions(source, ref, models, Options{})
+}
+
+// NewProviderWithOptions constructs a provider with optional configuration like proxy.
+func NewProviderWithOptions(source credential.Source, ref credential.Ref, models []ModelLimits, opts Options) (*Provider, error) {
+	client, err := newSecureHTTPClientWithProxy(opts.Proxy)
+	if err != nil {
+		return nil, err
+	}
+	factory, err := newClientFactory(officialBaseURL, client)
+	if err != nil {
+		return nil, err
+	}
+	return newProvider(source, ref, models, &sdkStreamStarter{factory: factory}, randomStreamIDs{})
 }
 
 func newProvider(source credential.Source, ref credential.Ref, models []ModelLimits, starter streamStarter, ids streamIDGenerator) (*Provider, error) {

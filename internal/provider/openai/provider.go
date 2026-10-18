@@ -37,6 +37,9 @@ type Endpoint struct {
 	BaseURL string
 	// Chat selects the Chat Completions wire for compatible endpoints.
 	Chat bool
+	// Proxy configures outbound proxy: "" for direct, "environment" for env vars,
+	// or http/https/socks5 URL.
+	Proxy string
 }
 
 // Provider executes canonical requests through the OpenAI Responses API or,
@@ -78,7 +81,11 @@ func NewProviderForIDWithEndpoint(providerID string, source credential.Source, r
 	if baseURL == "" {
 		baseURL = officialBaseURL
 	}
-	factory, err := newClientFactory(baseURL, newSecureHTTPClient())
+	client, err := newSecureHTTPClientWithProxy(endpoint.Proxy)
+	if err != nil {
+		return nil, execution.NewError(execution.CodeInternal, "provider.openai.proxy", 0, err)
+	}
+	factory, err := newClientFactory(baseURL, client)
 	if err != nil {
 		return nil, execution.NewError(execution.CodeInternal, "provider.openai.endpoint", 0, err)
 	}
