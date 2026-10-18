@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/abyssbugg/ant-router/internal/credential"
+	"github.com/abyssbugg/ant-router/internal/netproxy"
 	sdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -61,10 +62,27 @@ func (f *clientFactory) Client(secret credential.Secret) sdk.Client {
 func (f *clientFactory) BaseURL() string          { return f.baseURL }
 func (f *clientFactory) HTTPClient() *http.Client { return f.httpClient }
 
+// newSecureHTTPClient returns the hardened client with direct connections.
 func newSecureHTTPClient() *http.Client {
+	return newHardenedHTTPClient(nil)
+}
+
+// newSecureHTTPClientWithProxy returns the hardened client using the
+// configured outbound proxy selection ("" direct, "environment", or a URL).
+// Proxying never changes TLS verification of the upstream: HTTPS upstreams
+// are tunneled with CONNECT and verified end to end.
+func newSecureHTTPClientWithProxy(setting string) (*http.Client, error) {
+	proxy, err := netproxy.ParseProxySetting(setting)
+	if err != nil {
+		return nil, err
+	}
+	return newHardenedHTTPClient(proxy), nil
+}
+
+func newHardenedHTTPClient(proxy netproxy.ProxyFunc) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
-		Proxy:                 nil,
+		Proxy:                 proxy,
 		DialContext:           dialer.DialContext,
 		ForceAttemptHTTP2:     true,
 		DisableCompression:    true,

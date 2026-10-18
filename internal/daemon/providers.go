@@ -121,7 +121,7 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 			return execution.Registration{}, err
 		}
 		endpoint := providerConfig.Endpoint()
-		provider, err := openaiprovider.NewProviderForIDWithEndpoint(providerConfig.ID, source, ref, openaiprovider.Endpoint{BaseURL: endpoint.BaseURL, Chat: endpoint.Wire == config.ProviderWireChat})
+		provider, err := openaiprovider.NewProviderForIDWithEndpoint(providerConfig.ID, source, ref, openaiprovider.Endpoint{BaseURL: endpoint.BaseURL, Chat: endpoint.Wire == config.ProviderWireChat, Proxy: providerConfig.Proxy})
 		if err != nil {
 			return execution.Registration{}, err
 		}
@@ -165,7 +165,7 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 			limits[index] = anthropicprovider.ModelLimits{Upstream: modelConfig.Upstream, DefaultMaxOutputTokens: modelConfig.DefaultMaxOutputTokens, MaxOutputTokens: modelConfig.MaxOutputTokens}
 			bindings[index] = execution.ModelBinding{Model: model, Upstream: modelConfig.Upstream}
 		}
-		provider, err := anthropicprovider.NewProvider(source, ref, limits)
+		provider, err := anthropicprovider.NewProviderWithOptions(source, ref, limits, anthropicprovider.Options{Proxy: providerConfig.Proxy})
 		if err != nil {
 			return execution.Registration{}, err
 		}
