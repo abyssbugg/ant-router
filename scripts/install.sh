@@ -115,18 +115,18 @@ fi
 # download URL DEST
 download() {
 	if [ "$DOWNLOADER" = "curl" ]; then
-		curl -fsSL --proto '=https,http' -o "$2" "$1"
+		curl -fsSL --proto '=https,http' --connect-timeout 10 -o "$2" "$1"
 	else
-		wget -q -O "$2" "$1"
+		wget -q --timeout=10 -O "$2" "$1"
 	fi
 }
 
 # Prints the final URL after following redirects from $1.
 effective_url() {
 	if [ "$DOWNLOADER" = "curl" ]; then
-		curl -fsSL --proto '=https,http' -o /dev/null -w '%{url_effective}' "$1"
+		curl -fsSL --proto '=https,http' --connect-timeout 10 -o /dev/null -w '%{url_effective}' "$1"
 	else
-		wget -S --spider "$1" 2>&1 | awk '$1 == "Location:" { loc = $2 } END { print loc }'
+		wget -S --timeout=10 --spider "$1" 2>&1 | awk '$1 == "Location:" { loc = $2 } END { print loc }'
 	fi
 }
 

@@ -199,7 +199,7 @@ try {
             if ($entries.Count -ne 1) {
                 Fail "failed to extract $bin from $archive"
             }
-            [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], (Join-Path $extractDir $bin), $false)
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], (Join-Path $extractDir $bin))
         }
     } catch {
         Fail "failed to extract binaries from ${archive}: $($_.Exception.Message)"
