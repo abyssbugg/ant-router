@@ -175,18 +175,39 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("create LaunchAgents dir: %w", err)
 	}
 
+	// Create log directory if needed
+	logDir := filepath.Dir(spec.LogPath)
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return fmt.Errorf("create log directory: %w", err)
+	}
+
+	// Check if file exists and is owned
+	if existing, err := os.ReadFile(plistPath); err == nil {
+		if !bytes.Contains(existing, []byte(OwnershipMarker)) {
+			return ErrNotOwned{Path: plistPath}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read plist: %w", err)
+	}
+
 	// Atomic write
 	_, err = atomicfile.Write(ctx, plistPath, plist, 0o644)
 	if err != nil {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	// Bootout (ignore not-loaded error)
+	// Bootout (ignore not-loaded error only)
 	guid := "gui/" + strconv.Itoa(b.uid)
 	label := guid + "/" + spec.Label
-	bootoutStdout, bootoutStderr, _ := b.runner.Run(ctx, "launchctl", "bootout", label)
+	bootoutStdout, bootoutStderr, bootoutErr := b.runner.Run(ctx, "launchctl", "bootout", label)
 	_ = bootoutStdout
-	_ = bootoutStderr
+	if bootoutErr != nil {
+		stderrStr := string(bootoutStderr)
+		// Only ignore "not loaded" errors; other errors indicate a real problem
+		if !strings.Contains(stderrStr, "Could not find service") && !strings.Contains(stderrStr, "No such process") {
+			return commandError("bootout service", bootoutErr, bootoutStderr)
+		}
+	}
 
 	// Bootstrap
 	_, bootstrapStderr, err := b.runner.Run(ctx, "launchctl", "bootstrap", guid, plistPath)
@@ -240,6 +261,21 @@ func (b *LaunchdBackend) Start(ctx context.Context, label string) error {
 	if err := ValidateLabel(label); err != nil {
 		return err
 	}
+	agentsDir := filepath.Join(b.home, "Library", "LaunchAgents")
+	plistPath := filepath.Join(agentsDir, label+".plist")
+
+	// Check if file exists and is owned
+	data, err := os.ReadFile(plistPath)
+	if err == nil {
+		if !bytes.Contains(data, []byte(OwnershipMarker)) {
+			return ErrNotOwned{Path: plistPath}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read plist: %w", err)
+	} else {
+		return ErrNotOwned{Path: plistPath}
+	}
+
 	guid := "gui/" + strconv.Itoa(b.uid)
 	kickstartLabel := guid + "/" + label
 	_, stderr, err := b.runner.Run(ctx, "launchctl", "kickstart", "-k", kickstartLabel)
@@ -254,6 +290,21 @@ func (b *LaunchdBackend) Stop(ctx context.Context, label string) error {
 	if err := ValidateLabel(label); err != nil {
 		return err
 	}
+	agentsDir := filepath.Join(b.home, "Library", "LaunchAgents")
+	plistPath := filepath.Join(agentsDir, label+".plist")
+
+	// Check if file exists and is owned
+	data, err := os.ReadFile(plistPath)
+	if err == nil {
+		if !bytes.Contains(data, []byte(OwnershipMarker)) {
+			return ErrNotOwned{Path: plistPath}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read plist: %w", err)
+	} else {
+		return ErrNotOwned{Path: plistPath}
+	}
+
 	guid := "gui/" + strconv.Itoa(b.uid)
 	killLabel := guid + "/" + label
 	_, stderr, err := b.runner.Run(ctx, "launchctl", "kill", "SIGTERM", killLabel)

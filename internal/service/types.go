@@ -158,6 +158,10 @@ func (s *Spec) Validate() error {
 	if !info.Mode().IsRegular() {
 		return ErrNotRegularFile{Path: s.Executable, Reason: "not a regular file"}
 	}
+	// Check execute permission for owner (user can execute)
+	if info.Mode()&0o100 == 0 {
+		return ErrNotRegularFile{Path: s.Executable, Reason: "missing execute permission"}
+	}
 	for _, arg := range s.Args {
 		if hasControlCharacters(arg) {
 			return fmt.Errorf("argument contains control characters or invalid UTF-8")

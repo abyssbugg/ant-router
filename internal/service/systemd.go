@@ -148,6 +148,21 @@ func (b *SystemdBackend) Install(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
+	// Create log directory if needed
+	logDir := filepath.Dir(spec.LogPath)
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return fmt.Errorf("create log directory: %w", err)
+	}
+
+	// Check if file exists and is owned
+	if existing, err := os.ReadFile(unitPath); err == nil {
+		if !bytes.Contains(existing, []byte(OwnershipMarker)) {
+			return ErrNotOwned{Path: unitPath}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read unit: %w", err)
+	}
+
 	// Write unit atomically
 	_, err = atomicfile.Write(ctx, unitPath, unit, 0644)
 	if err != nil {
@@ -223,6 +238,20 @@ func (b *SystemdBackend) Start(ctx context.Context, label string) error {
 	}
 
 	unitName := label + ".service"
+	unitPath := filepath.Join(b.configDir, "systemd", "user", unitName)
+
+	// Check if file exists and is owned
+	data, err := os.ReadFile(unitPath)
+	if err == nil {
+		if !bytes.Contains(data, []byte(OwnershipMarker)) {
+			return ErrNotOwned{Path: unitPath}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read unit: %w", err)
+	} else {
+		return ErrNotOwned{Path: unitPath}
+	}
+
 	_, stderr, err := b.runner.Run(ctx, "systemctl", "--user", "start", unitName)
 	if err != nil {
 		return commandError("start", err, stderr)
@@ -238,6 +267,20 @@ func (b *SystemdBackend) Stop(ctx context.Context, label string) error {
 	}
 
 	unitName := label + ".service"
+	unitPath := filepath.Join(b.configDir, "systemd", "user", unitName)
+
+	// Check if file exists and is owned
+	data, err := os.ReadFile(unitPath)
+	if err == nil {
+		if !bytes.Contains(data, []byte(OwnershipMarker)) {
+			return ErrNotOwned{Path: unitPath}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read unit: %w", err)
+	} else {
+		return ErrNotOwned{Path: unitPath}
+	}
+
 	_, stderr, err := b.runner.Run(ctx, "systemctl", "--user", "stop", unitName)
 	if err != nil {
 		return commandError("stop", err, stderr)

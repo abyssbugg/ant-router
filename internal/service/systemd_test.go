@@ -561,6 +561,17 @@ func TestSystemdBackendStart(t *testing.T) {
 	tmpDir := t.TempDir()
 	configDir := filepath.Join(tmpDir, "config")
 
+	// Create owned unit file
+	unitDir := filepath.Join(configDir, "systemd", "user")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	unitPath := filepath.Join(unitDir, "my-service.service")
+	unitContent := []byte("[Unit]\nDescription=Test\n# " + OwnershipMarker + "\n[Service]\nType=simple\nExecStart=/bin/true\n[Install]\nWantedBy=default.target\n")
+	if err := os.WriteFile(unitPath, unitContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
 	fake := newFakeRunner()
 	backend := NewSystemdBackend(configDir, fake)
 
@@ -580,6 +591,17 @@ func TestSystemdBackendStart(t *testing.T) {
 func TestSystemdBackendStop(t *testing.T) {
 	tmpDir := t.TempDir()
 	configDir := filepath.Join(tmpDir, "config")
+
+	// Create owned unit file
+	unitDir := filepath.Join(configDir, "systemd", "user")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	unitPath := filepath.Join(unitDir, "my-service.service")
+	unitContent := []byte("[Unit]\nDescription=Test\n# " + OwnershipMarker + "\n[Service]\nType=simple\nExecStart=/bin/true\n[Install]\nWantedBy=default.target\n")
+	if err := os.WriteFile(unitPath, unitContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	fake := newFakeRunner()
 	backend := NewSystemdBackend(configDir, fake)
