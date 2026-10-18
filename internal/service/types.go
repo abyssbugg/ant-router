@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"unicode/utf8"
 )
 
@@ -188,7 +189,8 @@ func (s *Spec) Validate() error {
 		return ErrNotRegularFile{Path: s.Executable, Reason: "not a regular file"}
 	}
 	// Check execute permission for owner (user can execute)
-	if info.Mode()&0o100 == 0 {
+	// On Windows, Go does not report Unix execute bits, so skip this check
+	if runtime.GOOS != "windows" && info.Mode()&0o100 == 0 {
 		return ErrNotRegularFile{Path: s.Executable, Reason: "missing execute permission"}
 	}
 	for _, arg := range s.Args {

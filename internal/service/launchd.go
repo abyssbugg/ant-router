@@ -137,6 +137,12 @@ func commandError(op string, err error, stderr []byte) error {
 	return fmt.Errorf("%s: %w (stderr: %s)", op, err, detail)
 }
 
+// isLaunchdNotLoaded checks if stderr indicates the service is not loaded.
+func isLaunchdNotLoaded(stderr []byte) bool {
+	stderrStr := string(stderr)
+	return strings.Contains(stderrStr, "Could not find service") || strings.Contains(stderrStr, "No such process")
+}
+
 // LaunchdBackend manages service lifecycle via launchctl.
 type LaunchdBackend struct {
 	home   string
