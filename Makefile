@@ -326,5 +326,17 @@ verify: fmt-check vet test test-race build cross-build
 # platform-tests macOS/Windows matrix stay workflow-only.
 ci: verify config-test config-race fault-test control-test control-race control-fault configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e canonical-test canonical-race canonical-golden canonical-stress streaming-test streaming-race streaming-golden streaming-stress phase3a-ci phase3b-ci phase4a-ci phase4b-ci phase4c-ci codex-alpha-ci fuzz-smoke
 
+# Static analysis (Codacy CLI: revive, opengrep, trivy, lizard; config in .codacy/).
+.PHONY: codacy-install codacy-analyze verity-doctor
+codacy-install:
+	codacy-cli install
+
+codacy-analyze:
+	codacy-cli analyze --tool revive
+	codacy-cli analyze --tool trivy
+
+verity-doctor:
+	verity doctor
+
 clean:
 	rm -rf $(BIN_DIR)
