@@ -12,6 +12,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/execution"
 	"github.com/abyssbugg/ant-router/internal/openai/responses"
 	anthropicprovider "github.com/abyssbugg/ant-router/internal/provider/anthropic"
+	"github.com/abyssbugg/ant-router/internal/provider/keypool"
 	mockprovider "github.com/abyssbugg/ant-router/internal/provider/mock"
 	openaiprovider "github.com/abyssbugg/ant-router/internal/provider/openai"
 	"github.com/abyssbugg/ant-router/internal/streaming"
@@ -116,12 +117,10 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 		}
 		return execution.Registration{ProviderID: providerConfig.ID, Adapter: mockAdapter{provider: provider}, Models: bindings}, nil
 	case config.ProviderKindOpenAI:
-		ref, err := primaryCredentialRef(providerConfig)
-		if err != nil {
-			return execution.Registration{}, err
-		}
 		endpoint := providerConfig.Endpoint()
-		provider, err := openaiprovider.NewProviderForIDWithEndpoint(providerConfig.ID, source, ref, openaiprovider.Endpoint{BaseURL: endpoint.BaseURL, Chat: endpoint.Wire == config.ProviderWireChat, Proxy: providerConfig.Proxy})
+		provider, err := credentialAdapter(providerConfig, func(ref credential.Ref) (execution.ProviderAdapter, error) {
+			return openaiprovider.NewProviderForIDWithEndpoint(providerConfig.ID, source, ref, openaiprovider.Endpoint{BaseURL: endpoint.BaseURL, Chat: endpoint.Wire == config.ProviderWireChat, Proxy: providerConfig.Proxy})
+		})
 		if err != nil {
 			return execution.Registration{}, err
 		}
@@ -143,10 +142,6 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 		}
 		return execution.Registration{ProviderID: providerConfig.ID, Adapter: provider, Models: bindings}, nil
 	case config.ProviderKindAnthropic:
-		ref, err := primaryCredentialRef(providerConfig)
-		if err != nil {
-			return execution.Registration{}, err
-		}
 		limits := make([]anthropicprovider.ModelLimits, len(providerConfig.Models))
 		bindings := make([]execution.ModelBinding, len(providerConfig.Models))
 		for index, modelConfig := range providerConfig.Models {
@@ -165,7 +160,9 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 			limits[index] = anthropicprovider.ModelLimits{Upstream: modelConfig.Upstream, DefaultMaxOutputTokens: modelConfig.DefaultMaxOutputTokens, MaxOutputTokens: modelConfig.MaxOutputTokens}
 			bindings[index] = execution.ModelBinding{Model: model, Upstream: modelConfig.Upstream}
 		}
-		provider, err := anthropicprovider.NewProviderWithOptions(source, ref, limits, anthropicprovider.Options{Proxy: providerConfig.Proxy})
+		provider, err := credentialAdapter(providerConfig, func(ref credential.Ref) (execution.ProviderAdapter, error) {
+			return anthropicprovider.NewProviderWithOptions(source, ref, limits, anthropicprovider.Options{Proxy: providerConfig.Proxy})
+		})
 		if err != nil {
 			return execution.Registration{}, err
 		}
@@ -175,13 +172,27 @@ func buildProviderRegistration(providerConfig config.ProviderConfig, source cred
 	}
 }
 
-// primaryCredentialRef returns the provider's first configured credential.
-func primaryCredentialRef(providerConfig config.ProviderConfig) (credential.Ref, error) {
-	refs := providerConfig.CredentialRefs()
-	if len(refs) == 0 {
-		return credential.Ref{}, execution.NewError(execution.CodeInternal, "providers.credential", 0, nil)
+// credentialAdapter builds the provider's adapter: a plain single-key
+// adapter, or a keypool over one adapter per pooled key.
+func credentialAdapter(providerConfig config.ProviderConfig, build func(credential.Ref) (execution.ProviderAdapter, error)) (execution.ProviderAdapter, error) {
+	configured := providerConfig.CredentialRefs()
+	if len(configured) == 0 {
+		return nil, execution.NewError(execution.CodeInternal, "providers.credential", 0, nil)
 	}
-	return credential.NewRef(credential.SourceEnv, refs[0].Name)
+	members := make([]execution.ProviderAdapter, len(configured))
+	for i, configuredRef := range configured {
+		ref, err := credential.NewRef(credential.SourceEnv, configuredRef.Name)
+		if err != nil {
+			return nil, err
+		}
+		if members[i], err = build(ref); err != nil {
+			return nil, err
+		}
+	}
+	if len(members) == 1 {
+		return members[0], nil
+	}
+	return keypool.New(members)
 }
 
 func (r *providerRuntime) summaries(ctx context.Context) ([]control.ProviderSummary, error) {
