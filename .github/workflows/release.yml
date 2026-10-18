@@ -11,10 +11,37 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
+  verify-tag:
+    name: Verify Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify tag is semver and reachable from main
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          # Verify tag matches semantic versioning format
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?(\+[0-9A-Za-z]+)?$'; then
+            echo "Error: tag '$tag' does not match semantic versioning format (v#.#.#)"
+            exit 1
+          fi
+          # Fetch main branch to verify tag commit is reachable from it
+          git fetch origin main --depth=1
+          # Verify tagged commit is reachable from origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Error: tagged commit is not reachable from origin/main branch"
+            exit 1
+          fi
+
   release:
     name: Release
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    needs: verify-tag
     permissions:
       contents: write
       id-token: write
@@ -32,7 +59,6 @@ jobs:
           cache: false
       - run: make ci
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      # GoReleaser's sboms step shells out to syft.
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         id: syft
       - name: Add syft to PATH

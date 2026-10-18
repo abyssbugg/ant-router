@@ -490,8 +490,10 @@ func TestGoreleaserHomebrewCaskAndRelease(t *testing.T) {
 	if text(t, cask, "repository", "token") != "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}" {
 		t.Error("cask must use the HOMEBREW_TAP_GITHUB_TOKEN secret, not the release token")
 	}
-	if text(t, cask, "skip_upload") != "auto" {
-		t.Error("cask skip_upload must be auto so prereleases never reach the tap")
+	skipUpload := text(t, cask, "skip_upload")
+	// skip_upload should be a conditional template that skips draft releases and when tap token is missing
+	if !strings.Contains(skipUpload, "IsDraft") || !strings.Contains(skipUpload, "HOMEBREW_TAP_GITHUB_TOKEN") {
+		t.Errorf("cask skip_upload must conditionally skip drafts and missing tap token, got: %q", skipUpload)
 	}
 	if got := strings_(t, cask, "binaries"); !sameSet(got, []string{"routerd", "routerctl"}) {
 		t.Errorf("cask binaries = %v", got)

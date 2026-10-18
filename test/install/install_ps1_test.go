@@ -288,6 +288,7 @@ func (h *ps1Harness) run(args ...string) (string, error) {
 	env = append(env,
 		"PATH="+h.binDir+string(os.PathListSeparator)+filepath.Dir(h.pwsh)+string(os.PathListSeparator)+system,
 		"PROCESSOR_ARCHITECTURE="+h.arch,
+		"ANT_ROUTER_INSECURE_SKIP_SIGNATURE=1",
 	)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()

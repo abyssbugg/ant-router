@@ -47,7 +47,7 @@ function Fail {
 
 function Invoke-Download {
     param([string]$Uri, [string]$OutFile)
-    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile
+    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile -MaximumRedirection 5
 }
 
 # Windows PowerShell 5.1 may default to TLS 1.0/1.1; GitHub requires 1.2+.
@@ -160,8 +160,14 @@ try {
                 Fail 'signature verification failed'
             }
         } else {
-            Write-Host 'Note: cosign not found; skipping signature verification (checksum is still verified).'
+            # Signature verification is required; allow override only with explicit insecure flag
+            if (-not $env:ANT_ROUTER_INSECURE_SKIP_SIGNATURE) {
+                Fail 'cosign not found; signature verification is required (install cosign or set ANT_ROUTER_INSECURE_SKIP_SIGNATURE=1 to accept this risk)'
+            }
+            Write-Host 'WARNING: Skipping signature verification (ANT_ROUTER_INSECURE_SKIP_SIGNATURE is set). This installation is not secure.'
         }
+    } elseif ($env:ANT_ROUTER_INSECURE_SKIP_SIGNATURE) {
+        Write-Host 'WARNING: Signature verification is disabled (ANT_ROUTER_INSECURE_SKIP_SIGNATURE is set). Checksum verification only.'
     }
 
     Write-Host 'Verifying checksum...'

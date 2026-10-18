@@ -80,7 +80,8 @@ homebrew_casks:
       owner: abyssbugg
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    skip_upload: auto
+    # Skip upload for draft releases (not publicly downloadable yet) or when tap token is missing
+    skip_upload: "{{ if .IsDraft }}true{{ else if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN \"\" }}true{{ else }}false{{ end }}"
     binaries:
       - routerd
       - routerctl

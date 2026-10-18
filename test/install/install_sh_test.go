@@ -203,6 +203,7 @@ func (h *harness) run(args ...string) (string, error) {
 	cmd.Env = []string{
 		"PATH=" + h.binDir + ":/usr/bin:/bin",
 		"HOME=" + h.dir,
+		"ANT_ROUTER_INSECURE_SKIP_SIGNATURE=1",
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err

@@ -112,8 +112,31 @@ else
 	die "curl or wget is required"
 fi
 
+# Validates that a URL uses HTTPS or loopback HTTP (for tests/local mirrors only).
+validate_url_scheme() {
+	# shellcheck disable=SC3043
+	local url="$1"
+	case "$url" in
+		https://?*) return 0 ;;
+		http://127.0.0.1*) return 0 ;;
+		http://localhost*) return 0 ;;
+		http://\[::1\]*) return 0 ;;
+		http://?*) 
+			die "URL redirected to insecure HTTP (only HTTPS or loopback HTTP allowed): $url"
+			;;
+		*) 
+			die "URL uses unsupported scheme: $url"
+			;;
+	esac
+}
+
 # download URL DEST
 download() {
+	# shellcheck disable=SC3043
+	local final_url
+	final_url=$(effective_url "$1") || die "failed to resolve final URL for: $1"
+	validate_url_scheme "$final_url"
+	
 	if [ "$DOWNLOADER" = "curl" ]; then
 		curl -fsSL --proto '=https,http' --connect-timeout 10 -o "$2" "$1"
 	else
@@ -184,8 +207,14 @@ if [ "$VERIFY_SIGNATURE" -eq 1 ]; then
 			--certificate-oidc-issuer "$OIDC_ISSUER" \
 			"$TEMP_DIR/checksums.txt" || die "signature verification failed"
 	else
-		echo "Note: cosign not found; skipping signature verification (checksum is still verified)."
+		# Signature verification is required; allow override only with explicit insecure flag
+		if [ -z "${ANT_ROUTER_INSECURE_SKIP_SIGNATURE:-}" ]; then
+			die "cosign not found; signature verification is required (install cosign or set ANT_ROUTER_INSECURE_SKIP_SIGNATURE=1 to accept this risk)"
+		fi
+		echo "WARNING: Skipping signature verification (ANT_ROUTER_INSECURE_SKIP_SIGNATURE is set). This installation is not secure."
 	fi
+elif [ -n "${ANT_ROUTER_INSECURE_SKIP_SIGNATURE:-}" ]; then
+	echo "WARNING: Signature verification is disabled (ANT_ROUTER_INSECURE_SKIP_SIGNATURE is set). Checksum verification only."
 fi
 
 echo "Verifying checksum..."
