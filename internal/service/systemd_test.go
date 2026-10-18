@@ -981,9 +981,10 @@ func TestSystemdInstallRefusesUnownedUnit(t *testing.T) {
 // TestSystemdStartRefusesUnownedAndIssuesNoCommand verifies Start refuses unowned units.
 func TestSystemdStartRefusesUnownedAndIssuesNoCommand(t *testing.T) {
 	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
 
 	// Create an unowned unit
-	unitsDir := filepath.Join(tmpDir, ".config", "systemd", "user")
+	unitsDir := filepath.Join(configDir, "systemd", "user")
 	if err := os.MkdirAll(unitsDir, 0755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -993,7 +994,7 @@ func TestSystemdStartRefusesUnownedAndIssuesNoCommand(t *testing.T) {
 	}
 
 	fake := newFakeRunner()
-	backend := NewSystemdBackend(tmpDir, fake)
+	backend := NewSystemdBackend(configDir, fake)
 
 	ctx := context.Background()
 	err := backend.Start(ctx, "com.test.app")
@@ -1012,9 +1013,10 @@ func TestSystemdStartRefusesUnownedAndIssuesNoCommand(t *testing.T) {
 // TestSystemdStopRefusesUnownedAndIssuesNoCommand verifies Stop refuses unowned units.
 func TestSystemdStopRefusesUnownedAndIssuesNoCommand(t *testing.T) {
 	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
 
 	// Create an unowned unit
-	unitsDir := filepath.Join(tmpDir, ".config", "systemd", "user")
+	unitsDir := filepath.Join(configDir, "systemd", "user")
 	if err := os.MkdirAll(unitsDir, 0755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -1024,7 +1026,7 @@ func TestSystemdStopRefusesUnownedAndIssuesNoCommand(t *testing.T) {
 	}
 
 	fake := newFakeRunner()
-	backend := NewSystemdBackend(tmpDir, fake)
+	backend := NewSystemdBackend(configDir, fake)
 
 	ctx := context.Background()
 	err := backend.Stop(ctx, "com.test.app")
@@ -1041,6 +1043,42 @@ func TestSystemdStopRefusesUnownedAndIssuesNoCommand(t *testing.T) {
 }
 
 // TestSystemdInstallCreatesLogDirectory verifies log directory is created.
+// TestSystemdStartReturnsMissingAsNotInstalled verifies Start returns ErrNotInstalled when unit doesn't exist.
+func TestSystemdStartReturnsMissingAsNotInstalled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	fake := &mockRunner{}
+	backend := NewSystemdBackend(configDir, fake)
+
+	ctx := context.Background()
+	err := backend.Start(ctx, "my-service")
+
+	// Should return ErrNotInstalled
+	var notInstalledErr ErrNotInstalled
+	if !errors.As(err, &notInstalledErr) {
+		t.Fatalf("Start: expected ErrNotInstalled, got %T: %v", err, err)
+	}
+}
+
+// TestSystemdStopReturnsMissingAsNotInstalled verifies Stop returns ErrNotInstalled when unit doesn't exist.
+func TestSystemdStopReturnsMissingAsNotInstalled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	fake := &mockRunner{}
+	backend := NewSystemdBackend(configDir, fake)
+
+	ctx := context.Background()
+	err := backend.Stop(ctx, "my-service")
+
+	// Should return ErrNotInstalled
+	var notInstalledErr ErrNotInstalled
+	if !errors.As(err, &notInstalledErr) {
+		t.Fatalf("Stop: expected ErrNotInstalled, got %T: %v", err, err)
+	}
+}
+
 func TestSystemdInstallCreatesLogDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	exe := filepath.Join(tmpDir, "app")

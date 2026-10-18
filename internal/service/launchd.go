@@ -265,15 +265,8 @@ func (b *LaunchdBackend) Start(ctx context.Context, label string) error {
 	plistPath := filepath.Join(agentsDir, label+".plist")
 
 	// Check if file exists and is owned
-	data, err := os.ReadFile(plistPath)
-	if err == nil {
-		if !bytes.Contains(data, []byte(OwnershipMarker)) {
-			return ErrNotOwned{Path: plistPath}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read plist: %w", err)
-	} else {
-		return ErrNotOwned{Path: plistPath}
+	if err := readOwnedDefinition(plistPath); err != nil {
+		return err
 	}
 
 	guid := "gui/" + strconv.Itoa(b.uid)
@@ -294,15 +287,8 @@ func (b *LaunchdBackend) Stop(ctx context.Context, label string) error {
 	plistPath := filepath.Join(agentsDir, label+".plist")
 
 	// Check if file exists and is owned
-	data, err := os.ReadFile(plistPath)
-	if err == nil {
-		if !bytes.Contains(data, []byte(OwnershipMarker)) {
-			return ErrNotOwned{Path: plistPath}
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read plist: %w", err)
-	} else {
-		return ErrNotOwned{Path: plistPath}
+	if err := readOwnedDefinition(plistPath); err != nil {
+		return err
 	}
 
 	guid := "gui/" + strconv.Itoa(b.uid)

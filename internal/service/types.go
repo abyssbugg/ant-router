@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -67,6 +68,15 @@ func (e ErrNotOwned) Error() string {
 	return fmt.Sprintf("file not owned by service: %s", e.Path)
 }
 
+// ErrNotInstalled is returned when a service definition file does not exist.
+type ErrNotInstalled struct {
+	Path string
+}
+
+func (e ErrNotInstalled) Error() string {
+	return fmt.Sprintf("service definition %s is not installed", e.Path)
+}
+
 // ErrInvalidLabel is returned when a label is invalid.
 type ErrInvalidLabel struct {
 	Label  string
@@ -126,6 +136,25 @@ func ValidateLabel(label string) error {
 		}
 	}
 
+	return nil
+}
+
+// readOwnedDefinition checks if a service definition file exists and is owned.
+// Returns nil if file exists and contains OwnershipMarker.
+// Returns ErrNotInstalled if file does not exist.
+// Returns ErrNotOwned if file exists but does not contain OwnershipMarker.
+// Returns wrapped error for other read errors.
+func readOwnedDefinition(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotInstalled{Path: path}
+		}
+		return fmt.Errorf("read definition: %w", err)
+	}
+	if !bytes.Contains(data, []byte(OwnershipMarker)) {
+		return ErrNotOwned{Path: path}
+	}
 	return nil
 }
 

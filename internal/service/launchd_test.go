@@ -849,6 +849,50 @@ func TestLaunchdStopRefusesUnownedAndIssuesNoCommand(t *testing.T) {
 }
 
 // TestLaunchdInstallPropagatesBootoutError verifies real bootout errors are propagated.
+// TestLaunchdStartReturnsMissingAsNotInstalled verifies Start returns ErrNotInstalled when plist doesn't exist.
+func TestLaunchdStartReturnsMissingAsNotInstalled(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	fake := newFakeRunner()
+	backend := NewLaunchdBackend(tmpDir, 501, fake)
+
+	ctx := context.Background()
+	err := backend.Start(ctx, "com.test.app")
+
+	// Should return ErrNotInstalled
+	var notInstalledErr ErrNotInstalled
+	if !errors.As(err, &notInstalledErr) {
+		t.Fatalf("Start: expected ErrNotInstalled, got %T: %v", err, err)
+	}
+
+	// No launchctl commands should have been recorded
+	if len(fake.calls) != 0 {
+		t.Errorf("Start issued commands despite file missing: %v", fake.calls)
+	}
+}
+
+// TestLaunchdStopReturnsMissingAsNotInstalled verifies Stop returns ErrNotInstalled when plist doesn't exist.
+func TestLaunchdStopReturnsMissingAsNotInstalled(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	fake := newFakeRunner()
+	backend := NewLaunchdBackend(tmpDir, 501, fake)
+
+	ctx := context.Background()
+	err := backend.Stop(ctx, "com.test.app")
+
+	// Should return ErrNotInstalled
+	var notInstalledErr ErrNotInstalled
+	if !errors.As(err, &notInstalledErr) {
+		t.Fatalf("Stop: expected ErrNotInstalled, got %T: %v", err, err)
+	}
+
+	// No launchctl commands should have been recorded
+	if len(fake.calls) != 0 {
+		t.Errorf("Stop issued commands despite file missing: %v", fake.calls)
+	}
+}
+
 func TestLaunchdInstallPropagatesBootoutError(t *testing.T) {
 	tmpDir := t.TempDir()
 	exe := filepath.Join(tmpDir, "app")
