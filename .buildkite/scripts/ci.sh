@@ -83,7 +83,9 @@ case "$mode" in
     install_node
     prefix="$(mktemp -d "${TMPDIR:-/tmp}/ant-router-codex.XXXXXX")"
     cp .github/codex-cli/package.json .github/codex-cli/package-lock.json "$prefix/"
-    npm ci --ignore-scripts --prefix "$prefix"
+    # Run inside the directory: on macOS `npm ci --prefix <dir>` resolves the
+    # lockfile against the wrong root and fails with EUSAGE.
+    (cd "$prefix" && npm ci --ignore-scripts)
     export PATH="${prefix}/node_modules/.bin:${PATH}"
     # The E2E test skips when codex is absent; a skip is not evidence.
     require codex
@@ -98,10 +100,6 @@ case "$mode" in
     done
     ;;
   installer)
-    if [[ ! -d test/install ]]; then
-      echo "This revision has no installer tests (test/install); nothing to run."
-      exit 0
-    fi
     # Installer tests skip when a tool is missing; in CI every tool must exist
     # so that both the curl and wget download paths and install.ps1 run.
     if [[ "$(uname -s)" == Darwin ]]; then
@@ -115,8 +113,13 @@ case "$mode" in
     # shellcheck disable=SC2016 # PowerShell expression, intentionally unexpanded.
     pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
     shellcheck --version | sed -n 2p
+    shellcheck -x .buildkite/scripts/*.sh
+    if [[ ! -d test/install ]]; then
+      echo "This revision has no installer tests (test/install); CI scripts linted only."
+      exit 0
+    fi
     shellcheck scripts/*.sh
-    ANT_ROUTER_REQUIRE_INSTALL_TOOLS=1 go test ./test/install/... -count=1 -v
+    ANT_ROUTER_REQUIRE_INSTALL_TOOLS=all go test ./test/install/... -count=1 -v
     ;;
   *)
     die "usage: ci.sh quality|platform|codex-e2e|fuzz|installer"
