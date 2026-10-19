@@ -11,22 +11,32 @@ const maxOutputSize = 64 * 1024 // 64 KiB
 // ExecRunner implements Runner using os/exec.
 type ExecRunner struct{}
 
-// permittedCommands are the only programs the service backends run. Fixing
-// the program name keeps ExecRunner from becoming a general command runner;
-// arguments are passed as a vector and never through a shell.
-var permittedCommands = map[string]bool{"launchctl": true, "systemctl": true}
-
 // Run executes launchctl or systemctl with bounded output (64 KiB per stream).
 func (r *ExecRunner) Run(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error) {
-	if !permittedCommands[name] {
-		return nil, nil, fmt.Errorf("command %q is not permitted", name)
+	cmd, err := serviceCommand(ctx, name, args...)
+	if err != nil {
+		return nil, nil, err
 	}
-	return runBounded(ctx, name, args...)
+	return runBounded(cmd)
 }
 
-func runBounded(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error) {
-	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- name is from permittedCommands
+// serviceCommand is the only place this package builds an *exec.Cmd. The
+// program is always a string literal (launchctl or systemctl) so ExecRunner
+// can never become a general command runner; arguments are passed as a
+// vector and never through a shell.
+func serviceCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
+	switch name {
+	case "launchctl":
+		return exec.CommandContext(ctx, "launchctl", args...), nil
+	case "systemctl":
+		return exec.CommandContext(ctx, "systemctl", args...), nil
+	default:
+		return nil, fmt.Errorf("command %q is not permitted", name)
+	}
+}
 
+// runBounded runs cmd, keeping at most maxOutputSize bytes of each stream.
+func runBounded(cmd *exec.Cmd) (stdout, stderr []byte, err error) {
 	// Use a bounded writer for each stream; excess is discarded.
 	outBuf := &boundedBuffer{limit: maxOutputSize}
 	errBuf := &boundedBuffer{limit: maxOutputSize}

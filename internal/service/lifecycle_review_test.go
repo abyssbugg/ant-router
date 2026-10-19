@@ -423,3 +423,20 @@ func TestSystemdLifecycleSerializedPerLabel(t *testing.T) {
 		t.Fatalf("Uninstall did not complete after Install: %v", calls)
 	}
 }
+
+// The allowlist must be enforced where the *exec.Cmd is built, not only in
+// ExecRunner.Run, so no in-package caller can construct an arbitrary command.
+func TestServiceCommandOnlyBuildsServiceManagers(t *testing.T) {
+	if _, err := serviceCommand(context.Background(), "sh", "-c", "true"); err == nil || !strings.Contains(err.Error(), "not permitted") {
+		t.Fatalf("serviceCommand(sh) = %v, want not permitted", err)
+	}
+	for _, name := range []string{"launchctl", "systemctl"} {
+		cmd, err := serviceCommand(context.Background(), name, "--version")
+		if err != nil {
+			t.Fatalf("serviceCommand(%s): %v", name, err)
+		}
+		if got := filepath.Base(cmd.Args[0]); got != name || len(cmd.Args) != 2 || cmd.Args[1] != "--version" {
+			t.Fatalf("serviceCommand(%s).Args = %q", name, cmd.Args)
+		}
+	}
+}

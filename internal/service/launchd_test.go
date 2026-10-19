@@ -382,18 +382,12 @@ func TestValidateLabelTooLong(t *testing.T) {
 
 // TestExecRunnerBoundedOutput tests that ExecRunner caps output at 64 KiB.
 func TestExecRunnerBoundedOutput(t *testing.T) {
-	runner := &ExecRunner{}
-	ctx := context.Background()
-
-	// Run a command that outputs >64KiB (if possible)
-	// Use dd to generate large output
-	_ = runner
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
-	// runBounded is the exec path behind ExecRunner.Run, which itself only
-	// permits launchctl and systemctl.
-	stdout, _, err := runBounded(ctx, "sh", "-c", "dd if=/dev/zero bs=1000 count=100 2>/dev/null")
+	// runBounded is the output-capture half of ExecRunner.Run; the program
+	// allowlist lives in serviceCommand, so the test builds its own command.
+	stdout, _, err := runBounded(exec.Command("sh", "-c", "dd if=/dev/zero bs=1000 count=100 2>/dev/null"))
 	if err != nil {
 		t.Fatalf("runBounded: %v", err)
 	}
