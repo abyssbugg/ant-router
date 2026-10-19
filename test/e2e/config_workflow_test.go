@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -74,11 +75,20 @@ func startDaemon(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instan
 		// After stop() the exec copy goroutine has finished, so reading the
 		// buffer is race-free. Daemon diagnostics (including recovered handler
 		// panics) are otherwise lost when a client sees a dropped connection.
-		if t.Failed() && process.stderr.Len() > 0 {
-			t.Logf("routerd (pid %d) stderr:\n%s", process.command.Process.Pid, process.stderr.String())
+		if report := daemonFailureReport(t.Failed(), process.command.Process.Pid, process.stderr.Bytes()); report != "" {
+			t.Log(report)
 		}
 	})
 	return process
+}
+
+// daemonFailureReport returns the routerd diagnostics to log for a test, or
+// "" when the test passed or the daemon wrote nothing.
+func daemonFailureReport(failed bool, pid int, stderr []byte) string {
+	if !failed || len(stderr) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("routerd (pid %d) stderr:\n%s", pid, stderr)
 }
 
 func (p *daemonProcess) stop() {
