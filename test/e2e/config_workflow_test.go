@@ -70,12 +70,13 @@ func startDaemon(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instan
 	if err := process.command.Start(); err != nil {
 		t.Fatalf("routerd start failed: %v", err)
 	}
+	pid := process.command.Process.Pid
 	t.Cleanup(func() {
 		process.stop()
 		// After stop() the exec copy goroutine has finished, so reading the
 		// buffer is race-free. Daemon diagnostics (including recovered handler
 		// panics) are otherwise lost when a client sees a dropped connection.
-		if report := daemonFailureReport(t.Failed(), process.command.Process.Pid, process.stderr.Bytes()); report != "" {
+		if report := daemonFailureReport(t.Failed(), pid, process.stderr.Bytes()); report != "" {
 			t.Log(report)
 		}
 	})

@@ -15,8 +15,10 @@ func TestDaemonFailureReportOnlyOnFailureWithOutput(t *testing.T) {
 		{"failed without output", true, "", ""},
 		{"failed with output", true, "http: panic serving\n", "routerd (pid 42) stderr:\nhttp: panic serving\n"},
 	} {
-		if got := daemonFailureReport(tc.failed, 42, []byte(tc.stderr)); got != tc.want {
-			t.Errorf("%s: daemonFailureReport() = %q, want %q", tc.name, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := daemonFailureReport(tc.failed, 42, []byte(tc.stderr)); got != tc.want {
+				t.Errorf("daemonFailureReport() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
