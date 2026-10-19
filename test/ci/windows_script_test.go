@@ -38,11 +38,17 @@ func TestWindowsScriptPinsAndVerifiesToolchainArchive(t *testing.T) {
 	if !url.MatchString(script) {
 		t.Fatal("windows.ps1 must download MinGW-w64 from a pinned GitHub release URL")
 	}
-	sha := regexp.MustCompile(`'[0-9a-f]{64}'`)
+	sha := regexp.MustCompile(`(?m)^\$mingwSha256\s*=\s*'[0-9a-f]{64}'\s*$`)
 	if !sha.MatchString(script) {
-		t.Fatal("windows.ps1 must pin the archive SHA-256")
+		t.Fatal("windows.ps1 must pin the archive SHA-256 in $mingwSha256")
 	}
-	for _, want := range []string{"Get-FileHash", "-Algorithm SHA256", "mingw32-make.exe"} {
+	// The pin is only meaningful if the computed hash is compared against it
+	// and a mismatch aborts the job.
+	hashCheck := regexp.MustCompile(`(?s)\$actualSha256\s*=\s*\(Get-FileHash\s+-LiteralPath\s+\$mingwArchive\s+-Algorithm\s+SHA256\)\.Hash\.ToLowerInvariant\(\)\s+if\s*\(\$actualSha256\s+-ne\s+\$mingwSha256\)\s*\{\s*throw\b`)
+	if !hashCheck.MatchString(script) {
+		t.Fatal("windows.ps1 must compare the computed archive SHA-256 and throw on mismatch")
+	}
+	for _, want := range []string{"mingw32-make.exe"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("windows.ps1 must contain %q", want)
 		}
