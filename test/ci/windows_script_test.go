@@ -61,6 +61,15 @@ func TestWindowsScriptPinsAndVerifiesToolchainArchive(t *testing.T) {
 	if hashAt := hashCheck.FindStringIndex(script); hashAt[0] > extractAt[0] {
 		t.Fatal("windows.ps1 must verify the archive SHA-256 before extracting it")
 	}
+	// The bin directory must be the one inside the verified, extracted archive.
+	extractTarget := regexp.MustCompile(`(?m)^Invoke-Native \$sevenZip @\('x',[^\n]*"-o\$toolsDir",\s*\$mingwArchive\)\s*$`)
+	if !extractTarget.MatchString(script) {
+		t.Fatal("windows.ps1 must extract the verified archive into $toolsDir")
+	}
+	binResolve := regexp.MustCompile(`(?m)^\$mingwBin\s*=\s*Join-Path\s+\$toolsDir\s+'mingw64\\bin'\s*$`)
+	if !binResolve.MatchString(script) {
+		t.Fatal("windows.ps1 must resolve $mingwBin to mingw64\\bin inside the extracted archive")
+	}
 	makeResolve := regexp.MustCompile(`(?m)^\$make\s*=\s*Join-Path\s+\$mingwBin\s+'mingw32-make\.exe'\s*$`)
 	if !makeResolve.MatchString(script) {
 		t.Fatal("windows.ps1 must resolve mingw32-make.exe from the pinned MinGW bin directory")
