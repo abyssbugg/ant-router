@@ -1,0 +1,23 @@
+version: 2.1
+
+# Native Windows verification. Buildkite (.buildkite/pipeline.yml) runs the
+# Linux and macOS gates; its cluster has no hosted Windows queue, so the
+# Windows job of .github/workflows/ci.yml runs here instead.
+
+jobs:
+  windows:
+    machine:
+      image: windows-server-2022-gui:current
+    resource_class: windows.medium
+    shell: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+    steps:
+      - checkout
+      - run:
+          name: Native Windows tests
+          no_output_timeout: 15m
+          command: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .circleci/scripts/windows.ps1
+
+workflows:
+  windows:
+    jobs:
+      - windows
