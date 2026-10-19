@@ -52,8 +52,9 @@ for ($attempt = 1; $attempt -le 4 -and -not $downloaded; $attempt++) {
 }
 $actualSha256 = (Get-FileHash -LiteralPath $mingwArchive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualSha256 -ne $mingwSha256) { throw "MinGW archive SHA-256 mismatch: $actualSha256" }
-$sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue).Source
-if (-not $sevenZip) { $sevenZip = 'C:\Program Files\7-Zip\7z.exe' }
+# StrictMode forbids reading .Source from a missing command, so test first.
+$sevenZipCommand = Get-Command 7z -ErrorAction SilentlyContinue
+$sevenZip = if ($sevenZipCommand) { $sevenZipCommand.Source } else { 'C:\Program Files\7-Zip\7z.exe' }
 if (-not (Test-Path -LiteralPath $sevenZip -PathType Leaf)) { throw '7-Zip not found' }
 Invoke-Native $sevenZip @('x', '-y', '-bso0', "-o$toolsDir", $mingwArchive)
 $mingwBin = Join-Path $toolsDir 'mingw64\bin'

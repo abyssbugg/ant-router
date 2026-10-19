@@ -17,10 +17,14 @@ func readWindowsScript(t *testing.T) string {
 	return string(data)
 }
 
+// blockComment matches PowerShell <# ... #> comments, which document rather
+// than execute.
+var blockComment = regexp.MustCompile(`(?s)<#.*?#>`)
+
 // The Chocolatey community feed is an unauthenticated third-party service with
 // recurring outages (HTTP 503); a CI gate must not depend on it.
 func TestWindowsScriptDoesNotDependOnChocolatey(t *testing.T) {
-	script := readWindowsScript(t)
+	script := blockComment.ReplaceAllString(readWindowsScript(t), "")
 	for _, line := range strings.Split(script, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
@@ -34,7 +38,8 @@ func TestWindowsScriptDoesNotDependOnChocolatey(t *testing.T) {
 
 func TestWindowsScriptPinsAndVerifiesToolchainArchive(t *testing.T) {
 	script := readWindowsScript(t)
-	url := regexp.MustCompile(`'https://github\.com/niXman/mingw-builds-binaries/releases/download/[^']+\.7z'`)
+	// Exact release and asset: changing either must come with a new SHA-256.
+	url := regexp.MustCompile(`(?m)^\$mingwUrl\s*=\s*'https://github\.com/niXman/mingw-builds-binaries/releases/download/13\.2\.0-rt_v11-rev1/x86_64-13\.2\.0-release-posix-seh-ucrt-rt_v11-rev1\.7z'\s*$`)
 	if !url.MatchString(script) {
 		t.Fatal("windows.ps1 must download MinGW-w64 from a pinned GitHub release URL")
 	}
