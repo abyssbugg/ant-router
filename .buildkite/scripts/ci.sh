@@ -115,7 +115,7 @@ case "$mode" in
     shellcheck --version | sed -n 2p
     shellcheck -x .buildkite/scripts/*.sh
     if compgen -G '.circleci/scripts/*.sh' >/dev/null; then
-      shellcheck .circleci/scripts/*.sh
+      shellcheck -x .circleci/scripts/*.sh
     fi
     if [[ ! -d test/install ]]; then
       echo "This revision has no installer tests (test/install); CI scripts linted only."

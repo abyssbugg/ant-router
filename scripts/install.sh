@@ -143,12 +143,24 @@ case "$(uname -m)" in
 	*) die "unsupported architecture: $(uname -m)" ;;
 esac
 
+# wget_supported reports whether wget offers the long options fetch_once
+# uses; BusyBox and other minimal builds may lack or reject them.
+wget_supported() {
+	wget_help="$(wget --help 2>&1 || true)"
+	for option in --max-redirect --timeout --tries; do
+		case "$wget_help" in
+			*"$option"*) ;;
+			*) return 1 ;;
+		esac
+	done
+}
+
 if command -v curl >/dev/null 2>&1; then
 	DOWNLOADER="curl"
-elif command -v wget >/dev/null 2>&1; then
+elif command -v wget >/dev/null 2>&1 && wget_supported; then
 	DOWNLOADER="wget"
 else
-	die "curl or wget is required"
+	die "curl or a wget supporting --max-redirect, --timeout and --tries is required (install curl or GNU wget)"
 fi
 
 # fetch_once URL DEST performs one request without following redirects and

@@ -8,10 +8,12 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -465,8 +467,11 @@ func TestGoreleaserSignsChecksumsWithKeylessCosignBundle(t *testing.T) {
 		t.Fatalf("signs = %d entries, want 1", len(signs))
 	}
 	sign := signs[0]
-	if text(t, sign, "cmd") != "cosign" {
-		t.Errorf("signs.cmd = %q, want the cosign executable", text(t, sign, "cmd"))
+	// GoReleaser publishes only after every sign command succeeds, so the
+	// wrapper verifies the bundle against the installer identity before
+	// anything becomes public.
+	if text(t, sign, "cmd") != "bash" {
+		t.Errorf("signs.cmd = %q, want bash running the sign-and-verify wrapper", text(t, sign, "cmd"))
 	}
 	if text(t, sign, "artifacts") != "checksum" {
 		t.Error("signs must target the checksum file")
@@ -475,9 +480,69 @@ func TestGoreleaserSignsChecksumsWithKeylessCosignBundle(t *testing.T) {
 	if signature != "${artifact}.sigstore.json" {
 		t.Errorf("signs.signature = %q, want ${artifact}.sigstore.json", signature)
 	}
-	want := []string{"sign-blob", "--yes", "--bundle=${signature}", "${artifact}"}
+	want := []string{".circleci/scripts/sign-and-verify.sh", "${artifact}", "${signature}"}
 	if got := strings_(t, sign, "args"); !slices.Equal(got, want) {
 		t.Errorf("signs.args = %v, want %v", got, want)
+	}
+}
+
+// runSignAndVerify executes sign-and-verify.sh with a stub cosign whose
+// verify-blob exit status is verifyExit.
+func runSignAndVerify(t *testing.T, verifyExit int, args ...string) ([]string, string, error) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("sign-and-verify.sh runs on the Linux release image")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls.log")
+	cosign := "#!/bin/sh\nprintf '%s\\n' \"cosign $*\" >> \"$CALLS\"\n" +
+		"case \"$1\" in verify-blob) exit " + strconv.Itoa(verifyExit) + " ;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "cosign"), []byte(cosign), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bash, append([]string{filepath.Join(repoRoot(t), ".circleci", "scripts", "sign-and-verify.sh")}, args...)...)
+	cmd.Env = []string{"PATH=" + dir + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin", "CALLS=" + calls}
+	output, runErr := cmd.CombinedOutput()
+	var logged []string
+	if data, err := os.ReadFile(calls); err == nil {
+		logged = strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+	return logged, string(output), runErr
+}
+
+func TestSignAndVerifySignsThenVerifiesWithInstallerIdentity(t *testing.T) {
+	calls, output, err := runSignAndVerify(t, 0, "dist/checksums.txt", "dist/checksums.txt.sigstore.json")
+	if err != nil {
+		t.Fatalf("sign-and-verify.sh failed: %v\n%s", err, output)
+	}
+	want := []string{
+		"cosign sign-blob --yes --bundle=dist/checksums.txt.sigstore.json dist/checksums.txt",
+		"cosign verify-blob --bundle dist/checksums.txt.sigstore.json --certificate-identity " + releaseCertificateIdentity + " --certificate-oidc-issuer " + releaseOIDCIssuer + " dist/checksums.txt",
+	}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("cosign calls = %q, want %q", calls, want)
+	}
+}
+
+func TestSignAndVerifyFailsWhenVerificationFails(t *testing.T) {
+	if _, output, err := runSignAndVerify(t, 1, "dist/checksums.txt", "dist/checksums.txt.sigstore.json"); err == nil {
+		t.Fatalf("sign-and-verify.sh succeeded although verify-blob failed\n%s", output)
+	}
+}
+
+func TestSignAndVerifyRejectsWrongArgumentCountBeforeSigning(t *testing.T) {
+	for _, args := range [][]string{nil, {"dist/checksums.txt"}, {"a", "b", "c"}, {"", "dist/x.sigstore.json"}} {
+		calls, output, err := runSignAndVerify(t, 0, args...)
+		if err == nil {
+			t.Errorf("args %q: sign-and-verify.sh succeeded\n%s", args, output)
+		}
+		if len(calls) != 0 {
+			t.Errorf("args %q: cosign ran before argument validation: %q", args, calls)
+		}
 	}
 }
 

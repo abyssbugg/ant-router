@@ -240,6 +240,29 @@ esac
 func (h *harness) useWget() {
 	h.t.Helper()
 	wget := lookTool(h.t, "wget")
+	h.hideDownloaders()
+	// The shim records each call so tests can prove wget did the download.
+	h.writeExe("wget", fmt.Sprintf("#!/bin/sh\necho call >> %q\nexec %q \"$@\"\n", h.wgetLog(), wget))
+}
+
+// useLimitedWget hides curl and installs a BusyBox-style wget whose help
+// lacks the long options fetch_once needs and which rejects them.
+func (h *harness) useLimitedWget() {
+	h.t.Helper()
+	h.hideDownloaders()
+	h.writeExe("wget", fmt.Sprintf(`#!/bin/sh
+echo call >> %q
+case "$1" in
+  --help) echo "BusyBox v1.36.1 multi-call binary." >&2; echo "Usage: wget [-cqS] [-O FILE] [-T SEC] URL..." >&2; exit 1 ;;
+  *) echo "wget: unrecognized option '$1'" >&2; exit 1 ;;
+esac
+`, h.wgetLog()))
+}
+
+// hideDownloaders replaces the system directories with one directory of
+// symlinks that omits curl and wget.
+func (h *harness) hideDownloaders() {
+	h.t.Helper()
 	sys := filepath.Join(h.dir, "sysbin")
 	if err := os.Mkdir(sys, 0o755); err != nil {
 		h.t.Fatal(err)
@@ -263,8 +286,6 @@ func (h *harness) useWget() {
 			}
 		}
 	}
-	// The shim records each call so tests can prove wget did the download.
-	h.writeExe("wget", fmt.Sprintf("#!/bin/sh\necho call >> %q\nexec %q \"$@\"\n", h.wgetLog(), wget))
 	h.sysPath = sys
 }
 
@@ -847,6 +868,20 @@ func TestInstallScriptWithWget(t *testing.T) {
 
 // TestInstallScriptUnreachableHost requires a clear download error, not an
 // empty HTTP status, when no server answers (curl and wget).
+// A wget without --max-redirect/--timeout/--tries (e.g. BusyBox) cannot
+// perform fetch_once; the installer must say so instead of reporting a
+// generic download failure.
+func TestInstallScriptRejectsWgetWithoutRequiredOptions(t *testing.T) {
+	h := newHarness(t, "Linux", "x86_64")
+	h.useLimitedWget()
+	out, err := h.run("--install-dir", h.installDir, "--version", testVersion)
+	expectFailure(t, out, err, "curl or a wget supporting --max-redirect, --timeout and --tries is required")
+	if strings.Contains(out, "failed to download") {
+		t.Fatalf("installer attempted a download with an incompatible wget:\n%s", out)
+	}
+	h.assertNothingInstalled()
+}
+
 func TestInstallScriptUnreachableHost(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

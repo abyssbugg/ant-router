@@ -2,17 +2,15 @@
 # Builds, signs and publishes the release for $CIRCLE_TAG.
 #
 # Order: validate the tag, require the tagged commit to be on main, run the
-# full local gate (make ci), obtain a CircleCI OIDC token for Sigstore,
-# run GoReleaser (build, SBOM, keyless signature, GitHub release, cask),
-# then verify the produced signature with exactly the identity the
-# installers enforce. Nothing is built for a tag that fails validation.
+# full local gate (make ci) without publishing credentials, obtain a
+# CircleCI OIDC token for Sigstore, run GoReleaser (build, SBOM, keyless
+# signature verified by sign-and-verify.sh before anything is published,
+# GitHub release, cask), then verify the published signature again.
+# Nothing is built for a tag that fails validation.
 set -euo pipefail
 
-# The identity is this project's tag-only "release" pipeline definition.
-CIRCLECI_PROJECT_ID=cc5f04e8-66e9-4f18-91b0-71c671674d14
-RELEASE_PIPELINE_DEFINITION=b37a0ec3-4a25-4686-b480-6b4eda16099f
-CERT_IDENTITY="https://circleci.com/api/v2/projects/${CIRCLECI_PROJECT_ID}/pipeline-definitions/${RELEASE_PIPELINE_DEFINITION}"
-OIDC_ISSUER="https://oidc.circleci.com"
+# shellcheck source=.circleci/scripts/release-identity.sh
+. "$(dirname "${BASH_SOURCE[0]}")/release-identity.sh"
 
 die() {
 	echo "release: $*" >&2
@@ -35,7 +33,8 @@ sha="${CIRCLE_SHA1:-}"
 git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 git merge-base --is-ancestor "$sha" refs/remotes/origin/main || die "tagged commit $sha is not reachable from origin/main"
 
-make ci
+# The CI gate needs no publishing credentials.
+env -u GITHUB_TOKEN -u HOMEBREW_TAP_GITHUB_TOKEN make ci
 
 # Fulcio accepts CircleCI's root-issuer token with the sigstore audience.
 SIGSTORE_ID_TOKEN="$(circleci run oidc get --claims '{"aud":"sigstore"}' --root-issuer)"
@@ -48,6 +47,7 @@ fi
 
 goreleaser release --clean
 
+# Second line of defense: the published bundle must still verify.
 cosign verify-blob \
 	--bundle dist/checksums.txt.sigstore.json \
 	--certificate-identity "$CERT_IDENTITY" \

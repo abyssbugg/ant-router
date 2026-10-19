@@ -218,7 +218,32 @@ type releaseRun struct {
 // runReleaseScript executes release.sh with stub git, make, goreleaser,
 // circleci and cosign executables that log their arguments, so the script's
 // gating and ordering are tested without publishing anything.
+// releaseScenario configures the stubs and environment of one release.sh
+// run; the zero value of every field except tag and onMain is the happy path.
+type releaseScenario struct {
+	tag            string
+	onMain         bool
+	projectID      string // "" means the real project
+	noToken        bool
+	emptyOIDC      bool
+	makeFails      bool
+	goreleaserFail bool
+	cosignFails    bool
+}
+
 func runReleaseScript(t *testing.T, tag string, onMain bool) releaseRun {
+	t.Helper()
+	return runReleaseScenario(t, releaseScenario{tag: tag, onMain: onMain})
+}
+
+func exitStatus(fail bool) string {
+	if fail {
+		return "exit 1\n"
+	}
+	return "exit 0\n"
+}
+
+func runReleaseScenario(t *testing.T, scenario releaseScenario) releaseRun {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("release.sh runs on the Linux release image")
@@ -240,26 +265,39 @@ func runReleaseScript(t *testing.T, tag string, onMain bool) releaseRun {
 		}
 	}
 	ancestor := "exit 1"
-	if onMain {
+	if scenario.onMain {
 		ancestor = "exit 0"
 	}
 	stub("git", `case "$1" in merge-base) `+ancestor+` ;; esac
 exit 0
 `)
-	stub("make", "exit 0\n")
-	stub("circleci", "printf 'stub-oidc-token'\n")
-	stub("goreleaser", "exit 0\n")
-	stub("cosign", "exit 0\n")
+	// make records whether the publishing tokens reached the CI gate.
+	stub("make", `printf 'make-env GITHUB_TOKEN=%s HOMEBREW_TAP_GITHUB_TOKEN=%s\n' "${GITHUB_TOKEN:-unset}" "${HOMEBREW_TAP_GITHUB_TOKEN:-unset}" >> "$CALLS"
+`+exitStatus(scenario.makeFails))
+	oidc := "printf 'stub-oidc-token'\n"
+	if scenario.emptyOIDC {
+		oidc = "exit 0\n"
+	}
+	stub("circleci", oidc)
+	stub("goreleaser", exitStatus(scenario.goreleaserFail))
+	stub("cosign", exitStatus(scenario.cosignFails))
+	projectID := scenario.projectID
+	if projectID == "" {
+		projectID = circleciProjectID
+	}
 	cmd := exec.Command(bash, filepath.Join(repoRoot(t), ".circleci", "scripts", "release.sh"))
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"PATH=" + bin + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin",
 		"HOME=" + dir,
 		"CALLS=" + log,
-		"CIRCLE_TAG=" + tag,
+		"CIRCLE_TAG=" + scenario.tag,
 		"CIRCLE_SHA1=0123456789abcdef0123456789abcdef01234567",
-		"CIRCLE_PROJECT_ID=" + circleciProjectID,
-		"GITHUB_TOKEN=stub-release-token",
+		"CIRCLE_PROJECT_ID=" + projectID,
+		"HOMEBREW_TAP_GITHUB_TOKEN=stub-tap-token",
+	}
+	if !scenario.noToken {
+		cmd.Env = append(cmd.Env, "GITHUB_TOKEN=stub-release-token")
 	}
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
@@ -281,8 +319,8 @@ func TestReleaseScriptRejectsInvalidTagsBeforeBuilding(t *testing.T) {
 		if run.err == nil {
 			t.Errorf("tag %q: release.sh succeeded, want rejection", tag)
 		}
-		for _, tool := range []string{"make", "goreleaser", "cosign", "circleci"} {
-			if callIndex(run.calls, tool) >= 0 {
+		for _, tool := range []string{"git", "make", "goreleaser", "cosign", "circleci"} {
+			if callIndex(run.calls, tool+" ") >= 0 {
 				t.Errorf("tag %q: %s ran before the tag was validated: %v", tag, tool, run.calls)
 			}
 		}
@@ -325,6 +363,52 @@ func TestReleaseScriptGatesSignsPublishesAndVerifies(t *testing.T) {
 			t.Fatalf("call %q out of order in %v", want, run.calls)
 		}
 		last = index
+	}
+}
+
+// Each gate must stop the release and keep every later tool from running.
+func TestReleaseScriptFailsClosedAtEveryGate(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		scenario   releaseScenario
+		wantOutput string
+		notRun     []string
+	}{
+		{"foreign project", releaseScenario{projectID: "00000000-0000-0000-0000-000000000000"}, "unexpected CircleCI project", []string{"git ", "make ", "circleci ", "goreleaser ", "cosign "}},
+		{"missing GITHUB_TOKEN", releaseScenario{noToken: true}, "GITHUB_TOKEN is not set", []string{"git ", "make ", "circleci ", "goreleaser ", "cosign "}},
+		{"make ci fails", releaseScenario{makeFails: true}, "", []string{"circleci ", "goreleaser ", "cosign "}},
+		{"empty OIDC token", releaseScenario{emptyOIDC: true}, "could not obtain a CircleCI OIDC token", []string{"goreleaser ", "cosign "}},
+		{"goreleaser fails", releaseScenario{goreleaserFail: true}, "", []string{"cosign "}},
+		{"post-publish verification fails", releaseScenario{cosignFails: true}, "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.scenario.tag, tc.scenario.onMain = "v1.2.3", true
+			run := runReleaseScenario(t, tc.scenario)
+			if run.err == nil {
+				t.Fatalf("release.sh succeeded; calls %q", run.calls)
+			}
+			if !strings.Contains(run.output, tc.wantOutput) {
+				t.Errorf("output %q does not contain %q", run.output, tc.wantOutput)
+			}
+			for _, tool := range tc.notRun {
+				if callIndex(run.calls, tool) >= 0 {
+					t.Errorf("%sran after the failed gate: %q", tool, run.calls)
+				}
+			}
+		})
+	}
+}
+
+// The verification, test, fuzz and e2e processes of make ci do not need
+// publishing credentials and must not see them.
+func TestReleaseScriptHidesPublishingTokensFromCI(t *testing.T) {
+	run := runReleaseScript(t, "v1.2.3", true)
+	if run.err != nil {
+		t.Fatalf("release.sh failed: %v\n%s", run.err, run.output)
+	}
+	want := "make-env GITHUB_TOKEN=unset HOMEBREW_TAP_GITHUB_TOKEN=unset"
+	if !slices.Contains(run.calls, want) {
+		t.Fatalf("make ci saw publishing tokens; calls %q", run.calls)
 	}
 }
 

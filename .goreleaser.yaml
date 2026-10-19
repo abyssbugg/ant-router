@@ -69,13 +69,14 @@ sboms:
 # --certificate-oidc-issuer https://oidc.circleci.com checksums.txt.
 # Snapshot builds skip it via --skip=sign.
 signs:
-  - cmd: cosign
+  # The wrapper signs and then verifies the bundle against the installer
+  # identity; a failure stops GoReleaser before anything is published.
+  - cmd: bash
     signature: "${artifact}.sigstore.json"
     args:
-      - sign-blob
-      - --yes
-      - --bundle=${signature}
+      - .circleci/scripts/sign-and-verify.sh
       - ${artifact}
+      - ${signature}
     artifacts: checksum
 
 homebrew_casks:
