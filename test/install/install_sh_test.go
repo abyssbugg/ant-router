@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -82,13 +83,15 @@ type release struct {
 	files    map[string][]byte // path -> body
 	mu       sync.Mutex
 	requests []string
+	// redirects maps a request path to a Location header served with 302.
+	redirects map[string]string
 }
 
 // newRelease serves a well-formed release for every supported OS/arch.
 // mutate may adjust files before serving.
 func newRelease(t *testing.T, entries []archiveEntry, mutate func(files map[string][]byte)) *release {
 	t.Helper()
-	r := &release{t: t, files: map[string][]byte{}}
+	r := &release{t: t, files: map[string][]byte{}, redirects: map[string]string{}}
 	var sums strings.Builder
 	for _, goos := range []string{"linux", "darwin"} {
 		for _, arch := range []string{"amd64", "arm64"} {
@@ -111,7 +114,12 @@ func newRelease(t *testing.T, entries []archiveEntry, mutate func(files map[stri
 func (r *release) serve(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	r.requests = append(r.requests, req.URL.Path)
+	location, redirect := r.redirects[req.URL.Path]
 	r.mu.Unlock()
+	if redirect {
+		http.Redirect(w, req, location, http.StatusFound)
+		return
+	}
 	if req.URL.Path == "/releases/latest" {
 		http.Redirect(w, req, "/releases/tag/"+testVersion, http.StatusFound)
 		return
@@ -128,6 +136,19 @@ func (r *release) serve(w http.ResponseWriter, req *http.Request) {
 	_, _ = w.Write(body)
 }
 
+// requestsTo counts the requests made for path.
+func (r *release) requestsTo(path string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, p := range r.requests {
+		if p == path {
+			n++
+		}
+	}
+	return n
+}
+
 func (r *release) requested(path string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -137,6 +158,27 @@ func (r *release) requested(path string) bool {
 		}
 	}
 	return false
+}
+
+// redirect makes path answer with a 302 to location.
+func (r *release) redirect(path, location string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.redirects[path] = location
+}
+
+// requestCount reads the request log under the mutex; the handler goroutines
+// append to it concurrently with the test goroutine.
+func (r *release) requestCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.requests)
+}
+
+func (r *release) requestLog() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.requests...)
 }
 
 func (r *release) checksumsPath() string {
@@ -150,7 +192,12 @@ type harness struct {
 	dir        string
 	binDir     string
 	installDir string
+	tmpDir     string
 	cosignLog  string
+	// sysPath holds the system directories placed after the shims.
+	sysPath string
+	// env overrides or removes (empty value) default environment entries.
+	env map[string]string
 }
 
 func newHarness(t *testing.T, unameS, unameM string) *harness {
@@ -165,11 +212,19 @@ func newHarness(t *testing.T, unameS, unameM string) *harness {
 		dir:        dir,
 		binDir:     filepath.Join(dir, "fakebin"),
 		installDir: filepath.Join(dir, "install"),
+		tmpDir:     filepath.Join(dir, "tmp"),
 		cosignLog:  filepath.Join(dir, "cosign.log"),
+		sysPath:    "/usr/bin:/bin",
+		env:        map[string]string{},
 	}
-	if err := os.Mkdir(h.binDir, 0o755); err != nil {
-		t.Fatal(err)
+	for _, d := range []string{h.binDir, h.tmpDir} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
+	// Signature verification is mandatory, so every run gets a passing fake
+	// cosign by default. It also shadows any real cosign on the system PATH.
+	h.installFakeCosign(0)
 	h.writeExe("uname", fmt.Sprintf(`#!/bin/sh
 case "$1" in
   -s) echo %q ;;
@@ -180,9 +235,66 @@ esac
 	return h
 }
 
+// useWget hides curl so install.sh must download with wget: the system
+// directories are replaced by one directory of symlinks that omits curl.
+func (h *harness) useWget() {
+	h.t.Helper()
+	wget := lookTool(h.t, "wget")
+	sys := filepath.Join(h.dir, "sysbin")
+	if err := os.Mkdir(sys, 0o755); err != nil {
+		h.t.Fatal(err)
+	}
+	for _, d := range strings.Split(h.sysPath, ":") {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if name == "curl" || name == "wget" {
+				continue
+			}
+			dst := filepath.Join(sys, name)
+			if _, err := os.Lstat(dst); err == nil {
+				continue // earlier PATH entries win, as with the real PATH
+			}
+			if err := os.Symlink(filepath.Join(d, name), dst); err != nil {
+				h.t.Fatal(err)
+			}
+		}
+	}
+	// The shim records each call so tests can prove wget did the download.
+	h.writeExe("wget", fmt.Sprintf("#!/bin/sh\necho call >> %q\nexec %q \"$@\"\n", h.wgetLog(), wget))
+	h.sysPath = sys
+}
+
+func (h *harness) wgetLog() string { return filepath.Join(h.dir, "wget.log") }
+
+func (h *harness) wgetCalls() int {
+	b, err := os.ReadFile(h.wgetLog())
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(b), "call\n")
+}
+
 func (h *harness) writeExe(name, body string) {
 	h.t.Helper()
 	if err := os.WriteFile(filepath.Join(h.binDir, name), []byte(body), 0o755); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// removeFakeCosign exercises the missing-cosign path. It skips when a real
+// cosign in the system directories on the harness PATH would be found instead.
+func (h *harness) removeFakeCosign() {
+	h.t.Helper()
+	for _, p := range []string{"/usr/bin/cosign", "/bin/cosign"} {
+		if _, err := os.Stat(p); err == nil {
+			h.t.Skipf("system cosign at %s shadows the missing-cosign path", p)
+		}
+	}
+	if err := os.Remove(filepath.Join(h.binDir, "cosign")); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -200,10 +312,21 @@ func (h *harness) run(args ...string) (string, error) {
 	cmd := exec.Command("/bin/sh", append([]string{h.script}, args...)...)
 	// Minimal PATH: fake shims first, then only system directories, so a
 	// developer's real cosign is never picked up.
-	cmd.Env = []string{
-		"PATH=" + h.binDir + ":/usr/bin:/bin",
-		"HOME=" + h.dir,
-		"ANT_ROUTER_INSECURE_SKIP_SIGNATURE=1",
+	env := map[string]string{
+		"PATH":   h.binDir + ":" + h.sysPath,
+		"HOME":   h.dir,
+		"TMPDIR": h.tmpDir,
+	}
+	for k, v := range h.env {
+		if v == "" {
+			delete(env, k)
+			continue
+		}
+		env[k] = v
+	}
+	cmd.Env = nil
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -246,9 +369,14 @@ func (h *harness) assertNothingInstalled() {
 
 func (h *harness) assertNoStagingFiles() {
 	h.t.Helper()
-	matches, _ := filepath.Glob(filepath.Join(h.installDir, ".*.tmp.*"))
-	if len(matches) != 0 {
-		h.t.Fatalf("staging files left behind: %v", matches)
+	for _, pattern := range []string{".*.tmp.*", ".*.bak.*"} {
+		matches, _ := filepath.Glob(filepath.Join(h.installDir, pattern))
+		if len(matches) != 0 {
+			h.t.Fatalf("staging or backup files left behind: %v", matches)
+		}
+	}
+	if entries, _ := os.ReadDir(h.tmpDir); len(entries) != 0 {
+		h.t.Fatalf("temporary files left behind in TMPDIR: %v", entries)
 	}
 }
 
@@ -285,10 +413,8 @@ func TestInstallScriptSyntax(t *testing.T) {
 	if out, err := exec.Command("/bin/sh", "-n", h.script).CombinedOutput(); err != nil {
 		t.Fatalf("sh -n: %v\n%s", err, out)
 	}
-	if _, err := exec.LookPath("shellcheck"); err != nil {
-		t.Skip("shellcheck not installed")
-	}
-	if out, err := exec.Command("shellcheck", "-s", "sh", h.script).CombinedOutput(); err != nil {
+	shellcheck := lookTool(t, "shellcheck")
+	if out, err := exec.Command(shellcheck, "-s", "sh", h.script).CombinedOutput(); err != nil {
 		t.Fatalf("shellcheck: %v\n%s", err, out)
 	}
 }
@@ -390,8 +516,8 @@ func TestInstallScriptUnsupportedPlatform(t *testing.T) {
 			h := newHarness(t, tc.s, tc.m)
 			out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
 			expectFailure(t, out, err, tc.want)
-			if len(rel.requests) != 0 {
-				t.Fatalf("no requests expected, got %v", rel.requests)
+			if n := rel.requestCount(); n != 0 {
+				t.Fatalf("no requests expected, got %v", rel.requestLog())
 			}
 			h.assertNothingInstalled()
 		})
@@ -413,6 +539,11 @@ func TestInstallScriptArgumentValidation(t *testing.T) {
 		{"plain http remote", []string{"--base-url", "http://example.com"}, "must use https"},
 		{"file scheme", []string{"--base-url", "file:///etc"}, "must use https"},
 		{"http loopback lookalike", []string{"--base-url", "http://127.0.0.1.evil.example"}, "must use https"},
+		{"http loopback userinfo", []string{"--base-url", "http://localhost:80@evil.example"}, "must use https"},
+		{"https userinfo", []string{"--base-url", "https://user:pw@github.com/abyssbugg/ant-router"}, "must not contain credentials"},
+		{"https token userinfo", []string{"--base-url", "https://token@github.com/abyssbugg/ant-router"}, "must not contain credentials"},
+		{"http loopback bad port", []string{"--base-url", "http://127.0.0.1:8x"}, "must use https"},
+		{"http loopback empty port", []string{"--base-url", "http://127.0.0.1:"}, "must use https"},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
 			h := newHarness(t, "Linux", "x86_64")
@@ -434,8 +565,8 @@ func TestInstallScriptDryRun(t *testing.T) {
 	if !strings.Contains(out, archiveName("linux", "amd64")) {
 		t.Fatalf("dry run should name the archive:\n%s", out)
 	}
-	if len(rel.requests) != 0 {
-		t.Fatalf("dry run must not download anything, got %v", rel.requests)
+	if n := rel.requestCount(); n != 0 {
+		t.Fatalf("dry run must not download anything, got %v", rel.requestLog())
 	}
 	if _, err := os.Stat(h.installDir); err == nil {
 		t.Fatal("dry run must not create the install directory")
@@ -459,8 +590,8 @@ func TestInstallScriptCosignVerification(t *testing.T) {
 		want := []string{
 			"verify-blob",
 			"--bundle", "<tmp>/checksums.txt.sigstore.json",
-			"--certificate-identity", "https://github.com/abyssbugg/ant-router/.github/workflows/release.yml@refs/tags/v1.2.3",
-			"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
+			"--certificate-identity", "https://circleci.com/api/v2/projects/cc5f04e8-66e9-4f18-91b0-71c671674d14/pipeline-definitions/b37a0ec3-4a25-4686-b480-6b4eda16099f",
+			"--certificate-oidc-issuer", "https://oidc.circleci.com",
 			"<tmp>/checksums.txt",
 		}
 		if len(args) != len(want) {
@@ -501,22 +632,326 @@ func TestInstallScriptCosignVerification(t *testing.T) {
 		h.assertNothingInstalled()
 	})
 
-	t.Run("no-verify-signature skips cosign but still checks checksum", func(t *testing.T) {
+	for _, optOut := range []struct {
+		desc string
+		args []string
+		env  map[string]string
+	}{
+		{"no-verify-signature flag", []string{"--no-verify-signature"}, nil},
+		{"insecure env opt-out", nil, map[string]string{"ANT_ROUTER_INSECURE_SKIP_SIGNATURE": "1"}},
+	} {
+		t.Run(optOut.desc+" skips cosign with a warning but still checks checksum", func(t *testing.T) {
+			rel := newRelease(t, defaultEntries(), nil)
+			h := newHarness(t, "Linux", "x86_64")
+			h.installFakeCosign(1)
+			for k, v := range optOut.env {
+				h.env[k] = v
+			}
+			args := append([]string{"--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion}, optOut.args...)
+			out, err := h.run(args...)
+			if err != nil {
+				t.Fatalf("install failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, "WARNING: signature verification is disabled") {
+				t.Fatalf("skipping verification must warn:\n%s", out)
+			}
+			if _, err := os.Stat(h.cosignLog); err == nil {
+				t.Fatal("cosign must not run when verification is disabled")
+			}
+			if !rel.requested(rel.checksumsPath()) {
+				t.Fatal("checksums must still be downloaded")
+			}
+			h.assertInstalled(defaultEntries())
+		})
+	}
+
+	t.Run("missing cosign fails before any download", func(t *testing.T) {
 		rel := newRelease(t, defaultEntries(), nil)
 		h := newHarness(t, "Linux", "x86_64")
-		h.installFakeCosign(1)
-		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion, "--no-verify-signature")
+		h.removeFakeCosign()
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+		expectFailure(t, out, err, "cosign is required")
+		if n := rel.requestCount(); n != 0 {
+			t.Fatalf("no requests expected, got %v", rel.requestLog())
+		}
+		h.assertNothingInstalled()
+	})
+
+	t.Run("env opt-out requires exactly 1", func(t *testing.T) {
+		rel := newRelease(t, defaultEntries(), nil)
+		h := newHarness(t, "Linux", "x86_64")
+		h.removeFakeCosign()
+		h.env["ANT_ROUTER_INSECURE_SKIP_SIGNATURE"] = "yes"
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+		expectFailure(t, out, err, "cosign is required")
+		h.assertNothingInstalled()
+	})
+}
+
+func TestInstallScriptRedirects(t *testing.T) {
+	asset := "/releases/download/" + testVersion + "/" + archiveName("linux", "amd64")
+
+	t.Run("loopback asset redirect is followed", func(t *testing.T) {
+		rel := newRelease(t, defaultEntries(), func(files map[string][]byte) {
+			files["/objects/archive"] = files[asset]
+		})
+		rel.redirect(asset, "/objects/archive")
+		h := newHarness(t, "Linux", "x86_64")
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
 		if err != nil {
 			t.Fatalf("install failed: %v\n%s", err, out)
 		}
-		if _, err := os.Stat(h.cosignLog); err == nil {
-			t.Fatal("cosign must not run with --no-verify-signature")
-		}
-		if !rel.requested(rel.checksumsPath()) {
-			t.Fatal("checksums must still be downloaded")
+		if !rel.requested("/objects/archive") {
+			t.Fatal("redirect target was not requested")
 		}
 		h.assertInstalled(defaultEntries())
 	})
+
+	for _, tc := range []struct {
+		desc, path, location string
+	}{
+		{"asset to remote http", asset, "http://example.invalid/archive"},
+		{"asset to userinfo lookalike", asset, "http://localhost:80@example.invalid/archive"},
+		{"checksums to remote http", "/releases/download/" + testVersion + "/checksums.txt", "http://example.invalid/checksums.txt"},
+		{"latest to remote http", "/releases/latest", "http://example.invalid/releases/tag/" + testVersion},
+		{"asset to file scheme", asset, "file:///etc/passwd"},
+	} {
+		t.Run(tc.desc+" is rejected", func(t *testing.T) {
+			rel := newRelease(t, defaultEntries(), nil)
+			rel.redirect(tc.path, tc.location)
+			h := newHarness(t, "Linux", "x86_64")
+			args := []string{"--base-url", rel.server.URL, "--install-dir", h.installDir}
+			if tc.path != "/releases/latest" {
+				args = append(args, "--version", testVersion)
+			}
+			out, err := h.run(args...)
+			if err == nil {
+				t.Fatalf("expected failure, script succeeded:\n%s", out)
+			}
+			if !strings.Contains(out, "refusing to download") && !strings.Contains(out, "unsupported redirect target") {
+				t.Fatalf("insecure redirect not rejected explicitly:\n%s", out)
+			}
+			h.assertNothingInstalled()
+		})
+	}
+
+	t.Run("redirect loop is bounded", func(t *testing.T) {
+		rel := newRelease(t, defaultEntries(), nil)
+		rel.redirect(asset, asset)
+		h := newHarness(t, "Linux", "x86_64")
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+		expectFailure(t, out, err, "too many redirects")
+		// The first request plus at most 10 followed redirects.
+		if n := rel.requestsTo(asset); n != 11 {
+			t.Fatalf("archive requested %d times, want exactly 11", n)
+		}
+		h.assertNothingInstalled()
+	})
+}
+
+// TestInstallScriptWithWget runs the download paths with curl hidden, so the
+// wget implementation of fetch_once and its redirect parsing are exercised.
+func TestInstallScriptWithWget(t *testing.T) {
+	asset := "/releases/download/" + testVersion + "/" + archiveName("linux", "amd64")
+	newWgetHarness := func(t *testing.T) *harness {
+		h := newHarness(t, "Linux", "x86_64")
+		h.useWget()
+		return h
+	}
+	assertUsedWget := func(t *testing.T, h *harness) {
+		t.Helper()
+		if h.wgetCalls() == 0 {
+			t.Fatal("wget was never invoked; the curl path ran instead")
+		}
+	}
+
+	t.Run("latest resolved from redirect", func(t *testing.T) {
+		rel := newRelease(t, defaultEntries(), nil)
+		h := newWgetHarness(t)
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir)
+		if err != nil {
+			t.Fatalf("install failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "ant-router v1.2.3 for linux/amd64") {
+			t.Fatalf("expected v1.2.3 resolved from redirect:\n%s", out)
+		}
+		assertUsedWget(t, h)
+		h.assertInstalled(defaultEntries())
+	})
+
+	t.Run("loopback asset redirect is followed", func(t *testing.T) {
+		rel := newRelease(t, defaultEntries(), func(files map[string][]byte) {
+			files["/objects/archive"] = files[asset]
+		})
+		rel.redirect(asset, "/objects/archive")
+		h := newWgetHarness(t)
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+		if err != nil {
+			t.Fatalf("install failed: %v\n%s", err, out)
+		}
+		if !rel.requested("/objects/archive") {
+			t.Fatal("redirect target was not requested")
+		}
+		assertUsedWget(t, h)
+		h.assertInstalled(defaultEntries())
+	})
+
+	for _, tc := range []struct{ desc, location string }{
+		{"remote http", "http://example.invalid/archive"},
+		{"userinfo lookalike", "http://localhost:80@example.invalid/archive"},
+		{"file scheme", "file:///etc/passwd"},
+	} {
+		t.Run("redirect to "+tc.desc+" is rejected", func(t *testing.T) {
+			rel := newRelease(t, defaultEntries(), nil)
+			rel.redirect(asset, tc.location)
+			h := newWgetHarness(t)
+			out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+			if err == nil {
+				t.Fatalf("expected failure, script succeeded:\n%s", out)
+			}
+			if !strings.Contains(out, "refusing to download") && !strings.Contains(out, "unsupported redirect target") {
+				t.Fatalf("insecure redirect not rejected explicitly:\n%s", out)
+			}
+			assertUsedWget(t, h)
+			h.assertNothingInstalled()
+		})
+	}
+
+	t.Run("redirect loop is bounded", func(t *testing.T) {
+		rel := newRelease(t, defaultEntries(), nil)
+		rel.redirect(asset, asset)
+		h := newWgetHarness(t)
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+		expectFailure(t, out, err, "too many redirects")
+		// The first request plus at most 10 followed redirects.
+		if n := rel.requestsTo(asset); n != 11 {
+			t.Fatalf("archive requested %d times, want exactly 11", n)
+		}
+		assertUsedWget(t, h)
+		h.assertNothingInstalled()
+	})
+
+	t.Run("missing asset fails", func(t *testing.T) {
+		rel := newRelease(t, defaultEntries(), func(files map[string][]byte) {
+			delete(files, asset)
+		})
+		h := newWgetHarness(t)
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+		if err == nil {
+			t.Fatalf("expected failure for a 404 asset:\n%s", out)
+		}
+		assertUsedWget(t, h)
+		h.assertNothingInstalled()
+	})
+}
+
+// TestInstallScriptUnreachableHost requires a clear download error, not an
+// empty HTTP status, when no server answers (curl and wget).
+func TestInstallScriptUnreachableHost(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "http://" + ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, downloader := range []string{"curl", "wget"} {
+		t.Run(downloader, func(t *testing.T) {
+			h := newHarness(t, "Linux", "x86_64")
+			if downloader == "wget" {
+				h.useWget()
+			}
+			out, err := h.run("--base-url", base, "--install-dir", h.installDir, "--version", testVersion)
+			expectFailure(t, out, err, "failed to download "+base+"/releases/download/")
+			h.assertNothingInstalled()
+		})
+	}
+}
+
+func TestInstallScriptInstallDirDefaults(t *testing.T) {
+	t.Run("HOME unset and no install dir fails clearly", func(t *testing.T) {
+		h := newHarness(t, "Linux", "x86_64")
+		h.env["HOME"] = ""
+		out, err := h.run("--version", testVersion, "--dry-run")
+		expectFailure(t, out, err, "install directory is empty")
+	})
+	t.Run("ANT_ROUTER_INSTALL_DIR wins over HOME", func(t *testing.T) {
+		h := newHarness(t, "Linux", "x86_64")
+		h.env["ANT_ROUTER_INSTALL_DIR"] = h.installDir
+		out, err := h.run("--version", testVersion, "--dry-run")
+		if err != nil || !strings.Contains(out, "into "+h.installDir) {
+			t.Fatalf("expected ANT_ROUTER_INSTALL_DIR to be used: %v\n%s", err, out)
+		}
+	})
+	t.Run("HOME default", func(t *testing.T) {
+		h := newHarness(t, "Linux", "x86_64")
+		out, err := h.run("--version", testVersion, "--dry-run")
+		if err != nil || !strings.Contains(out, "into "+filepath.Join(h.dir, ".local", "bin")) {
+			t.Fatalf("expected $HOME/.local/bin: %v\n%s", err, out)
+		}
+	})
+}
+
+func TestInstallScriptRejectsDirectoryDestination(t *testing.T) {
+	rel := newRelease(t, defaultEntries(), nil)
+	h := newHarness(t, "Linux", "x86_64")
+	if err := os.MkdirAll(filepath.Join(h.installDir, "routerctl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+	expectFailure(t, out, err, "Error: "+filepath.Join(h.installDir, "routerctl")+" is a directory")
+	if _, err := os.Lstat(filepath.Join(h.installDir, "routerd")); err == nil {
+		t.Fatal("routerd must not be installed when routerctl cannot be")
+	}
+	h.assertNoStagingFiles()
+}
+
+func TestInstallScriptRollsBackOnPartialFailure(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		name := "upgrade restores previous binaries"
+		if fresh {
+			name = "fresh install removes the first binary"
+		}
+		t.Run(name, func(t *testing.T) {
+			rel := newRelease(t, defaultEntries(), nil)
+			h := newHarness(t, "Linux", "x86_64")
+			if !fresh {
+				if err := os.MkdirAll(h.installDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				for _, bin := range []string{"routerd", "routerctl"} {
+					if err := os.WriteFile(filepath.Join(h.installDir, bin), []byte("old "+bin), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			// mv fails only when committing the staged routerctl, i.e. after
+			// routerd has already been replaced.
+			h.writeExe("mv", `#!/bin/sh
+for a in "$@"; do last="$a"; done
+case "$*" in
+  *.routerctl.tmp.*) case "$last" in */routerctl) echo "fake mv: refused" >&2; exit 1 ;; esac ;;
+esac
+exec /bin/mv "$@"
+`)
+			out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+			expectFailure(t, out, err, "failed to install routerctl")
+			for _, bin := range []string{"routerd", "routerctl"} {
+				got, err := os.ReadFile(filepath.Join(h.installDir, bin))
+				if fresh {
+					if err == nil {
+						t.Fatalf("%s must be rolled back on a fresh install, found %q", bin, got)
+					}
+					continue
+				}
+				if string(got) != "old "+bin {
+					t.Fatalf("%s = %q, want restored %q", bin, got, "old "+bin)
+				}
+			}
+			h.assertNoStagingFiles()
+		})
+	}
 }
 
 func TestInstallScriptRejectsUnsafeArchives(t *testing.T) {
@@ -543,7 +978,9 @@ func TestInstallScriptRejectsUnsafeArchives(t *testing.T) {
 	}
 
 	t.Run("extra members are not extracted outside the temp dir", func(t *testing.T) {
-		entries := append(defaultEntries(), archiveEntry{name: "../escaped", body: "x"})
+		// The installer extracts into $TMPDIR/<random>/extract, so
+		// ../../escaped would land directly in the harness TMPDIR.
+		entries := append(defaultEntries(), archiveEntry{name: "../../escaped", body: "x"})
 		rel := newRelease(t, entries, nil)
 		h := newHarness(t, "Linux", "x86_64")
 		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
@@ -553,6 +990,11 @@ func TestInstallScriptRejectsUnsafeArchives(t *testing.T) {
 		h.assertInstalled(defaultEntries())
 		if _, err := os.Stat(filepath.Join(h.installDir, "LICENSE")); err == nil {
 			t.Fatal("non-binary members must not be installed")
+		}
+		for _, p := range []string{filepath.Join(h.tmpDir, "escaped"), filepath.Join(h.dir, "escaped")} {
+			if _, err := os.Lstat(p); err == nil {
+				t.Fatalf("archive member escaped to %s", p)
+			}
 		}
 	})
 }

@@ -3,9 +3,10 @@
 .SYNOPSIS
 Ant Router installer for Windows.
 
-Downloads a release archive, verifies it against the release checksums.txt
-(and, when cosign is available, verifies the keyless signature on
-checksums.txt), then atomically installs routerd.exe and routerctl.exe.
+Downloads a release archive, verifies the keyless Sigstore signature on the
+release checksums.txt with cosign, verifies the archive against that file,
+then installs routerd.exe and routerctl.exe together: either both binaries
+are replaced or, on any failure, the previous ones are restored.
 
 .PARAMETER Version
 Release tag to install, e.g. v1.2.3 (default: latest)
@@ -17,7 +18,9 @@ Installation directory (default: $env:ANT_ROUTER_INSTALL_DIR or $env:LOCALAPPDAT
 Release host base URL (default: https://github.com/abyssbugg/ant-router)
 
 .PARAMETER NoVerifySignature
-Skip cosign signature verification (checksums are always verified)
+INSECURE: skip cosign signature verification (also
+ANT_ROUTER_INSECURE_SKIP_SIGNATURE=1). Checksums are still verified, but they
+come from the same host as the archive.
 
 .PARAMETER DryRun
 Print what would be installed and change nothing
@@ -35,8 +38,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $RepoUrl = 'https://github.com/abyssbugg/ant-router'
-$CertIdentityPrefix = "$RepoUrl/.github/workflows/release.yml@refs/tags/"
-$OidcIssuer = 'https://token.actions.githubusercontent.com'
+# Releases are signed keylessly by CircleCI's tag-only "release" pipeline
+# definition (.circleci/release.yml); its URL is the certificate identity.
+# The identity does not name the tag, so the signed checksums.txt is bound to
+# this version by requiring the exact versioned archive name below.
+$CertIdentity = 'https://circleci.com/api/v2/projects/cc5f04e8-66e9-4f18-91b0-71c671674d14/pipeline-definitions/b37a0ec3-4a25-4686-b480-6b4eda16099f'
+$OidcIssuer = 'https://oidc.circleci.com'
 $Binaries = @('routerd.exe', 'routerctl.exe')
 
 function Fail {
@@ -45,9 +52,76 @@ function Fail {
     exit 1
 }
 
+# Test-AllowedUri accepts https to any host, or plain http to an exact
+# loopback host so local mirrors and tests do not need certificates.
+# Credentials (userinfo) are always rejected.
+function Test-AllowedUri {
+    param([string]$Uri)
+    $parsed = $null
+    if (-not [Uri]::TryCreate($Uri, [UriKind]::Absolute, [ref]$parsed)) { return $false }
+    if ($parsed.UserInfo) { return $false }
+    if ($parsed.Scheme -ceq 'https') { return $true }
+    if ($parsed.Scheme -ceq 'http') {
+        return @('127.0.0.1', 'localhost', '[::1]') -contains $parsed.Host
+    }
+    return $false
+}
+
+$script:HttpClient = $null
+
+# Invoke-Download follows at most 10 redirects manually, validating every hop
+# with Test-AllowedUri before any request is made to it, and writes the body
+# to OutFile when one is given. Returns the final URI. HttpClient is used
+# instead of Invoke-WebRequest so redirects can be inspected and so Windows
+# PowerShell's progress rendering does not slow large downloads.
 function Invoke-Download {
     param([string]$Uri, [string]$OutFile)
-    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile -MaximumRedirection 5
+    if (-not $script:HttpClient) {
+        Add-Type -AssemblyName System.Net.Http
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        $handler.AllowAutoRedirect = $false
+        $script:HttpClient = New-Object System.Net.Http.HttpClient($handler)
+        # Bounds the whole request, body included, so a stalled host cannot
+        # hang the installer.
+        $script:HttpClient.Timeout = [TimeSpan]::FromMinutes(10)
+    }
+    $current = $Uri
+    for ($hop = 0; $hop -le 10; $hop++) {
+        if (-not (Test-AllowedUri $current)) {
+            Fail "refusing to download from $current (only https, or http to loopback, without credentials, is allowed)"
+        }
+        try {
+            $response = $script:HttpClient.GetAsync($current).GetAwaiter().GetResult()
+        } catch {
+            Fail "failed to download ${current}: $($_.Exception.GetBaseException().Message)"
+        }
+        try {
+            $code = [int]$response.StatusCode
+            if ($code -ge 200 -and $code -lt 300) {
+                if ($OutFile) {
+                    $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+                    [IO.File]::WriteAllBytes($OutFile, $bytes)
+                }
+                return $current
+            }
+            if (@(301, 302, 303, 307, 308) -contains $code) {
+                $location = $response.Headers.Location
+                if (-not $location) { Fail "redirect without a Location header from $current" }
+                # Decide from the raw header text: on Unix, .NET can parse a
+                # relative '/path' as an absolute file:// URI.
+                $target = $location.OriginalString
+                if ($target -notmatch '^[A-Za-z][A-Za-z0-9+.-]*:') {
+                    $target = (New-Object Uri((New-Object Uri($current)), $target)).AbsoluteUri
+                }
+                $current = $target
+                continue
+            }
+            Fail "HTTP $code from $current"
+        } finally {
+            $response.Dispose()
+        }
+    }
+    Fail "too many redirects downloading $Uri"
 }
 
 # Windows PowerShell 5.1 may default to TLS 1.0/1.1; GitHub requires 1.2+.
@@ -68,17 +142,10 @@ if (-not $InstallDir) {
 # Only HTTPS release hosts are accepted. Plain HTTP is allowed solely for
 # loopback hosts so local mirrors and tests do not need certificates.
 $BaseUrl = $BaseUrl.TrimEnd('/')
-$parsedBase = $null
-if (-not [Uri]::TryCreate($BaseUrl, [UriKind]::Absolute, [ref]$parsedBase)) {
-    Fail "base URL is not an absolute URL: $BaseUrl"
+if (-not (Test-AllowedUri $BaseUrl)) {
+    Fail "base URL must use https (http is allowed only for loopback) and must not contain credentials: $BaseUrl"
 }
-$allowed = $parsedBase.Scheme -eq 'https'
-if (-not $allowed -and $parsedBase.Scheme -eq 'http') {
-    $allowed = @('127.0.0.1', 'localhost', '[::1]') -contains $parsedBase.Host
-}
-if (-not $allowed) {
-    Fail "base URL must use https (http is allowed only for loopback): $BaseUrl"
-}
+$VerifySignature = -not ($NoVerifySignature -or $env:ANT_ROUTER_INSECURE_SKIP_SIGNATURE -ceq '1')
 
 $archRaw = $env:PROCESSOR_ARCHITEW6432
 if (-not $archRaw) {
@@ -92,24 +159,8 @@ switch ($archRaw) {
 
 if (-not $Version) {
     Write-Host 'Resolving latest release...'
-    try {
-        $resp = Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/releases/latest" -MaximumRedirection 10
-    } catch {
-        Fail "could not resolve the latest release: $($_.Exception.Message)"
-    }
     # The tag comes from the final redirect target, never from the body.
-    # Windows PowerShell exposes HttpWebResponse.ResponseUri; PowerShell 7
-    # exposes HttpResponseMessage.RequestMessage.RequestUri.
-    $finalUri = $null
-    $base = $resp.BaseResponse
-    if ($base.PSObject.Properties['ResponseUri'] -and $base.ResponseUri) {
-        $finalUri = $base.ResponseUri.AbsoluteUri
-    } elseif ($base.PSObject.Properties['RequestMessage'] -and $base.RequestMessage -and $base.RequestMessage.RequestUri) {
-        $finalUri = $base.RequestMessage.RequestUri.AbsoluteUri
-    }
-    if (-not $finalUri) {
-        Fail 'could not determine the latest release redirect target'
-    }
+    $finalUri = Invoke-Download "$BaseUrl/releases/latest" $null
     $marker = '/releases/tag/'
     $index = $finalUri.IndexOf($marker)
     if ($index -lt 0) {
@@ -133,8 +184,19 @@ if ($DryRun) {
     exit 0
 }
 
+if ($VerifySignature) {
+    $cosign = Get-Command cosign -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cosign) {
+        Fail 'cosign is required to verify the release signature; install it (https://docs.sigstore.dev/cosign/system_config/installation/) or rerun with -NoVerifySignature to accept the risk'
+    }
+} else {
+    [Console]::Error.WriteLine('WARNING: signature verification is disabled; checksums.txt is not authenticated and only guards against corrupted downloads.')
+}
+
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) ('ant-router-install-' + [Guid]::NewGuid().ToString('N'))
 $staged = @()
+$backups = @{}
+$replaced = @()
 try {
     $null = New-Item -ItemType Directory -Path $tempDir
 
@@ -143,31 +205,20 @@ try {
     $bundlePath = Join-Path $tempDir 'checksums.txt.sigstore.json'
 
     Write-Host "Downloading $archive..."
-    try { Invoke-Download "$releaseUrl/$archive" $archivePath } catch { Fail "failed to download $archive" }
-    try { Invoke-Download "$releaseUrl/checksums.txt" $checksumsPath } catch { Fail 'failed to download checksums.txt' }
+    $null = Invoke-Download "$releaseUrl/$archive" $archivePath
+    $null = Invoke-Download "$releaseUrl/checksums.txt" $checksumsPath
 
-    if (-not $NoVerifySignature) {
-        $cosign = Get-Command cosign -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($cosign) {
-            Write-Host 'Verifying checksums.txt signature...'
-            try { Invoke-Download "$releaseUrl/checksums.txt.sigstore.json" $bundlePath } catch { Fail 'failed to download checksums.txt.sigstore.json' }
-            & $cosign.Source verify-blob `
-                --bundle $bundlePath `
-                --certificate-identity "$CertIdentityPrefix$Version" `
-                --certificate-oidc-issuer $OidcIssuer `
-                $checksumsPath
-            if ($LASTEXITCODE -ne 0) {
-                Fail 'signature verification failed'
-            }
-        } else {
-            # Signature verification is required; allow override only with explicit insecure flag
-            if (-not $env:ANT_ROUTER_INSECURE_SKIP_SIGNATURE) {
-                Fail 'cosign not found; signature verification is required (install cosign or set ANT_ROUTER_INSECURE_SKIP_SIGNATURE=1 to accept this risk)'
-            }
-            Write-Host 'WARNING: Skipping signature verification (ANT_ROUTER_INSECURE_SKIP_SIGNATURE is set). This installation is not secure.'
+    if ($VerifySignature) {
+        Write-Host 'Verifying checksums.txt signature...'
+        $null = Invoke-Download "$releaseUrl/checksums.txt.sigstore.json" $bundlePath
+        & $cosign.Source verify-blob `
+            --bundle $bundlePath `
+            --certificate-identity $CertIdentity `
+            --certificate-oidc-issuer $OidcIssuer `
+            $checksumsPath
+        if ($LASTEXITCODE -ne 0) {
+            Fail 'signature verification failed'
         }
-    } elseif ($env:ANT_ROUTER_INSECURE_SKIP_SIGNATURE) {
-        Write-Host 'WARNING: Signature verification is disabled (ANT_ROUTER_INSECURE_SKIP_SIGNATURE is set). Checksum verification only.'
     }
 
     Write-Host 'Verifying checksum...'
@@ -217,20 +268,80 @@ try {
         $null = New-Item -ItemType Directory -Path $InstallDir
     }
 
-    # Stage both binaries next to their destination, then move each into
-    # place so a failure never leaves a partially written binary.
+    # A directory at the destination would make Move-Item nest the binary
+    # inside it and report success without installing anything.
+    foreach ($bin in $Binaries) {
+        if (Test-Path -LiteralPath (Join-Path $InstallDir $bin) -PathType Container) {
+            Fail "$(Join-Path $InstallDir $bin) is a directory"
+        }
+    }
+
+    # Backups left by an earlier upgrade whose old executable was still
+    # running can be removed now; ignore any that are still locked.
+    foreach ($bin in $Binaries) {
+        Get-ChildItem -LiteralPath $InstallDir -Filter ".$bin.old.*" -Force -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+
+    # Stage both binaries next to their destination before touching either.
+    foreach ($bin in $Binaries) {
+        $target = Join-Path $InstallDir ".$bin.tmp.$PID"
+        try {
+            Copy-Item -LiteralPath (Join-Path $extractDir $bin) -Destination $target
+        } catch {
+            Fail "failed to stage ${bin}: $($_.Exception.Message)"
+        }
+        $staged += $target
+    }
+
+    # Windows refuses to overwrite or delete a running executable but does
+    # allow renaming it, so each existing binary is first renamed aside; a
+    # running routerd.exe keeps executing from the renamed file until it is
+    # restarted. Any failure restores the previous pair.
     try {
         foreach ($bin in $Binaries) {
-            $target = Join-Path $InstallDir ".$bin.tmp.$PID"
-            Copy-Item -LiteralPath (Join-Path $extractDir $bin) -Destination $target
-            $staged += $target
-        }
-        foreach ($bin in $Binaries) {
-            Move-Item -LiteralPath (Join-Path $InstallDir ".$bin.tmp.$PID") -Destination (Join-Path $InstallDir $bin) -Force
-            Write-Host "Installed $(Join-Path $InstallDir $bin)"
+            $dest = Join-Path $InstallDir $bin
+            if (Test-Path -LiteralPath $dest) {
+                $backup = Join-Path $InstallDir ".$bin.old.$PID"
+                Move-Item -LiteralPath $dest -Destination $backup -Force
+                $backups[$bin] = $backup
+            }
+            Move-Item -LiteralPath (Join-Path $InstallDir ".$bin.tmp.$PID") -Destination $dest
+            $replaced += $bin
         }
     } catch {
-        Fail "failed to install binaries: $($_.Exception.Message)"
+        $reason = $_.Exception.Message
+        foreach ($bin in $Binaries) {
+            $dest = Join-Path $InstallDir $bin
+            if ($replaced -contains $bin) {
+                Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+            }
+            if ($backups.ContainsKey($bin)) {
+                try {
+                    Move-Item -LiteralPath $backups[$bin] -Destination $dest -Force
+                } catch {
+                    [Console]::Error.WriteLine("Error: could not restore $dest from $($backups[$bin]): $($_.Exception.Message)")
+                }
+            }
+        }
+        Fail "failed to install binaries: $reason"
+    }
+
+    $restartNeeded = $false
+    foreach ($bin in $Binaries) {
+        Write-Host "Installed $(Join-Path $InstallDir $bin)"
+        if ($backups.ContainsKey($bin)) {
+            try {
+                Remove-Item -LiteralPath $backups[$bin] -Force
+            } catch {
+                # Still executing; removed by the next install.
+                $restartNeeded = $true
+            }
+        }
+    }
+    if ($restartNeeded) {
+        Write-Host ''
+        Write-Host 'Note: a previous ant-router binary is still running. Restart routerd to use the new version.'
     }
 
     $pathEntries = @(([string]$env:PATH) -split [IO.Path]::PathSeparator | ForEach-Object { $_.TrimEnd('\', '/') })
@@ -244,6 +355,9 @@ try {
 } finally {
     foreach ($file in $staged) {
         Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:HttpClient) {
+        $script:HttpClient.Dispose()
     }
     if (Test-Path -LiteralPath $tempDir) {
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue

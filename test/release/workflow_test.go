@@ -1,397 +1,351 @@
 package release
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// TestReleaseWorkflowTrigger verifies that the workflow triggers only on push to version tags.
-func TestReleaseWorkflowTrigger(t *testing.T) {
-	workflow := loadReleaseWorkflow(t)
+// Releases are built, signed and published by CircleCI. The release config
+// is read only by a dedicated pipeline definition whose sole trigger is
+// "only-tags"; its URL is the subject of every keyless cosign certificate,
+// so the installers verify exactly this identity. PR and branch builds use a
+// different pipeline definition and therefore cannot mint a signature that
+// the installers accept.
+const (
+	circleciProjectID          = "cc5f04e8-66e9-4f18-91b0-71c671674d14"
+	releasePipelineDefinition  = "b37a0ec3-4a25-4686-b480-6b4eda16099f"
+	releaseCertificateIdentity = "https://circleci.com/api/v2/projects/" + circleciProjectID + "/pipeline-definitions/" + releasePipelineDefinition
+	releaseOIDCIssuer          = "https://oidc.circleci.com"
+	releaseContext             = "ant-router-release"
+	releaseTagFilter           = `/^v[0-9]+\.[0-9]+\.[0-9]+.*/`
+)
 
-	// Check on.push.tags exists and only has v* pattern
-	on := field(t, workflow, "on")
-	push := field(t, on, "push")
-	tags := list(t, push, "tags")
-
-	if len(tags) != 1 {
-		t.Fatalf("expected exactly 1 tag pattern, got %d", len(tags))
-	}
-
-	tagPattern := tags[0].(string)
-	if tagPattern != "v*" {
-		t.Fatalf("expected tag pattern 'v*', got %q", tagPattern)
-	}
-
-	// Verify no pull_request, workflow_dispatch, pull_request_target
-	on = field(t, workflow, "on")
-	if _, ok := on.(map[string]any)["pull_request"]; ok {
-		t.Fatal("workflow should not have pull_request trigger")
-	}
-	if _, ok := on.(map[string]any)["workflow_dispatch"]; ok {
-		t.Fatal("workflow should not have workflow_dispatch trigger")
-	}
-	if _, ok := on.(map[string]any)["pull_request_target"]; ok {
-		t.Fatal("workflow should not have pull_request_target trigger")
-	}
+func releaseConfigPath(t *testing.T) string {
+	return filepath.Join(repoRoot(t), ".circleci", "release.yml")
 }
 
-// TestReleaseWorkflowTopLevelPermissionsEmpty verifies the workflow denies
-// all token permissions by default. A bare `permissions:` key is YAML null,
-// which GitHub treats as "not set" (default token permissions), so the value
-// must be the explicit empty mapping `{}`.
-func TestReleaseWorkflowTopLevelPermissionsEmpty(t *testing.T) {
-	workflow := loadReleaseWorkflow(t)
-	perms, ok := workflow["permissions"]
-	if !ok {
-		t.Fatal("top-level permissions must be declared")
-	}
-	if perms != emptyFlowMapping {
-		t.Fatalf("top-level permissions must be {} (deny all), got %T %v", perms, perms)
-	}
-}
-
-// TestReleaseWorkflowJobPermissions verifies job has exactly contents:write and id-token:write.
-func TestReleaseWorkflowJobPermissions(t *testing.T) {
-	workflow := loadReleaseWorkflow(t)
-
-	jobs := field(t, workflow, "jobs")
-	releaseJob := field(t, jobs, "release")
-	perms := field(t, releaseJob, "permissions")
-
-	permMap, ok := perms.(map[string]any)
-	if !ok {
-		t.Fatal("job permissions not a map")
-	}
-
-	if len(permMap) != 2 {
-		t.Fatalf("expected exactly 2 permissions, got %d", len(permMap))
-	}
-
-	contentsVal, hasContents := permMap["contents"]
-	if !hasContents {
-		t.Fatal("missing 'contents' permission")
-	}
-	if contentsVal != "write" {
-		t.Fatalf("expected contents: write, got %v", contentsVal)
-	}
-
-	idTokenVal, hasIDToken := permMap["id-token"]
-	if !hasIDToken {
-		t.Fatal("missing 'id-token' permission")
-	}
-	if idTokenVal != "write" {
-		t.Fatalf("expected id-token: write, got %v", idTokenVal)
-	}
-}
-
-// TestReleaseWorkflowUsesArePinned verifies all 'uses:' steps are pinned to 40-hex SHAs with version comments.
-func TestReleaseWorkflowUsesArePinned(t *testing.T) {
-	data, err := os.ReadFile(workflowPath(t))
+func loadReleaseConfig(t *testing.T) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(releaseConfigPath(t))
 	if err != nil {
-		t.Fatalf("failed to read workflow file: %v", err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-	// Match lines like "      - uses: owner/repo@<40-hex> # v1.2.3"
-	pinRx := regexp.MustCompile(`^\s*-\s+uses:\s+([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*)@([0-9a-f]{40})\s+#\s*v\d+\.\d+\.\d+\s*$`)
-
-	foundUses := 0
-	for i, line := range lines {
-		if !strings.Contains(line, "uses:") {
-			continue
-		}
-
-		match := pinRx.FindStringSubmatch(line)
-		if match == nil {
-			t.Fatalf("line %d: 'uses:' not properly pinned or formatted: %s", i+1, line)
-		}
-
-		foundUses++
-	}
-
-	// We expect at least 4 uses: (checkout, setup-go, cosign-installer, goreleaser-action)
-	if foundUses < 4 {
-		t.Fatalf("expected at least 4 pinned actions, found %d", foundUses)
-	}
-}
-
-// TestReleaseWorkflowCheckoutConfig verifies checkout step has fetch-depth: 0 and persist-credentials: false.
-func TestReleaseWorkflowCheckoutConfig(t *testing.T) {
-	workflow := loadReleaseWorkflow(t)
-	steps := getSteps(t, workflow)
-
-	checkoutStep := findStepByUses(steps, "actions/checkout")
-	if checkoutStep == nil {
-		t.Fatal("checkout step not found")
-	}
-
-	with := field(t, checkoutStep, "with")
-
-	// YAML parser may return string or int; compare as int
-	fetchDepth := field(t, with, "fetch-depth")
-	fd := toInt(fetchDepth)
-	if fd != 0 {
-		t.Fatalf("expected fetch-depth: 0, got %v (type %T)", fetchDepth, fetchDepth)
-	}
-
-	// YAML parser may return string or bool; compare as bool
-	persistCreds := field(t, with, "persist-credentials")
-	pc := toBool(persistCreds)
-	if pc != false {
-		t.Fatalf("expected persist-credentials: false, got %v (type %T)", persistCreds, persistCreds)
-	}
-}
-
-// TestReleaseWorkflowSetupGoCache verifies setup-go has cache: false.
-func TestReleaseWorkflowSetupGoCache(t *testing.T) {
-	workflow := loadReleaseWorkflow(t)
-	steps := getSteps(t, workflow)
-
-	setupGoStep := findStepByUses(steps, "actions/setup-go")
-	if setupGoStep == nil {
-		t.Fatal("setup-go step not found")
-	}
-
-	with := field(t, setupGoStep, "with")
-	cacheVal := field(t, with, "cache")
-	c := toBool(cacheVal)
-	if c != false {
-		t.Fatalf("expected cache: false, got %v (type %T)", cacheVal, cacheVal)
-	}
-}
-
-// TestReleaseWorkflowMakeCIPrecedes verifies 'make ci' step comes before goreleaser.
-func TestReleaseWorkflowMakeCIPrecedes(t *testing.T) {
-	workflow := loadReleaseWorkflow(t)
-	steps := getSteps(t, workflow)
-
-	var ciIdx, goreleaserIdx int
-	ciIdx = -1
-	goreleaserIdx = -1
-
-	for i, step := range steps {
-		stepMap := step.(map[string]any)
-
-		if run, ok := stepMap["run"].(string); ok && strings.Contains(run, "make ci") {
-			ciIdx = i
-		}
-		if uses, ok := stepMap["uses"].(string); ok && strings.Contains(uses, "goreleaser-action") {
-			goreleaserIdx = i
-		}
-	}
-
-	if ciIdx == -1 {
-		t.Fatal("'make ci' step not found")
-	}
-	if goreleaserIdx == -1 {
-		t.Fatal("goreleaser-action step not found")
-	}
-
-	if ciIdx >= goreleaserIdx {
-		t.Fatalf("'make ci' step (index %d) should precede goreleaser (index %d)", ciIdx, goreleaserIdx)
-	}
-}
-
-// TestReleaseWorkflowGoreleaserArgs verifies goreleaser-action receives
-// `release --clean`. Action inputs are strings; a YAML list is not a valid
-// input value.
-func TestReleaseWorkflowGoreleaserArgs(t *testing.T) {
-	workflow := loadReleaseWorkflow(t)
-	steps := getSteps(t, workflow)
-	goreleaserStep := findStepByUses(steps, "goreleaser-action")
-	if goreleaserStep == nil {
-		t.Fatal("goreleaser-action step not found")
-	}
-	raw := field(t, goreleaserStep, "with", "args")
-	args, ok := raw.(string)
-	if !ok {
-		t.Fatalf("goreleaser args must be a string input, got %T %v", raw, raw)
-	}
-	if args != "release --clean" {
-		t.Fatalf("goreleaser args = %q, want %q", args, "release --clean")
-	}
-}
-
-// TestReleaseWorkflowNoUntrustedContext verifies no ${{ github.event.* }} in run: scripts.
-func TestReleaseWorkflowNoUntrustedContext(t *testing.T) {
-	workflow := loadReleaseWorkflow(t)
-	steps := getSteps(t, workflow)
-
-	untrustedPattern := regexp.MustCompile(`\$\{\{\s*github\.event\.`)
-
-	for i, step := range steps {
-		stepMap := step.(map[string]any)
-		if run, ok := stepMap["run"].(string); ok {
-			if untrustedPattern.MatchString(run) {
-				t.Fatalf("step %d contains untrusted github.event context: %s", i, run)
-			}
-		}
-	}
-}
-
-// TestReleaseWorkflowTapTokenEnvName verifies tap token env var matches .goreleaser.yaml reference.
-func TestReleaseWorkflowTapTokenEnvName(t *testing.T) {
-	// Read goreleaser config to find the env var name
-	goreleaserPath := filepath.Join(repoRoot(t), ".goreleaser.yaml")
-	goreleaserData, err := os.ReadFile(goreleaserPath)
-	if err != nil {
-		t.Fatalf("failed to read .goreleaser.yaml: %v", err)
-	}
-
-	// Simple line-based search for the token reference
-	goreleaserText := string(goreleaserData)
-	if !strings.Contains(goreleaserText, "HOMEBREW_TAP_GITHUB_TOKEN") {
-		t.Fatal(".goreleaser.yaml does not reference HOMEBREW_TAP_GITHUB_TOKEN")
-	}
-
-	// Verify workflow uses the same env var in goreleaser-action step
-	workflow := loadReleaseWorkflow(t)
-	steps := getSteps(t, workflow)
-
-	goreleaserStep := findStepByUses(steps, "goreleaser-action")
-	if goreleaserStep == nil {
-		t.Fatal("goreleaser-action step not found")
-	}
-
-	env := field(t, goreleaserStep, "env")
-	if env == nil {
-		t.Fatal("goreleaser step missing env")
-	}
-
-	envMap := env.(map[string]any)
-	if _, ok := envMap["HOMEBREW_TAP_GITHUB_TOKEN"]; !ok {
-		t.Fatal("goreleaser step missing HOMEBREW_TAP_GITHUB_TOKEN env var")
-	}
-}
-
-// TestReleaseWorkflowFilenameMatchesInstallScript verifies workflow filename matches install.sh expectation.
-func TestReleaseWorkflowFilenameMatchesInstallScript(t *testing.T) {
-	// Read install.sh to verify it expects .github/workflows/release.yml
-	installPath := filepath.Join(repoRoot(t), "scripts", "install.sh")
-	installData, err := os.ReadFile(installPath)
-	if err != nil {
-		t.Fatalf("failed to read install.sh: %v", err)
-	}
-
-	installText := string(installData)
-
-	// Verify the expected identity in install.sh
-	if !strings.Contains(installText, ".github/workflows/release.yml@refs/tags/") {
-		t.Fatal("install.sh does not contain expected release.yml@refs/tags/ identity")
-	}
-
-	// Verify the workflow file actually exists at the expected path
-	workflowPath := filepath.Join(repoRoot(t), ".github", "workflows", "release.yml")
-	if _, err := os.Stat(workflowPath); err != nil {
-		t.Fatalf("release.yml not found at expected path: %v", err)
-	}
-}
-
-// Helper functions
-
-func toInt(v any) int {
-	switch val := v.(type) {
-	case int:
-		return val
-	case string:
-		// Try to parse as int
-		i, err := strconv.Atoi(val)
-		if err != nil {
-			return 0
-		}
-		return i
-	default:
-		return 0
-	}
-}
-
-func toBool(v any) bool {
-	switch val := v.(type) {
-	case bool:
-		return val
-	case string:
-		return val == "true" || val == "yes" || val == "on" || val == "1"
-	default:
-		return false
-	}
-}
-
-func loadReleaseWorkflow(t *testing.T) map[string]any {
-	data, err := os.ReadFile(workflowPath(t))
-	if err != nil {
-		t.Fatalf("failed to read release workflow: %v", err)
+		t.Fatalf("read CircleCI release config: %v", err)
 	}
 	return parseYAML(t, data)
 }
 
-func workflowPath(t *testing.T) string {
-	return filepath.Join(repoRoot(t), ".github", "workflows", "release.yml")
-}
-
-func getSteps(t *testing.T, workflow map[string]any) []any {
-	jobs := field(t, workflow, "jobs")
-	releaseJob := field(t, jobs, "release")
-	return list(t, releaseJob, "steps")
-}
-
-func findStepByUses(steps []any, usesPartial string) map[string]any {
-	for _, step := range steps {
-		stepMap := step.(map[string]any)
-		if uses, ok := stepMap["uses"].(string); ok {
-			if strings.Contains(uses, usesPartial) {
-				return stepMap
-			}
-		}
+func mappingKeys(t *testing.T, node any, path ...string) []string {
+	t.Helper()
+	mapping, ok := field(t, node, path...).(map[string]any)
+	if !ok {
+		t.Fatalf("%s is not a mapping", strings.Join(path, "."))
 	}
-	return nil
+	keys := make([]string, 0, len(mapping))
+	for key := range mapping {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
-// TestReleaseWorkflowInstallsSyftForSBOMs verifies that when GoReleaser is
-// configured to generate SBOMs (which shells out to syft), the workflow
-// installs syft, puts it on PATH without interpolating step outputs into the
-// script, and does so before GoReleaser runs.
-func TestReleaseWorkflowInstallsSyftForSBOMs(t *testing.T) {
-	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), ".goreleaser.yaml"))
+// TestGitHubActionsReleaseWorkflowRemoved keeps a single signer: a second
+// release workflow would sign with a different identity that the installers
+// reject, and GitHub Actions cannot run for this repository.
+func TestGitHubActionsReleaseWorkflowRemoved(t *testing.T) {
+	path := filepath.Join(repoRoot(t), ".github", "workflows", "release.yml")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("%s must not exist (err=%v); releases run on CircleCI", path, err)
+	}
+}
+
+func TestCircleCIReleaseConfigRunsOnlyForVersionTags(t *testing.T) {
+	config := loadReleaseConfig(t)
+	if got := text(t, config, "version"); got != "2.1" {
+		t.Fatalf("version = %q, want 2.1", got)
+	}
+	if got := mappingKeys(t, config); !slices.Equal(got, []string{"jobs", "version", "workflows"}) {
+		t.Fatalf("top-level keys = %v, want exactly jobs, version, workflows", got)
+	}
+	if got := mappingKeys(t, config, "jobs"); !slices.Equal(got, []string{"release"}) {
+		t.Fatalf("jobs = %v, want exactly release", got)
+	}
+	if got := mappingKeys(t, config, "workflows"); !slices.Equal(got, []string{"release"}) {
+		t.Fatalf("workflows = %v, want exactly release", got)
+	}
+	jobs := list(t, config, "workflows", "release", "jobs")
+	if len(jobs) != 2 {
+		t.Fatalf("workflow jobs = %d, want the approval hold followed by release", len(jobs))
+	}
+	// A pushed tag alone never publishes: a maintainer must approve the
+	// hold before the job that receives the publishing tokens can start.
+	if got := mappingKeys(t, jobs[0]); !slices.Equal(got, []string{"approve-release"}) {
+		t.Fatalf("first workflow job = %v, want approve-release", got)
+	}
+	hold := field(t, jobs[0], "approve-release")
+	if got := mappingKeys(t, hold); !slices.Equal(got, []string{"filters", "type"}) {
+		t.Fatalf("approve-release keys = %v, want exactly filters, type", got)
+	}
+	if got := text(t, hold, "type"); got != "approval" {
+		t.Fatalf("approve-release type = %q, want approval", got)
+	}
+	assertTagOnlyFilters(t, hold)
+	if got := mappingKeys(t, jobs[1]); !slices.Equal(got, []string{"release"}) {
+		t.Fatalf("second workflow job = %v, want release", got)
+	}
+	job := field(t, jobs[1], "release")
+	if got := mappingKeys(t, job); !slices.Equal(got, []string{"context", "filters", "requires"}) {
+		t.Fatalf("workflow job keys = %v, want exactly context, filters, requires", got)
+	}
+	if got := strings_(t, job, "requires"); !slices.Equal(got, []string{"approve-release"}) {
+		t.Fatalf("release requires = %v, want [approve-release]", got)
+	}
+	if got := strings_(t, job, "context"); !slices.Equal(got, []string{releaseContext}) {
+		t.Fatalf("context = %v, want [%s] (holds the publishing tokens)", got, releaseContext)
+	}
+	assertTagOnlyFilters(t, job)
+}
+
+// assertTagOnlyFilters requires a workflow job to run for version tags and
+// never for branches (CircleCI skips tag builds for jobs without tag filters).
+func assertTagOnlyFilters(t *testing.T, job any) {
+	t.Helper()
+	if got := mappingKeys(t, job, "filters"); !slices.Equal(got, []string{"branches", "tags"}) {
+		t.Fatalf("filters = %v, want exactly branches, tags", got)
+	}
+	if got := text(t, job, "filters", "branches", "ignore"); got != "/.*/" {
+		t.Fatalf("filters.branches.ignore = %q, want /.*/ (never run for branches)", got)
+	}
+	if got := text(t, job, "filters", "tags", "only"); got != releaseTagFilter {
+		t.Fatalf("filters.tags.only = %q, want %q", got, releaseTagFilter)
+	}
+}
+
+func goModToolchain(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`(?m)^sboms:`).Match(cfg) {
-		t.Skip("goreleaser does not generate SBOMs")
+	match := regexp.MustCompile(`(?m)^toolchain go([0-9]+\.[0-9]+\.[0-9]+)$`).FindSubmatch(data)
+	if match == nil {
+		t.Fatal("go.mod must pin a toolchain goX.Y.Z")
 	}
-	steps := getSteps(t, loadReleaseWorkflow(t))
-	syftIdx, pathIdx, goreleaserIdx := -1, -1, -1
-	for i, raw := range steps {
-		step, _ := raw.(map[string]any)
-		uses, _ := step["uses"].(string)
-		run, _ := step["run"].(string)
-		switch {
-		case strings.HasPrefix(uses, "anchore/sbom-action/download-syft@"):
-			syftIdx = i
-			if step["id"] != "syft" {
-				t.Errorf("download-syft step must have id syft, got %v", step["id"])
-			}
-		case strings.Contains(run, "GITHUB_PATH") && strings.Contains(run, "SYFT_CMD"):
-			pathIdx = i
-			if strings.Contains(run, "${{") {
-				t.Errorf("PATH step must not interpolate expressions into run: %q", run)
-			}
-			env, _ := step["env"].(map[string]any)
-			if env["SYFT_CMD"] != "${{ steps.syft.outputs.cmd }}" {
-				t.Errorf("PATH step env SYFT_CMD = %v", env["SYFT_CMD"])
-			}
-		case strings.Contains(uses, "goreleaser-action"):
-			goreleaserIdx = i
+	return string(match[1])
+}
+
+// TestCircleCIReleaseJobUsesPinnedToolchainImage keeps the release build on
+// the exact go.mod toolchain and on an immutable image digest.
+func TestCircleCIReleaseJobUsesPinnedToolchainImage(t *testing.T) {
+	job := field(t, loadReleaseConfig(t), "jobs", "release")
+	if got := mappingKeys(t, job); !slices.Equal(got, []string{"docker", "environment", "resource_class", "steps"}) {
+		t.Fatalf("release job keys = %v", got)
+	}
+	images := list(t, job, "docker")
+	if len(images) != 1 {
+		t.Fatalf("docker images = %d, want 1", len(images))
+	}
+	image := text(t, images[0], "image")
+	want := regexp.MustCompile(`^cimg/go:` + regexp.QuoteMeta(goModToolchain(t)) + `@sha256:[0-9a-f]{64}$`)
+	if !want.MatchString(image) {
+		t.Fatalf("image = %q, want cimg/go:%s pinned by sha256 digest", image, goModToolchain(t))
+	}
+	if got := text(t, job, "environment", "GOTOOLCHAIN"); got != "local" {
+		t.Fatalf("GOTOOLCHAIN = %q, want local", got)
+	}
+}
+
+// TestCircleCIReleaseJobSteps fixes the job to checkout, verified tool
+// installation, then the release script, so all logic lives in scripts that
+// are linted and exercised below.
+func TestCircleCIReleaseJobSteps(t *testing.T) {
+	steps := list(t, loadReleaseConfig(t), "jobs", "release", "steps")
+	if len(steps) != 3 || steps[0] != "checkout" {
+		t.Fatalf("steps = %v, want checkout followed by two run steps", steps)
+	}
+	for index, command := range []string{".circleci/scripts/install-release-tools.sh", ".circleci/scripts/release.sh"} {
+		step := steps[index+1]
+		if got := mappingKeys(t, step); !slices.Equal(got, []string{"run"}) {
+			t.Fatalf("step %d = %v, want a run step", index+1, got)
+		}
+		if got := text(t, step, "run", "command"); got != command {
+			t.Fatalf("step %d command = %q, want %q", index+1, got, command)
+		}
+		if _, err := os.Stat(filepath.Join(repoRoot(t), command)); err != nil {
+			t.Fatalf("step %d script: %v", index+1, err)
 		}
 	}
-	if syftIdx < 0 || pathIdx < 0 || goreleaserIdx < 0 {
-		t.Fatalf("steps: download-syft=%d path=%d goreleaser=%d; all required", syftIdx, pathIdx, goreleaserIdx)
+}
+
+var pinnedTools = map[string]string{
+	"GORELEASER_VERSION": "v2.18.3",
+	"COSIGN_VERSION":     "v3.1.3",
+	"SYFT_VERSION":       "v1.54.1",
+}
+
+// TestReleaseToolsArePinnedWithChecksums requires every release tool to be
+// pinned to an exact version and verified against a recorded sha256.
+func TestReleaseToolsArePinnedWithChecksums(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".circleci", "scripts", "install-release-tools.sh"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !(syftIdx < pathIdx && pathIdx < goreleaserIdx) {
-		t.Fatalf("order must be download-syft (%d) < PATH (%d) < goreleaser (%d)", syftIdx, pathIdx, goreleaserIdx)
+	script := string(data)
+	for name, version := range pinnedTools {
+		if !strings.Contains(script, "\n"+name+"="+version+"\n") {
+			t.Errorf("install-release-tools.sh must pin %s=%s", name, version)
+		}
+		sha := strings.TrimSuffix(name, "_VERSION") + "_SHA256="
+		if !regexp.MustCompile(`(?m)^` + sha + `[0-9a-f]{64}$`).MatchString(script) {
+			t.Errorf("install-release-tools.sh must record %s<sha256>", sha)
+		}
+	}
+}
+
+// --- behavioral harness for release.sh ---------------------------------------
+
+type releaseRun struct {
+	output string
+	calls  []string
+	err    error
+}
+
+// runReleaseScript executes release.sh with stub git, make, goreleaser,
+// circleci and cosign executables that log their arguments, so the script's
+// gating and ordering are tested without publishing anything.
+func runReleaseScript(t *testing.T, tag string, onMain bool) releaseRun {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("release.sh runs on the Linux release image")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "calls.log")
+	stub := func(name, body string) {
+		script := "#!/bin/sh\nprintf '%s' \"" + name + "\" >> \"$CALLS\"\nfor a in \"$@\"; do printf ' %s' \"$a\" >> \"$CALLS\"; done\nprintf '\\n' >> \"$CALLS\"\n" + body
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ancestor := "exit 1"
+	if onMain {
+		ancestor = "exit 0"
+	}
+	stub("git", `case "$1" in merge-base) `+ancestor+` ;; esac
+exit 0
+`)
+	stub("make", "exit 0\n")
+	stub("circleci", "printf 'stub-oidc-token'\n")
+	stub("goreleaser", "exit 0\n")
+	stub("cosign", "exit 0\n")
+	cmd := exec.Command(bash, filepath.Join(repoRoot(t), ".circleci", "scripts", "release.sh"))
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"PATH=" + bin + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin",
+		"HOME=" + dir,
+		"CALLS=" + log,
+		"CIRCLE_TAG=" + tag,
+		"CIRCLE_SHA1=0123456789abcdef0123456789abcdef01234567",
+		"CIRCLE_PROJECT_ID=" + circleciProjectID,
+		"GITHUB_TOKEN=stub-release-token",
+	}
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	runErr := cmd.Run()
+	var calls []string
+	if data, err := os.ReadFile(log); err == nil {
+		calls = strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+	return releaseRun{output: output.String(), calls: calls, err: runErr}
+}
+
+func callIndex(calls []string, prefix string) int {
+	return slices.IndexFunc(calls, func(call string) bool { return strings.HasPrefix(call, prefix) })
+}
+
+func TestReleaseScriptRejectsInvalidTagsBeforeBuilding(t *testing.T) {
+	for _, tag := range []string{"", "1.2.3", "v1.2", "v1.2.3;id", "v01.2.3", "release-v1.2.3", "v1.2.3-", "v1.2.3\nv1"} {
+		run := runReleaseScript(t, tag, true)
+		if run.err == nil {
+			t.Errorf("tag %q: release.sh succeeded, want rejection", tag)
+		}
+		for _, tool := range []string{"make", "goreleaser", "cosign", "circleci"} {
+			if callIndex(run.calls, tool) >= 0 {
+				t.Errorf("tag %q: %s ran before the tag was validated: %v", tag, tool, run.calls)
+			}
+		}
+	}
+}
+
+func TestReleaseScriptRejectsTagsNotOnMain(t *testing.T) {
+	run := runReleaseScript(t, "v1.2.3", false)
+	if run.err == nil || !strings.Contains(run.output, "not reachable from origin/main") {
+		t.Fatalf("want rejection for a tag off main, got err=%v output=%s", run.err, run.output)
+	}
+	if callIndex(run.calls, "make") >= 0 || callIndex(run.calls, "goreleaser") >= 0 {
+		t.Fatalf("build ran for a tag off main: %v", run.calls)
+	}
+}
+
+func TestReleaseScriptGatesSignsPublishesAndVerifies(t *testing.T) {
+	run := runReleaseScript(t, "v1.2.3-rc.1", true)
+	if run.err != nil {
+		t.Fatalf("release.sh failed: %v\n%s", run.err, run.output)
+	}
+	if strings.Contains(run.output, "stub-oidc-token") || strings.Contains(run.output, "stub-release-token") {
+		t.Fatal("release.sh must not print credentials")
+	}
+	order := []string{
+		"git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
+		"git merge-base --is-ancestor 0123456789abcdef0123456789abcdef01234567 refs/remotes/origin/main",
+		"make ci",
+		`circleci run oidc get --claims {"aud":"sigstore"} --root-issuer`,
+		"goreleaser release --clean",
+		"cosign verify-blob --bundle dist/checksums.txt.sigstore.json --certificate-identity " + releaseCertificateIdentity + " --certificate-oidc-issuer " + releaseOIDCIssuer + " dist/checksums.txt",
+	}
+	last := -1
+	for _, want := range order {
+		index := slices.Index(run.calls, want)
+		if index < 0 {
+			t.Fatalf("missing call %q in %v", want, run.calls)
+		}
+		if index <= last {
+			t.Fatalf("call %q out of order in %v", want, run.calls)
+		}
+		last = index
+	}
+}
+
+// TestInstallersVerifyTheReleasePipelineIdentity ties the signer (the
+// release pipeline definition) to what both installers accept.
+func TestInstallersVerifyTheReleasePipelineIdentity(t *testing.T) {
+	for _, name := range []string{"install.sh", "install.ps1"} {
+		data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		script := string(data)
+		for _, want := range []string{releaseCertificateIdentity, releaseOIDCIssuer} {
+			if !strings.Contains(script, want) {
+				t.Errorf("%s must verify %s", name, want)
+			}
+		}
+		for _, stale := range []string{"token.actions.githubusercontent.com", ".github/workflows/release.yml"} {
+			if strings.Contains(script, stale) {
+				t.Errorf("%s still references the GitHub Actions signer %s", name, stale)
+			}
+		}
 	}
 }

@@ -1,0 +1,50 @@
+version: 2.1
+
+# Signed releases for v* tags.
+#
+# This file is read ONLY by the CircleCI pipeline definition "release"
+# (b37a0ec3-4a25-4686-b480-6b4eda16099f), whose only trigger is "only-tags".
+# That definition's URL is the subject of the keyless cosign certificate on
+# checksums.txt and is the exact identity scripts/install.sh and
+# scripts/install.ps1 verify. Never attach PR or branch triggers to that
+# definition: any run of it can mint a signature the installers accept.
+#
+# The ant-router-release context holds GITHUB_TOKEN (contents:write on
+# abyssbugg/ant-router) and, optionally, HOMEBREW_TAP_GITHUB_TOKEN.
+
+jobs:
+  release:
+    docker:
+      - image: cimg/go:1.26.6@sha256:5d257ec542d76847379b4a92e9c5d573fa0ec7c79c494caa53a9aebd813752df
+    resource_class: large
+    environment:
+      GOTOOLCHAIN: local
+    steps:
+      - checkout
+      - run:
+          command: .circleci/scripts/install-release-tools.sh
+      - run:
+          command: .circleci/scripts/release.sh
+
+workflows:
+  release:
+    jobs:
+      # A pushed tag alone never publishes: a maintainer approves the hold
+      # in the CircleCI UI before the job that receives the tokens starts.
+      - approve-release:
+          type: approval
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+.*/
+      - release:
+          requires:
+            - approve-release
+          context:
+            - ant-router-release
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+.*/

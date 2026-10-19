@@ -62,8 +62,11 @@ checksum:
 sboms:
   - artifacts: archive
 
-# Keyless Sigstore signing of the checksum file; verify with
-# cosign verify-blob --bundle checksums.txt.sigstore.json checksums.txt.
+# Keyless Sigstore signing of the checksum file with the CircleCI release
+# pipeline's OIDC identity (SIGSTORE_ID_TOKEN, see .circleci/scripts/release.sh);
+# verify with cosign verify-blob --bundle checksums.txt.sigstore.json
+# --certificate-identity <release pipeline definition URL>
+# --certificate-oidc-issuer https://oidc.circleci.com checksums.txt.
 # Snapshot builds skip it via --skip=sign.
 signs:
   - cmd: cosign
@@ -79,9 +82,18 @@ homebrew_casks:
   - repository:
       owner: abyssbugg
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    # Skip upload for draft releases (not publicly downloadable yet) or when tap token is missing
-    skip_upload: "{{ if .IsDraft }}true{{ else if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN \"\" }}true{{ else }}false{{ end }}"
+      # index tolerates an unset variable; .Env.X would abort the release.
+      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
+    # Prereleases must not replace the stable cask, and a missing tap token
+    # skips only the cask (release.sh warns) instead of failing the release.
+    skip_upload: '{{ if or .Prerelease (eq (index .Env "HOMEBREW_TAP_GITHUB_TOKEN") "") }}true{{ else }}false{{ end }}'
+    # The binaries are not notarized, so Gatekeeper would refuse the first
+    # run; clear quarantine on exactly the two installed binaries. Homebrew
+    # has already verified the archive checksum. Notarization would remove
+    # the need for this hook.
+    hooks:
+      post:
+        install: 'if OS.mac? then system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/routerd", "#{staged_path}/routerctl"] end'
     binaries:
       - routerd
       - routerctl
@@ -95,14 +107,17 @@ changelog:
       regexp: "^fix"
     - title: Other
       regexp: ".*"
-  exclude:
-    patterns:
+  filters:
+    exclude:
       - "^docs:"
       - "^test:"
       - "^chore:"
 
 release:
-  owner: abyssbugg
-  name: ant-router
-  draft: true
+  github:
+    owner: abyssbugg
+    name: ant-router
+  # Installers resolve /releases/latest and /releases/download/<tag>, which
+  # never serve drafts, so a release is published as soon as it is signed.
+  draft: false
   prerelease: auto

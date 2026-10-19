@@ -332,8 +332,11 @@ release-check:
 	@which goreleaser > /dev/null || { echo "goreleaser not found; install from https://goreleaser.com/install/"; exit 1; }
 	goreleaser check
 
+# Local build of every release artifact; signing, SBOMs (needs syft) and
+# publishing only happen in the CircleCI release pipeline.
 release-snapshot:
-	goreleaser release --snapshot --clean --skip=sign,publish
+	@which goreleaser > /dev/null || { echo "goreleaser not found; install from https://goreleaser.com/install/"; exit 1; }
+	goreleaser release --snapshot --clean --skip=sign,publish,sbom
 
 release-test:
 	$(GO) test ./test/release/... -count=1

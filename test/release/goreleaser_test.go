@@ -149,6 +149,9 @@ func (r *yamlReader) sequence(indent int) []any {
 		item := strings.TrimSpace(strings.TrimPrefix(line.text, "-"))
 		if item == "" {
 			r.pos++
+			if r.pos >= len(r.lines) || r.lines[r.pos].indent <= indent {
+				r.fail("line %d: empty sequence item", line.number)
+			}
 			result = append(result, r.block(r.lines[r.pos].indent))
 			continue
 		}
@@ -307,6 +310,10 @@ func TestYAMLReaderRejectsUnsupportedSyntax(t *testing.T) {
 		"flow":   "builds: [a, b]\n",
 		"anchor": "base: &base x\n",
 		"block":  "text: |\n  x\n",
+		// A bare "-" with nothing nested under it must fail cleanly, not
+		// index past the end of the document.
+		"trailing empty item": "list:\n  -\n",
+		"empty item":          "list:\n  -\nnext: x\n",
 	} {
 		if _, err := decodeYAML([]byte(document)); err == nil {
 			t.Errorf("reader accepted unsupported %s syntax", name)
@@ -487,24 +494,39 @@ func TestGoreleaserHomebrewCaskAndRelease(t *testing.T) {
 	if text(t, cask, "repository", "owner") != "abyssbugg" || text(t, cask, "repository", "name") != "homebrew-tap" {
 		t.Error("cask must publish to abyssbugg/homebrew-tap")
 	}
-	if text(t, cask, "repository", "token") != "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}" {
-		t.Error("cask must use the HOMEBREW_TAP_GITHUB_TOKEN secret, not the release token")
+	// index tolerates an unset variable (the .Env.X form aborts the whole
+	// release when the tap token is missing).
+	if got := text(t, cask, "repository", "token"); got != `{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}` {
+		t.Errorf("cask token = %q, want the HOMEBREW_TAP_GITHUB_TOKEN secret via index", got)
 	}
-	skipUpload := text(t, cask, "skip_upload")
-	// skip_upload should be a conditional template that skips draft releases and when tap token is missing
-	if !strings.Contains(skipUpload, "IsDraft") || !strings.Contains(skipUpload, "HOMEBREW_TAP_GITHUB_TOKEN") {
-		t.Errorf("cask skip_upload must conditionally skip drafts and missing tap token, got: %q", skipUpload)
+	// Prereleases must not move the tap's stable cask, and a missing tap
+	// token skips only the cask instead of failing a signed release.
+	wantSkip := `{{ if or .Prerelease (eq (index .Env "HOMEBREW_TAP_GITHUB_TOKEN") "") }}true{{ else }}false{{ end }}`
+	if got := text(t, cask, "skip_upload"); got != wantSkip {
+		t.Errorf("cask skip_upload = %q, want %q", got, wantSkip)
+	}
+	// The binaries are not notarized, so Gatekeeper would block the first
+	// run; the cask clears quarantine on exactly the installed binaries.
+	wantHook := `if OS.mac? then system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/routerd", "#{staged_path}/routerctl"] end`
+	if got := text(t, cask, "hooks", "post", "install"); got != wantHook {
+		t.Errorf("cask post-install hook = %q, want %q", got, wantHook)
 	}
 	if got := strings_(t, cask, "binaries"); !sameSet(got, []string{"routerd", "routerctl"}) {
 		t.Errorf("cask binaries = %v", got)
 	}
-	if text(t, config, "release", "owner") != "abyssbugg" || text(t, config, "release", "name") != "ant-router" {
+	if text(t, config, "release", "github", "owner") != "abyssbugg" || text(t, config, "release", "github", "name") != "ant-router" {
 		t.Error("release must target abyssbugg/ant-router")
 	}
-	if text(t, config, "release", "draft") != "true" || text(t, config, "release", "prerelease") != "auto" {
-		t.Error("release must be a draft with automatic prerelease detection")
+	// Installers resolve releases through /releases/latest and
+	// /releases/download/<tag>, which do not serve drafts; a draft release
+	// would leave every published tag uninstallable.
+	if got := text(t, config, "release", "draft"); got != "false" {
+		t.Errorf("release.draft = %q, want false", got)
 	}
-	excluded := strings_(t, config, "changelog", "exclude", "patterns")
+	if got := text(t, config, "release", "prerelease"); got != "auto" {
+		t.Errorf("release.prerelease = %q, want auto", got)
+	}
+	excluded := strings_(t, config, "changelog", "filters", "exclude")
 	for _, prefix := range []string{"^docs", "^test", "^chore"} {
 		if !slices.ContainsFunc(excluded, func(pattern string) bool { return strings.HasPrefix(pattern, prefix) }) {
 			t.Errorf("changelog must exclude %s commits", prefix)
@@ -516,6 +538,11 @@ func TestMakefileDeclaresReleaseTargets(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "Makefile"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The snapshot builds every artifact locally without the CI-only steps
+	// (signing needs the release OIDC identity, SBOMs need syft).
+	if !bytes.Contains(data, []byte("goreleaser release --snapshot --clean --skip=sign,publish,sbom\n")) {
+		t.Error("release-snapshot must skip sign, publish and sbom")
 	}
 	for _, target := range []string{"release-check", "release-snapshot", "release-test"} {
 		if !bytes.Contains(data, []byte("\n"+target+":")) {
