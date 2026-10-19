@@ -181,7 +181,7 @@ func TestDecodeContinuationRejectsNonCanonicalEncodings(t *testing.T) {
 			}
 			continuation, err := canonical.NewContinuation("openai-primary", "gpt-5.2", []byte(raw))
 			if err != nil {
-				return
+				t.Fatalf("NewContinuation() failed: %v", err)
 			}
 			if _, err := decodeContinuationEnvelope(continuation, "openai-primary", "gpt-5.2", nil); err == nil {
 				t.Fatalf("non-canonical encoding accepted: %s", raw)
