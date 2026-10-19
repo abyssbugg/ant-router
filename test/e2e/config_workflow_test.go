@@ -74,8 +74,8 @@ func startDaemon(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instan
 	t.Cleanup(func() {
 		process.stop()
 		// After stop() the exec copy goroutine has finished, so reading the
-		// buffer is race-free. Daemon diagnostics (including recovered handler
-		// panics) are otherwise lost when a client sees a dropped connection.
+		// buffer is race-free. Captured stderr holds startup and fatal daemon
+		// errors; handler panics are recovered (HTTP 500) and are not logged.
 		if report := daemonFailureReport(t.Failed(), pid, process.stderr.Bytes()); report != "" {
 			t.Log(report)
 		}

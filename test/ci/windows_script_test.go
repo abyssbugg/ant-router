@@ -37,7 +37,7 @@ func TestWindowsScriptDoesNotDependOnChocolatey(t *testing.T) {
 }
 
 func TestWindowsScriptPinsAndVerifiesToolchainArchive(t *testing.T) {
-	script := readWindowsScript(t)
+	script := blockComment.ReplaceAllString(readWindowsScript(t), "")
 	// Exact release and asset: changing either must come with a new SHA-256.
 	url := regexp.MustCompile(`(?m)^\$mingwUrl\s*=\s*'https://github\.com/niXman/mingw-builds-binaries/releases/download/13\.2\.0-rt_v11-rev1/x86_64-13\.2\.0-release-posix-seh-ucrt-rt_v11-rev1\.7z'\s*$`)
 	if !url.MatchString(script) {
@@ -53,9 +53,16 @@ func TestWindowsScriptPinsAndVerifiesToolchainArchive(t *testing.T) {
 	if !hashCheck.MatchString(script) {
 		t.Fatal("windows.ps1 must compare the computed archive SHA-256 and throw on mismatch")
 	}
-	for _, want := range []string{"mingw32-make.exe"} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("windows.ps1 must contain %q", want)
-		}
+	extract := regexp.MustCompile(`(?m)^Invoke-Native \$sevenZip @\('x'`)
+	extractAt := extract.FindStringIndex(script)
+	if extractAt == nil {
+		t.Fatal("windows.ps1 must extract the archive with 7-Zip")
+	}
+	if hashAt := hashCheck.FindStringIndex(script); hashAt[0] > extractAt[0] {
+		t.Fatal("windows.ps1 must verify the archive SHA-256 before extracting it")
+	}
+	makeResolve := regexp.MustCompile(`(?m)^\$make\s*=\s*Join-Path\s+\$mingwBin\s+'mingw32-make\.exe'\s*$`)
+	if !makeResolve.MatchString(script) {
+		t.Fatal("windows.ps1 must resolve mingw32-make.exe from the pinned MinGW bin directory")
 	}
 }
