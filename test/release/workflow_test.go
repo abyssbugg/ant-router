@@ -314,7 +314,7 @@ func callIndex(calls []string, prefix string) int {
 }
 
 func TestReleaseScriptRejectsInvalidTagsBeforeBuilding(t *testing.T) {
-	for _, tag := range []string{"", "1.2.3", "v1.2", "v1.2.3;id", "v01.2.3", "release-v1.2.3", "v1.2.3-", "v1.2.3\nv1", "v1.2.3+build.1", "v1.2.3-rc.1+b", "v1.2.3--rc"} {
+	for _, tag := range []string{"", "1.2.3", "v1.2", "v1.2.3;id", "v01.2.3", "release-v1.2.3", "v1.2.3-", "v1.2.3\nv1", "v1.2.3+build.1", "v1.2.3-rc.1+b", "v1.2.3--rc", "v1.2.3-01", "v1.2.3-rc.007"} {
 		run := runReleaseScript(t, tag, true)
 		if run.err == nil {
 			t.Errorf("tag %q: release.sh succeeded, want rejection", tag)
@@ -470,7 +470,7 @@ func TestInstallersAcceptEveryReleasableTag(t *testing.T) {
 			}
 		}
 	}
-	for _, tag := range []string{"v1.2.3", "v1.2.3-rc.1"} {
+	for _, tag := range []string{"v1.2.3", "v1.2.3-rc.1", "v1.2.3-0.3.7", "v1.2.3-x-y.z-1", "v1.2.3-01a", "v1.2.3-1-x", "v1.2.3-0"} {
 		if !release.MatchString(tag) {
 			t.Errorf("release.sh must accept %q", tag)
 		}

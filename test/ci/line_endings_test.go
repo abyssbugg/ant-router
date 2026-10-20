@@ -63,8 +63,8 @@ func TestCheckoutLineEndingsAreLF(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(data, []byte("\r\n")) {
-			t.Errorf("%s: checked out with CRLF under core.autocrlf=true", p)
+		if bytes.IndexByte(data, '\r') >= 0 {
+			t.Errorf("%s: checked out with a carriage return under core.autocrlf=true", p)
 		}
 	}
 }

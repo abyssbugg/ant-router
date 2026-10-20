@@ -20,10 +20,11 @@ die() {
 export PATH="$HOME/bin:$PATH"
 
 tag="${CIRCLE_TAG:-}"
-semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z-]*(\.[0-9A-Za-z][0-9A-Za-z-]*)*)?$'
-# No +BUILD metadata (install.sh and install.ps1 reject it, and "+" in a
-# release-asset URL path needs encoding), and prerelease identifiers start
-# alphanumeric: every tag accepted here must also be accepted by both
+semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]+[A-Za-z-][0-9A-Za-z-]*|[A-Za-z][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]+[A-Za-z-][0-9A-Za-z-]*|[A-Za-z][0-9A-Za-z-]*))*)?$'
+# SemVer 2.0.0 prerelease identifiers (numeric ones without leading zeros),
+# except that identifiers must start alphanumeric and +BUILD metadata is not
+# allowed (install.sh and install.ps1 reject both, and "+" in a release-asset
+# URL path needs encoding): every tag accepted here must also be accepted by both
 # installers (TestInstallersAcceptEveryReleasableTag).
 # [[ =~ ]] is POSIX ERE without REG_NEWLINE: ^ and $ anchor the whole value,
 # so a tag containing a newline cannot match.
