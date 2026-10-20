@@ -20,21 +20,36 @@ import (
 
 const modulePath = "github.com/abyssbugg/ant-router"
 
-// repoRoot walks up from this file to the module root so the tests do not
-// depend on the working directory go test happens to use.
+// repoRoot walks up from the package directory (go test's working
+// directory) to the module root, so the tests do not depend on the path the
+// compiler recorded for this source file.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate test source file")
+	start, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
 	}
-	for dir := filepath.Dir(file); ; dir = filepath.Dir(dir) {
-		data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
-		if err == nil && bytes.HasPrefix(data, []byte("module "+modulePath+"\n")) {
-			return dir
+	root, visited, ok := findModuleRoot(start, modulePath)
+	if !ok {
+		t.Fatalf("module root for %s not found; searched %s", modulePath, strings.Join(visited, ", "))
+	}
+	return root
+}
+
+// findModuleRoot returns the nearest directory at or above start whose go.mod
+// declares module path. It tolerates CRLF line endings so a Windows checkout
+// without LF normalization still resolves.
+func findModuleRoot(start, path string) (root string, visited []string, ok bool) {
+	for dir := filepath.Clean(start); ; dir = filepath.Dir(dir) {
+		visited = append(visited, dir)
+		if data, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+			first, _, _ := bytes.Cut(data, []byte("\n"))
+			if string(bytes.TrimRight(first, "\r")) == "module "+path {
+				return dir, visited, true
+			}
 		}
-		if parent := filepath.Dir(dir); parent == dir {
-			t.Fatalf("module root for %s not found", modulePath)
+		if filepath.Dir(dir) == dir {
+			return "", visited, false
 		}
 	}
 }
