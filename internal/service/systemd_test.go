@@ -1,6 +1,14 @@
+//go:build !windows
+
+// The launchd and systemd backends manage services only on macOS and Linux
+// hosts; these tests drive them against the host filesystem with POSIX
+// absolute paths and execute bits, so they do not apply on Windows. The
+// production code still compiles and is vetted for Windows.
+
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -46,7 +54,7 @@ func TestRenderSystemdUnitBasic(t *testing.T) {
 	}
 
 	// Verify ownership marker
-	if !strings.Contains(unitStr, OwnershipMarker) {
+	if !hasOwnerLine([]byte(unitStr), systemdOwnerLine) {
 		t.Error("missing ownership marker")
 	}
 
@@ -95,12 +103,7 @@ func TestRenderSystemdUnitGolden(t *testing.T) {
 	goldenPath := filepath.Join("testdata", "systemd_basic.service")
 	golden, err := os.ReadFile(goldenPath)
 	if err != nil {
-		t.Logf("Note: golden file not found at %s, skipping comparison", goldenPath)
-		// At least verify format
-		if !strings.HasPrefix(string(unit), "[Unit]") {
-			t.Fatal("unit does not start with [Unit]")
-		}
-		return
+		t.Fatalf("read golden file %s: %v", goldenPath, err)
 	}
 
 	// Normalize paths for comparison
@@ -353,10 +356,13 @@ func TestSystemdBackendInstall(t *testing.T) {
 		t.Fatalf("unit file not created: %v", err)
 	}
 
-	// Verify runner was called with daemon-reload, enable --now
+	// Verify runner was called with daemon-reload, is-enabled, enable, restart
 	expectedCalls := [][]string{
+		{"systemctl", "--version"},
 		{"systemctl", "--user", "daemon-reload"},
-		{"systemctl", "--user", "enable", "--now", "test-service.service"},
+		{"systemctl", "--user", "is-enabled", "test-service.service"},
+		{"systemctl", "--user", "enable", "test-service.service"},
+		{"systemctl", "--user", "restart", "test-service.service"},
 	}
 
 	if len(fake.calls) != len(expectedCalls) {
@@ -389,16 +395,19 @@ func TestSystemdBackendUninstall(t *testing.T) {
 
 	// Pre-create the unit file with ownership marker
 	unitDir := filepath.Join(configDir, "systemd", "user")
-	os.MkdirAll(unitDir, 0755)
+	mustMkdirAll(t, unitDir, 0755)
 	unitPath := filepath.Join(unitDir, "test-service.service")
-	unit, _ := renderSystemdUnit(spec)
-	os.WriteFile(unitPath, unit, 0644)
+	unit, err := renderSystemdUnit(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, unitPath, unit, 0644)
 
 	fake := newFakeRunner()
 	backend := NewSystemdBackend(configDir, fake)
 
 	ctx := context.Background()
-	err := backend.Uninstall(ctx, "test-service")
+	err = backend.Uninstall(ctx, "test-service")
 	if err != nil {
 		t.Fatalf("Uninstall: %v", err)
 	}
@@ -433,9 +442,9 @@ func TestSystemdBackendUninstallRefusesUnownedFile(t *testing.T) {
 
 	// Pre-create an unowned unit file
 	unitDir := filepath.Join(configDir, "systemd", "user")
-	os.MkdirAll(unitDir, 0755)
+	mustMkdirAll(t, unitDir, 0755)
 	unitPath := filepath.Join(unitDir, "test-service.service")
-	os.WriteFile(unitPath, []byte("[Unit]\nDescription=unowned service\n"), 0644)
+	mustWriteFile(t, unitPath, []byte("[Unit]\nDescription=unowned service\n"), 0644)
 
 	fake := newFakeRunner()
 	backend := NewSystemdBackend(configDir, fake)
@@ -472,10 +481,13 @@ func TestSystemdBackendUninstallKeepsFileOnDisableError(t *testing.T) {
 
 	// Pre-create the unit file
 	unitDir := filepath.Join(configDir, "systemd", "user")
-	os.MkdirAll(unitDir, 0755)
+	mustMkdirAll(t, unitDir, 0755)
 	unitPath := filepath.Join(unitDir, "test-service.service")
-	unit, _ := renderSystemdUnit(spec)
-	os.WriteFile(unitPath, unit, 0644)
+	unit, err := renderSystemdUnit(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, unitPath, unit, 0644)
 
 	// Create a custom runner that fails on disable but succeeds on daemon-reload
 	callCount := 0
@@ -499,7 +511,7 @@ func TestSystemdBackendUninstallKeepsFileOnDisableError(t *testing.T) {
 	backend := NewSystemdBackend(configDir, customRunner)
 
 	ctx := context.Background()
-	err := backend.Uninstall(ctx, "test-service")
+	err = backend.Uninstall(ctx, "test-service")
 
 	if err == nil {
 		t.Error("Uninstall: expected error for permission denied, got nil")
@@ -531,10 +543,13 @@ func TestSystemdBackendUninstallIgnoresNotLoadedError(t *testing.T) {
 
 	// Pre-create the unit file
 	unitDir := filepath.Join(configDir, "systemd", "user")
-	os.MkdirAll(unitDir, 0755)
+	mustMkdirAll(t, unitDir, 0755)
 	unitPath := filepath.Join(unitDir, "test-service.service")
-	unit, _ := renderSystemdUnit(spec)
-	os.WriteFile(unitPath, unit, 0644)
+	unit, err := renderSystemdUnit(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, unitPath, unit, 0644)
 
 	fake := newFakeRunner()
 	fake.errMap = map[string]error{"disable": fmt.Errorf("unit not loaded")}
@@ -543,7 +558,7 @@ func TestSystemdBackendUninstallIgnoresNotLoadedError(t *testing.T) {
 	backend := NewSystemdBackend(configDir, fake)
 
 	ctx := context.Background()
-	err := backend.Uninstall(ctx, "test-service")
+	err = backend.Uninstall(ctx, "test-service")
 
 	if err != nil {
 		t.Errorf("Uninstall: expected nil for not-loaded error, got %v", err)
@@ -560,6 +575,17 @@ func TestSystemdBackendUninstallIgnoresNotLoadedError(t *testing.T) {
 func TestSystemdBackendStart(t *testing.T) {
 	tmpDir := t.TempDir()
 	configDir := filepath.Join(tmpDir, "config")
+
+	// Create owned unit file
+	unitDir := filepath.Join(configDir, "systemd", "user")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	unitPath := filepath.Join(unitDir, "my-service.service")
+	unitContent := []byte("[Unit]\nDescription=Test\n" + systemdOwnerLine + "\n[Service]\nType=simple\nExecStart=/bin/true\n[Install]\nWantedBy=default.target\n")
+	if err := os.WriteFile(unitPath, unitContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	fake := newFakeRunner()
 	backend := NewSystemdBackend(configDir, fake)
@@ -580,6 +606,17 @@ func TestSystemdBackendStart(t *testing.T) {
 func TestSystemdBackendStop(t *testing.T) {
 	tmpDir := t.TempDir()
 	configDir := filepath.Join(tmpDir, "config")
+
+	// Create owned unit file
+	unitDir := filepath.Join(configDir, "systemd", "user")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	unitPath := filepath.Join(unitDir, "my-service.service")
+	unitContent := []byte("[Unit]\nDescription=Test\n" + systemdOwnerLine + "\n[Service]\nType=simple\nExecStart=/bin/true\n[Install]\nWantedBy=default.target\n")
+	if err := os.WriteFile(unitPath, unitContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	fake := newFakeRunner()
 	backend := NewSystemdBackend(configDir, fake)
@@ -610,6 +647,9 @@ func (m *mockRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	}
 	call := append([]string{name}, args...)
 	m.calls = append(m.calls, call)
+	if len(args) == 1 && args[0] == "--version" {
+		return []byte("systemd 252 (252.22-1)\n"), nil, nil
+	}
 	return m.resp, nil, m.err
 }
 
@@ -725,7 +765,7 @@ func TestSystemdBackendStatusPresentInactive(t *testing.T) {
 	if err := os.MkdirAll(unitDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(unitDir, "my-service.service"), []byte(OwnershipMarker+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(unitDir, "my-service.service"), []byte(systemdOwnerLine+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mock := &mockRunner{resp: []byte("inactive\n"), err: fmt.Errorf("exit status 3")}
@@ -873,7 +913,7 @@ func writeTestUnit(t *testing.T, configDir, label string) {
 	if err := os.MkdirAll(unitDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(unitDir, label+".service"), []byte(OwnershipMarker+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(unitDir, label+".service"), []byte(systemdOwnerLine+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -898,5 +938,197 @@ func TestSystemdBackendUninstallUnreadableUnitHasNoSideEffects(t *testing.T) {
 	}
 	if _, err := os.Stat(unitPath); err != nil {
 		t.Errorf("Uninstall: unit path should remain: %v", err)
+	}
+}
+
+// TestSystemdInstallRefusesUnownedUnit verifies Install refuses to overwrite unowned units.
+func TestSystemdInstallRefusesUnownedUnit(t *testing.T) {
+	tmpDir := t.TempDir()
+	exe := filepath.Join(tmpDir, "app")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh"), 0755); err != nil {
+		t.Fatalf("WriteFile exe: %v", err)
+	}
+	logPath := filepath.Join(tmpDir, "app.log")
+
+	// Create an unowned unit at the target path
+	unitsDir := filepath.Join(tmpDir, "systemd", "user")
+	if err := os.MkdirAll(unitsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	unitPath := filepath.Join(unitsDir, "com.test.app.service")
+	unownedContent := []byte("[Unit]\nDescription=Some other service\n")
+	if err := os.WriteFile(unitPath, unownedContent, 0644); err != nil {
+		t.Fatalf("WriteFile unowned: %v", err)
+	}
+
+	spec := Spec{
+		Label:      "com.test.app",
+		Executable: exe,
+		Args:       []string{},
+		LogPath:    logPath,
+	}
+
+	fake := newFakeRunner()
+	backend := NewSystemdBackend(tmpDir, fake)
+
+	ctx := context.Background()
+	err := backend.Install(ctx, spec)
+
+	// Should return ErrNotOwned
+	if !isErrNotOwned(err) {
+		t.Fatalf("Install: expected ErrNotOwned, got %v", err)
+	}
+
+	// Unit should be unchanged (byte-identical)
+	updated, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("ReadFile unit after Install: %v", err)
+	}
+	if !bytes.Equal(updated, unownedContent) {
+		t.Errorf("unit was modified: expected %q, got %q", unownedContent, updated)
+	}
+
+	// No enable should have been called
+	enableCall := findCall(fake.calls, "systemctl", "enable")
+	if enableCall != nil {
+		t.Error("enable was called despite refusing Install")
+	}
+}
+
+// TestSystemdStartRefusesUnownedAndIssuesNoCommand verifies Start refuses unowned units.
+func TestSystemdStartRefusesUnownedAndIssuesNoCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	// Create an unowned unit
+	unitsDir := filepath.Join(configDir, "systemd", "user")
+	if err := os.MkdirAll(unitsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	unitPath := filepath.Join(unitsDir, "com.test.app.service")
+	if err := os.WriteFile(unitPath, []byte("[Unit]\nDescription=Other\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fake := newFakeRunner()
+	backend := NewSystemdBackend(configDir, fake)
+
+	ctx := context.Background()
+	err := backend.Start(ctx, "com.test.app")
+
+	// Should return ErrNotOwned
+	if !isErrNotOwned(err) {
+		t.Fatalf("Start: expected ErrNotOwned, got %v", err)
+	}
+
+	// No systemctl commands should have been recorded
+	if len(fake.calls) != 0 {
+		t.Errorf("Start issued commands despite refusing: %v", fake.calls)
+	}
+}
+
+// TestSystemdStopRefusesUnownedAndIssuesNoCommand verifies Stop refuses unowned units.
+func TestSystemdStopRefusesUnownedAndIssuesNoCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	// Create an unowned unit
+	unitsDir := filepath.Join(configDir, "systemd", "user")
+	if err := os.MkdirAll(unitsDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	unitPath := filepath.Join(unitsDir, "com.test.app.service")
+	if err := os.WriteFile(unitPath, []byte("[Unit]\nDescription=Other\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fake := newFakeRunner()
+	backend := NewSystemdBackend(configDir, fake)
+
+	ctx := context.Background()
+	err := backend.Stop(ctx, "com.test.app")
+
+	// Should return ErrNotOwned
+	if !isErrNotOwned(err) {
+		t.Fatalf("Stop: expected ErrNotOwned, got %v", err)
+	}
+
+	// No systemctl commands should have been recorded
+	if len(fake.calls) != 0 {
+		t.Errorf("Stop issued commands despite refusing: %v", fake.calls)
+	}
+}
+
+// TestSystemdInstallCreatesLogDirectory verifies log directory is created.
+// TestSystemdStartReturnsMissingAsNotInstalled verifies Start returns ErrNotInstalled when unit doesn't exist.
+func TestSystemdStartReturnsMissingAsNotInstalled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	fake := &mockRunner{}
+	backend := NewSystemdBackend(configDir, fake)
+
+	ctx := context.Background()
+	err := backend.Start(ctx, "my-service")
+
+	// Should return ErrNotInstalled
+	var notInstalledErr ErrNotInstalled
+	if !errors.As(err, &notInstalledErr) {
+		t.Fatalf("Start: expected ErrNotInstalled, got %T: %v", err, err)
+	}
+}
+
+// TestSystemdStopReturnsMissingAsNotInstalled verifies Stop returns ErrNotInstalled when unit doesn't exist.
+func TestSystemdStopReturnsMissingAsNotInstalled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	fake := &mockRunner{}
+	backend := NewSystemdBackend(configDir, fake)
+
+	ctx := context.Background()
+	err := backend.Stop(ctx, "my-service")
+
+	// Should return ErrNotInstalled
+	var notInstalledErr ErrNotInstalled
+	if !errors.As(err, &notInstalledErr) {
+		t.Fatalf("Stop: expected ErrNotInstalled, got %T: %v", err, err)
+	}
+}
+
+func TestSystemdInstallCreatesLogDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	exe := filepath.Join(tmpDir, "app")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh"), 0755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Specify a log path in a non-existent subdirectory
+	logPath := filepath.Join(tmpDir, "logs", "subdir", "app.log")
+
+	spec := Spec{
+		Label:      "com.test.app",
+		Executable: exe,
+		Args:       []string{},
+		LogPath:    logPath,
+	}
+
+	fake := newFakeRunner()
+	backend := NewSystemdBackend(tmpDir, fake)
+
+	ctx := context.Background()
+	err := backend.Install(ctx, spec)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// Log directory should exist
+	logDir := filepath.Dir(logPath)
+	info, err := os.Stat(logDir)
+	if err != nil {
+		t.Fatalf("log directory not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("log path is not a directory")
 	}
 }

@@ -119,7 +119,7 @@ func (s *Store) loadPath(path string) (Token, error) {
 	if !info.Mode().IsRegular() || !privateTokenFile(path, info.Mode()) {
 		return Token{}, &Error{Code: CodeTokenCorrupt, Path: "token_file", Err: errors.New("token file is invalid")}
 	}
-	file, err := os.Open(path)
+	file, err := openTokenFile(path)
 	if err != nil {
 		return Token{}, &Error{Code: CodeStoreUnavailable, Path: "token_file", Err: err}
 	}
