@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Buildkite entry point. Each mode mirrors one job of .github/workflows/ci.yml
-# so local `make ci`, GitHub Actions and Buildkite enforce the same gates.
+# Buildkite entry point. Each mode is one CI job (quality, platform, codex-e2e,
+# fuzz, installer); .circleci/scripts/windows.ps1 runs the platform job on
+# native Windows. Local `make ci` runs the quality gates plus fuzz-smoke.
 set -euo pipefail
 
 mode="${1:-}"
