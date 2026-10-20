@@ -282,8 +282,11 @@ func decodeContinuationEnvelope(continuation canonical.Continuation, providerID,
 	if err != nil {
 		return continuationEnvelope{}, err
 	}
+	// Compare against the raw token, not the parsed value: canonicaljson
+	// normalizes whitespace and string escapes, so comparing parsed bytes
+	// would accept many encodings of one envelope.
 	canonicalBytes, err := envelope.canonicalBytes()
-	if err != nil || !bytes.Equal(canonicalBytes, value.Bytes()) {
+	if err != nil || !bytes.Equal(canonicalBytes, continuation.Bytes()) {
 		return continuationEnvelope{}, continuationEnvelopeError()
 	}
 	if allowedAnchors != nil {

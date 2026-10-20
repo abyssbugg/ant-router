@@ -149,3 +149,43 @@ func TestContinuationEnvelopeRejectsDuplicateAppend(t *testing.T) {
 		t.Fatal("duplicate append accepted")
 	}
 }
+
+// Continuation bytes are opaque tokens the router itself emits in canonical
+// form. Any other byte encoding of the same envelope (whitespace, string
+// escapes, trailing data) must be rejected so a token has exactly one valid
+// representation.
+func TestDecodeContinuationRejectsNonCanonicalEncodings(t *testing.T) {
+	id, err := canonical.GenerateItemID(bytes.NewReader(bytes.Repeat([]byte{1}, 16)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := encodeContinuationEnvelope("openai-primary", "gpt-5.2", []continuationEntry{{canonicalItemID: id, upstreamItemID: "rs_seed", encryptedContent: "cipher-seed"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := string(seed.Bytes())
+	if _, err := decodeContinuationEnvelope(seed, "openai-primary", "gpt-5.2", nil); err != nil {
+		t.Fatalf("canonical envelope rejected: %v", err)
+	}
+	for name, raw := range map[string]string{
+		"inner whitespace":    strings.Replace(base, `,"version"`, `, "version"`, 1),
+		"leading whitespace":  " " + base,
+		"trailing newline":    base + "\n",
+		"escaped value":       strings.Replace(base, `rs_seed`, `rs_s\u0065ed`, 1),
+		"escaped solidus":     strings.Replace(base, `cipher-seed`, `cipher\/seed`, 1),
+		"escaped member name": strings.Replace(base, `"version"`, `"\u0076ersion"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if raw == base {
+				t.Fatal("mutation did not change the encoding")
+			}
+			continuation, err := canonical.NewContinuation("openai-primary", "gpt-5.2", []byte(raw))
+			if err != nil {
+				t.Fatalf("NewContinuation() failed: %v", err)
+			}
+			if _, err := decodeContinuationEnvelope(continuation, "openai-primary", "gpt-5.2", nil); err == nil {
+				t.Fatalf("non-canonical encoding accepted: %s", raw)
+			}
+		})
+	}
+}
