@@ -28,7 +28,7 @@ func encodeRequestInternal(request canonical.Request, upstreamModel string, stre
 		return nil, nil, invalid("request", "canonical request is invalid")
 	}
 	if strings.TrimSpace(upstreamModel) == "" || strings.TrimSpace(upstreamModel) != upstreamModel {
-		return nil, nil, invalid("request.upstream_model", "upstream model is invalid")
+		return nil, nil, configurationErr("request.upstream_model", "upstream model is invalid")
 	}
 	if request.Continuation() != nil {
 		return nil, nil, unsupported("request.continuation")

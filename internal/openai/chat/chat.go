@@ -32,6 +32,13 @@ func invalid(path, message string) error {
 	return &Error{Code: "invalid", Path: path, Message: message}
 }
 
+// configurationErr reports operator configuration (for example the route's
+// upstream model) the chat wire cannot use. It is not client-caused, so it is
+// neither invalid nor unsupported and maps to an internal failure.
+func configurationErr(path, message string) error {
+	return &Error{Code: "configuration", Path: path, Message: message}
+}
+
 func protocolErr(path string) error {
 	return &Error{Code: "protocol", Path: path, Message: "upstream chat response is invalid"}
 }
@@ -46,8 +53,9 @@ func IsUnsupported(err error) bool {
 }
 
 // IsInvalid reports whether err is a client-caused invalid input error.
-// Every invalid(...) error produced by request encoding is client-caused and
-// should map to CodeInvalidRequest at the provider layer.
+// invalid(...) errors describe the client's request and map to
+// CodeInvalidRequest at the provider layer; configuration problems use the
+// distinct "configuration" code and are not matched.
 func IsInvalid(err error) bool {
 	var target *Error
 	if errors.As(err, &target) {

@@ -290,8 +290,24 @@ func TestEncodedRequestBodyIsBounded(t *testing.T) {
 		Tools: []canonical.ToolDefinition{mustCustomTextTool(t, "apply_patch", "Apply a patch")},
 	})
 	if err != nil {
-		t.Skipf("canonical request rejected the fixture before encoding: %v", err)
+		t.Fatalf("canonical request rejected the fixture before encoding: %v", err)
 	}
 	_, _, err = EncodeRequestWithTools(request, "deepseek-chat", true)
 	assertChatError(t, err, "invalid", "request")
+	var target *Error
+	if !errors.As(err, &target) || target.Message != "encoded chat request exceeds limit" {
+		t.Fatalf("error = %v, want the encoded size-limit error", err)
+	}
+}
+
+// An invalid upstream model is operator configuration, not client input, so
+// it carries its own code and IsInvalid does not classify it as client-caused.
+func TestEncodeRequestReportsUpstreamModelAsConfiguration(t *testing.T) {
+	for _, model := range []string{"", " m", "m "} {
+		_, _, err := EncodeRequestWithTools(testRequest(t), model, true)
+		assertChatError(t, err, "configuration", "request.upstream_model")
+		if IsInvalid(err) || IsUnsupported(err) {
+			t.Fatalf("model %q: error %v classified as client-caused", model, err)
+		}
+	}
 }

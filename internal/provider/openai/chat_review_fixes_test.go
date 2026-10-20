@@ -154,3 +154,21 @@ func TestChatWireStreamsLargeCustomInputInOneSSELine(t *testing.T) {
 		})
 	}
 }
+
+// An invalid upstream model comes from provider or route configuration, not
+// from the client, so it must not be reported as a non-retryable invalid
+// request that stops failover.
+func TestChatWireReportsInvalidUpstreamModelAsInternal(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer server.Close()
+	for _, model := range []string{"", " deepseek-chat", "deepseek-chat "} {
+		_, err := chatTestProvider(t, server.URL).executeChat(context.Background(), model, chatWireRequest(t))
+		if code := execution.CodeOf(err); code != execution.CodeInternal {
+			t.Fatalf("executeChat(%q) CodeOf = %q, want %q (err=%v)", model, code, execution.CodeInternal, err)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("upstream called %d times for a misconfigured model", calls.Load())
+	}
+}

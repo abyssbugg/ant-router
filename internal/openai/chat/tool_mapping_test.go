@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -327,12 +328,13 @@ func TestAccumulatorCountsReplayedPreNameArgumentsOnce(t *testing.T) {
 func TestAccumulatorBoundsBufferedCustomArguments(t *testing.T) {
 	fragment := strings.Repeat("a", 64<<10)
 	chunks := []string{`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","function":{"name":"apply_patch","arguments":"{\"input\":\""}}]}}]}`}
-	// Custom tool arguments are now bounded by MaxRequestBytes (2 MiB) to support larger inputs
-	for written := 0; written <= canonical.MaxRequestBytes; written += len(fragment) {
+	// Buffered custom arguments are bounded per call by MaxCustomArgumentBytes.
+	for written := 0; written <= MaxCustomArgumentBytes; written += len(fragment) {
 		chunks = append(chunks, `{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"`+fragment+`"}}]}}]}`)
 	}
 	_, _, err := runMappingStream(t, chunks, mappingNameMap())
-	if err == nil || !strings.Contains(err.Error(), "arguments_limit") {
-		t.Fatalf("err = %v, want arguments_limit protocol error", err)
+	var target *Error
+	if !errors.As(err, &target) || target.Code != "protocol" || target.Path != "tool.arguments_limit" {
+		t.Fatalf("err = %v, want protocol at tool.arguments_limit", err)
 	}
 }
