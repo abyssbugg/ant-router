@@ -1,4 +1,4 @@
-# Native Windows gates (mirrors the windows-latest job of .github/workflows/ci.yml)
+# Native Windows gates: the platform job (see .buildkite/scripts/ci.sh platform)
 # plus Windows race coverage and native install.ps1 tests.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest

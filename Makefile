@@ -320,10 +320,10 @@ cross-build:
 
 verify: fmt-check vet test test-race build cross-build
 
-# ci mirrors .github/workflows/ci.yml: the quality job steps plus the
-# fuzz-smoke target (the workflow's fuzz job additionally runs per-package
-# fuzz targets). The codex-cli-e2e job (needs the pinned Codex CLI) and the
-# platform-tests macOS/Windows matrix stay workflow-only.
+# ci mirrors the Buildkite quality job (.buildkite/scripts/ci.sh quality) plus
+# the fuzz-smoke target (the fuzz job additionally runs per-package fuzz
+# targets). The codex-e2e job (needs the pinned Codex CLI) and the macOS and
+# Windows platform jobs run only on Buildkite and CircleCI.
 ci: verify config-test config-race fault-test control-test control-race control-fault configservice-test configservice-race cli-test cli-race phase1c-fault phase1c-e2e canonical-test canonical-race canonical-golden canonical-stress streaming-test streaming-race streaming-golden streaming-stress phase3a-ci phase3b-ci phase4a-ci phase4b-ci phase4c-ci codex-alpha-ci fuzz-smoke
 
 .PHONY: release-check release-snapshot release-test

@@ -1,5 +1,5 @@
-# Ant Router CI on Buildkite hosted agents. Steps mirror the jobs in
-# .github/workflows/ci.yml (kept for parity) through .buildkite/scripts/ci.sh.
+# Ant Router CI on Buildkite hosted agents (Linux and macOS gates) through
+# .buildkite/scripts/ci.sh.
 # Native Windows runs on CircleCI (.circleci/config.yml) because the
 # Buildkite cluster has no hosted Windows queue.
 
