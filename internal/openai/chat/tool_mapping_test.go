@@ -289,8 +289,9 @@ func TestAccumulatorBoundsTotalRetainedToolArguments(t *testing.T) {
 			break
 		}
 	}
-	if err == nil || !strings.Contains(err.Error(), "arguments_total_limit") {
-		t.Fatalf("err = %v, want arguments_total_limit protocol error", err)
+	var target *Error
+	if !errors.As(err, &target) || target.Code != "protocol" || target.Path != "tool.arguments_total_limit" {
+		t.Fatalf("err = %v, want protocol at tool.arguments_total_limit", err)
 	}
 }
 
