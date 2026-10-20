@@ -2,10 +2,8 @@ package chat
 
 import (
 	"encoding/json"
-	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
-	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 )
 
 // IDGenerator supplies canonical identifiers so callers can inject
@@ -99,8 +97,9 @@ func UsageParams(usage UsageWire) canonical.UsageParams {
 }
 
 // BuildResponse assembles the canonical response for one non-streaming chat
-// completion.
-func BuildResponse(responseID canonical.ResponseID, model string, completion Completion, ids IDGenerator) (canonical.Response, error) {
+// completion. nameMap maps upstream function names back to the canonical
+// tools they were encoded from; nil means every call is a plain function.
+func BuildResponse(responseID canonical.ResponseID, model string, completion Completion, ids IDGenerator, nameMap ToolNameMap) (canonical.Response, error) {
 	if len(completion.Choices) != 1 {
 		return canonical.Response{}, protocolErr("response.choices")
 	}
@@ -152,15 +151,6 @@ func BuildResponse(responseID canonical.ResponseID, model string, completion Com
 		if call.Type != "" && call.Type != "function" {
 			return canonical.Response{}, protocolErr("response.tool_calls.type")
 		}
-		// Treat empty arguments (after trimming ASCII whitespace) as empty JSON object.
-		argsStr := strings.TrimSpace(call.Function.Arguments)
-		if argsStr == "" {
-			argsStr = "{}"
-		}
-		arguments, err := canonicaljson.Parse([]byte(argsStr), canonicaljson.DefaultLimits())
-		if err != nil {
-			return canonical.Response{}, protocolErr("response.tool_calls.arguments")
-		}
 		itemID, err := ids.ItemID()
 		if err != nil {
 			return canonical.Response{}, protocolErr("response.item_id")
@@ -169,13 +159,13 @@ func BuildResponse(responseID canonical.ResponseID, model string, completion Com
 		if err != nil {
 			return canonical.Response{}, protocolErr("response.call_id")
 		}
-		toolCall, err := canonical.NewToolCall(itemID, callID, call.Function.Name, arguments)
+		tool, err := resolveTool(nameMap, call.Function.Name)
 		if err != nil {
-			return canonical.Response{}, protocolErr("response.tool_call")
+			return canonical.Response{}, err
 		}
-		item, err := canonical.NewToolCallItem(toolCall)
+		item, err := buildToolCallItem(tool, itemID, callID, call.Function.Arguments)
 		if err != nil {
-			return canonical.Response{}, protocolErr("response.item")
+			return canonical.Response{}, err
 		}
 		items = append(items, item)
 	}

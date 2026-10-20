@@ -10,14 +10,14 @@ import (
 
 // runToolStream feeds raw chunks through an accumulator and a streaming
 // machine, returning every completed item or the first accumulator error.
-func runToolStream(t *testing.T, chunks []string) ([]canonical.Item, error) {
+func runToolStream(t *testing.T, names ToolNameMap, chunks []string) ([]canonical.Item, error) {
 	t.Helper()
 	ids := &countingIDs{}
 	responseID, err := ids.ResponseID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	accumulator := NewAccumulator(responseID, "public/model", ids)
+	accumulator := NewAccumulator(responseID, "public/model", ids, names)
 	machine, err := streaming.NewMachine(streaming.DefaultMachineOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func toolChunk(fields string) string {
 }
 
 func TestAccumulatorJoinsToolNameSplitAcrossChunks(t *testing.T) {
-	items, err := runToolStream(t, []string{
+	items, err := runToolStream(t, nil, []string{
 		toolChunkRole,
 		toolChunk(`"id":"up_1","function":{"name":"get_","arguments":""}`),
 		toolChunk(`"function":{"name":"current_"}`),
@@ -96,7 +96,7 @@ func TestAccumulatorJoinsToolNameSplitAcrossChunks(t *testing.T) {
 }
 
 func TestAccumulatorStartsNameOnlyToolAtCompletion(t *testing.T) {
-	items, err := runToolStream(t, []string{
+	items, err := runToolStream(t, nil, []string{
 		toolChunkRole,
 		toolChunk(`"id":"up_1","function":{"name":"list_"}`),
 		toolChunk(`"function":{"name":"files"}`),
@@ -122,7 +122,7 @@ func TestAccumulatorStartsNameOnlyToolAtCompletion(t *testing.T) {
 }
 
 func TestAccumulatorRejectsNameFragmentAfterArguments(t *testing.T) {
-	_, err := runToolStream(t, []string{
+	_, err := runToolStream(t, nil, []string{
 		toolChunkRole,
 		toolChunk(`"id":"up_1","function":{"name":"lookup","arguments":"{"}`),
 		toolChunk(`"function":{"name":"_more","arguments":"}"}`),
@@ -138,7 +138,7 @@ func TestAccumulatorRejectsOverlongSplitToolName(t *testing.T) {
 	for i := range half {
 		half[i] = 'a'
 	}
-	_, err := runToolStream(t, []string{
+	_, err := runToolStream(t, nil, []string{
 		toolChunkRole,
 		toolChunk(`"id":"up_1","function":{"name":"` + string(half) + `"}`),
 		toolChunk(`"function":{"name":"` + string(half) + `"}`),
@@ -146,5 +146,26 @@ func TestAccumulatorRejectsOverlongSplitToolName(t *testing.T) {
 	})
 	if got := protocolPath(err); got != "tool.name" {
 		t.Fatalf("error = %v (path %q), want tool.name protocol error", err, got)
+	}
+}
+
+func TestAccumulatorResolvesSplitCustomToolName(t *testing.T) {
+	names := ToolNameMap{"apply_patch": {Kind: canonical.ToolDefinitionKindCustom, Name: "apply_patch"}}
+	items, err := runToolStream(t, names, []string{
+		toolChunkRole,
+		toolChunk(`"id":"up_1","function":{"name":"apply"}`),
+		toolChunk(`"function":{"name":"_patch","arguments":"{\"input\":"}`),
+		toolChunk(`"function":{"arguments":"\"*** Begin Patch\"}"}`),
+		toolChunkFinish,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	call, ok := items[0].CustomToolCall()
+	if !ok || call.Name() != "apply_patch" || call.Input() != "*** Begin Patch" {
+		t.Fatalf("custom call = %#v ok=%t", call, ok)
 	}
 }

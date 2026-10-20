@@ -13,22 +13,33 @@ import (
 // the canonical request carries only the public alias. The stream flag
 // controls the stream and stream_options fields.
 func EncodeRequest(request canonical.Request, upstreamModel string, stream bool) ([]byte, error) {
+	body, _, err := encodeRequestInternal(request, upstreamModel, stream)
+	return body, err
+}
+
+// EncodeRequestWithTools maps one canonical request to a Chat Completions body
+// and returns a ToolNameMap for response-side name resolution.
+func EncodeRequestWithTools(request canonical.Request, upstreamModel string, stream bool) ([]byte, ToolNameMap, error) {
+	return encodeRequestInternal(request, upstreamModel, stream)
+}
+
+func encodeRequestInternal(request canonical.Request, upstreamModel string, stream bool) ([]byte, ToolNameMap, error) {
 	if !request.Valid() {
-		return nil, invalid("request", "canonical request is invalid")
+		return nil, nil, invalid("request", "canonical request is invalid")
 	}
 	if strings.TrimSpace(upstreamModel) == "" || strings.TrimSpace(upstreamModel) != upstreamModel {
-		return nil, invalid("request.upstream_model", "upstream model is invalid")
+		return nil, nil, configurationErr("request.upstream_model", "upstream model is invalid")
 	}
 	if request.Continuation() != nil {
-		return nil, unsupported("request.continuation")
+		return nil, nil, unsupported("request.continuation")
 	}
 	messages, err := encodeMessages(request.Input())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	tools, err := encodeTools(request.Tools())
+	tools, nameMap, err := encodeToolsWithMap(request.Tools())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	body := map[string]any{
 		"model":    upstreamModel,
@@ -40,7 +51,11 @@ func EncodeRequest(request canonical.Request, upstreamModel string, stream bool)
 	}
 	if len(tools) > 0 {
 		body["tools"] = tools
-		body["tool_choice"] = encodeToolChoice(request.ToolChoice())
+		choice, err := encodeToolChoice(request.ToolChoice(), nameMap)
+		if err != nil {
+			return nil, nil, err
+		}
+		body["tool_choice"] = choice
 		body["parallel_tool_calls"] = request.Output().ParallelToolCalls()
 	}
 	if output := request.Output(); output.Format() != canonical.OutputFormat("text") {
@@ -58,7 +73,15 @@ func EncodeRequest(request canonical.Request, upstreamModel string, stream bool)
 	if maxTokens := request.Output().MaxTokens(); maxTokens > 0 {
 		body["max_tokens"] = maxTokens
 	}
-	return json.Marshal(body)
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return nil, nil, protocolErr("request")
+	}
+	// Bound the fully encoded Chat Completions body before sending it
+	if len(encoded) > canonical.MaxRequestBytes {
+		return nil, nil, invalid("request", "encoded chat request exceeds limit")
+	}
+	return encoded, nameMap, nil
 }
 
 func encodeMessages(items []canonical.Item) ([]map[string]any, error) {
@@ -74,30 +97,20 @@ func encodeMessages(items []canonical.Item) ([]map[string]any, error) {
 			messages = append(messages, encoded)
 		case canonical.ItemType("tool_call"):
 			call, ok := item.ToolCall()
-			if !ok || call.Namespace() != "" {
+			if !ok {
 				return nil, unsupported(path)
 			}
-			encodedCall := map[string]any{
-				"id":   string(call.CallID()),
-				"type": "function",
-				"function": map[string]any{
-					"name":      call.Name(),
-					"arguments": string(call.Arguments().Bytes()),
-				},
+			messages = appendAssistantToolCall(messages, string(call.CallID()), upstreamFunctionName(call.Namespace(), call.Name()), string(call.Arguments().Bytes()))
+		case canonical.ItemType("custom_tool_call"):
+			call, ok := item.CustomToolCall()
+			if !ok {
+				return nil, unsupported(path)
 			}
-			// Chat Completions requires every tool message to directly follow
-			// the assistant turn that issued its call, so adjacent calls (and
-			// the assistant text that precedes them) share one assistant turn.
-			if last := len(messages) - 1; last >= 0 && messages[last]["role"] == "assistant" {
-				existing, _ := messages[last]["tool_calls"].([]map[string]any)
-				messages[last]["tool_calls"] = append(existing, encodedCall)
-				continue
+			arguments, err := json.Marshal(customToolArguments{Input: call.Input()})
+			if err != nil {
+				return nil, invalid(path+".input", "custom tool input cannot be encoded")
 			}
-			messages = append(messages, map[string]any{
-				"role":       "assistant",
-				"content":    nil,
-				"tool_calls": []map[string]any{encodedCall},
-			})
+			messages = appendAssistantToolCall(messages, string(call.CallID()), upstreamFunctionName(call.Namespace(), call.Name()), string(arguments))
 		case canonical.ItemType("tool_result"):
 			result, ok := item.ToolResult()
 			if !ok {
@@ -174,40 +187,56 @@ func blocksToText(blocks []canonical.ContentBlock, path string) (string, error) 
 	return text, nil
 }
 
-func encodeTools(tools []canonical.ToolDefinition) ([]map[string]any, error) {
-	encoded := make([]map[string]any, 0, len(tools))
-	for index, tool := range tools {
-		path := fmt.Sprintf("request.tools[%d]", index)
-		switch tool.Kind() {
-		case canonical.ToolDefinitionKindFunction:
-			function := map[string]any{
-				"name":        tool.Name(),
-				"description": tool.Description(),
-				"parameters":  json.RawMessage(tool.InputSchema().Bytes()),
-			}
-			if tool.Enforcement() == canonical.SchemaEnforcementStrict {
-				function["strict"] = true
-			}
-			encoded = append(encoded, map[string]any{"type": "function", "function": function})
-		default:
-			return nil, unsupported(path)
-		}
-	}
-	return encoded, nil
+// customToolArguments is the function-arguments object that carries a
+// freeform custom tool input on the chat wire.
+type customToolArguments struct {
+	Input string `json:"input"`
 }
 
-func encodeToolChoice(choice canonical.ToolChoice) any {
+// appendAssistantToolCall adds one function tool call to the conversation.
+// Chat Completions requires every tool message to directly follow the
+// assistant turn that issued its call, so adjacent calls (and the assistant
+// text that precedes them) share one assistant turn.
+func appendAssistantToolCall(messages []map[string]any, callID, name, arguments string) []map[string]any {
+	encodedCall := map[string]any{
+		"id":   callID,
+		"type": "function",
+		"function": map[string]any{
+			"name":      name,
+			"arguments": arguments,
+		},
+	}
+	if last := len(messages) - 1; last >= 0 && messages[last]["role"] == "assistant" {
+		existing, _ := messages[last]["tool_calls"].([]map[string]any)
+		messages[last]["tool_calls"] = append(existing, encodedCall)
+		return messages
+	}
+	return append(messages, map[string]any{
+		"role":       "assistant",
+		"content":    nil,
+		"tool_calls": []map[string]any{encodedCall},
+	})
+}
+
+// encodeToolChoice encodes the canonical tool choice; specific choices are
+// resolved to the upstream function name of an encoded tool.
+func encodeToolChoice(choice canonical.ToolChoice, nameMap ToolNameMap) (any, error) {
 	switch choice.Kind() {
 	case "auto":
-		return "auto"
+		return "auto", nil
 	case "none":
-		return "none"
+		return "none", nil
 	case "required":
-		return "required"
+		return "required", nil
 	case "specific":
-		return map[string]any{"type": "function", "function": map[string]any{"name": choice.Name()}}
+		name := upstreamFunctionName(choice.Namespace(), choice.Name())
+		info, ok := nameMap[name]
+		if !ok || info.Name != choice.Name() || info.Namespace != choice.Namespace() {
+			return nil, invalid("request.tool_choice", "tool choice does not name an encoded tool")
+		}
+		return map[string]any{"type": "function", "function": map[string]any{"name": name}}, nil
 	default:
-		return "auto"
+		return "auto", nil
 	}
 }
 
