@@ -925,13 +925,14 @@ func TestLaunchdInstallPropagatesBootoutError(t *testing.T) {
 		LogPath:    logPath,
 	}
 
-	// Bootout runs only when reinstalling over our own plist.
-	writeOwnedPlist(t, tmpDir, spec.Label)
+	// Bootout runs only when reinstalling over our own loaded job.
+	ownedPlist := writeOwnedPlist(t, tmpDir, spec.Label)
 
 	// Mock runner that returns a real bootout error (not "not loaded")
 	fake := newFakeRunner()
 	fake.errMap = map[string]error{"bootout": fmt.Errorf("permission denied")}
 	fake.stderrMap = map[string][]byte{"bootout": []byte("permission denied")}
+	loadedFrom(fake, ownedPlist)
 
 	backend := NewLaunchdBackend(tmpDir, 501, fake)
 

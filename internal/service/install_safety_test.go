@@ -18,6 +18,76 @@ func notLoaded(fake *fakeRunner) {
 	fake.stderrMap["print"] = []byte("Could not find service \"com.test.app\" in domain for user gui: 501")
 }
 
+// loadedFrom makes launchctl print report the label loaded from path.
+func loadedFrom(fake *fakeRunner, path string) {
+	fake.stdoutMap["print"] = []byte("gui/501/com.test.app = {\n\tactive count = 1\n\tpath = " + path + "\n\tstate = running\n}\n")
+}
+
+// A foreign job can take the label while our owned plist sits on disk (for
+// example loaded from /Library/LaunchAgents); reinstall must not boot it out.
+func TestLaunchdReinstallRefusesJobLoadedFromAnotherDefinition(t *testing.T) {
+	for name, output := range map[string]string{
+		"other path": "gui/501/com.test.app = {\n\tpath = /Library/LaunchAgents/com.test.app.plist\n\tstate = running\n}\n",
+		"no path":    "gui/501/com.test.app = {\n\tstate = running\n}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := testSpec(t, dir)
+			home := filepath.Join(dir, "home")
+			plistPath := writeOwnedPlist(t, home, spec.Label)
+			before, _ := os.ReadFile(plistPath)
+			fake := newFakeRunner()
+			fake.stdoutMap["print"] = []byte(output)
+			err := NewLaunchdBackend(home, 501, fake).Install(context.Background(), spec)
+			var inUse ErrLabelInUse
+			if !errors.As(err, &inUse) {
+				t.Fatalf("Install err = %v, want ErrLabelInUse", err)
+			}
+			if findCall(fake.calls, "launchctl", "bootout") != nil || findCall(fake.calls, "launchctl", "bootstrap") != nil {
+				t.Fatalf("Install touched a foreign job: %v", fake.calls)
+			}
+			if after, _ := os.ReadFile(plistPath); string(after) != string(before) {
+				t.Fatal("plist rewritten although the loaded job is foreign")
+			}
+		})
+	}
+}
+
+// Reinstalling an owned but unloaded job needs no bootout.
+func TestLaunchdReinstallOfUnloadedJobSkipsBootout(t *testing.T) {
+	dir := t.TempDir()
+	spec := testSpec(t, dir)
+	home := filepath.Join(dir, "home")
+	writeOwnedPlist(t, home, spec.Label)
+	fake := newFakeRunner()
+	notLoaded(fake)
+	if err := NewLaunchdBackend(home, 501, fake).Install(context.Background(), spec); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if findCall(fake.calls, "launchctl", "bootout") != nil {
+		t.Fatalf("bootout ran for an unloaded job: %v", fake.calls)
+	}
+}
+
+// If bootstrap of a fresh install fails (for example a foreign job took the
+// label meanwhile), Install must not leave an owned plist claiming the label.
+func TestLaunchdFreshInstallRemovesPlistWhenBootstrapFails(t *testing.T) {
+	dir := t.TempDir()
+	spec := testSpec(t, dir)
+	home := filepath.Join(dir, "home")
+	fake := newFakeRunner()
+	notLoaded(fake)
+	fake.errMap["bootstrap"] = errors.New("exit status 5")
+	fake.stderrMap["bootstrap"] = []byte("Bootstrap failed: 5: Input/output error")
+	err := NewLaunchdBackend(home, 501, fake).Install(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "bootstrap") {
+		t.Fatalf("Install err = %v, want bootstrap failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "Library", "LaunchAgents", spec.Label+".plist")); !os.IsNotExist(statErr) {
+		t.Fatalf("owned plist left behind after failed fresh bootstrap (stat err %v)", statErr)
+	}
+}
+
 // Without an owned plist the label may name an agent loaded from another
 // directory; Install must refuse rather than boot it out.
 func TestLaunchdInstallRefusesLabelLoadedWithoutOwnedPlist(t *testing.T) {
@@ -62,12 +132,15 @@ func TestLaunchdReinstallBootsOutOwnedJob(t *testing.T) {
 	dir := t.TempDir()
 	spec := testSpec(t, dir)
 	home := filepath.Join(dir, "home")
-	writeOwnedPlist(t, home, spec.Label)
+	plistPath := writeOwnedPlist(t, home, spec.Label)
 	fake := newFakeRunner()
+	loadedFrom(fake, plistPath)
 	if err := NewLaunchdBackend(home, 501, fake).Install(context.Background(), spec); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	want := [][]string{
+		{"launchctl", "print", "gui/501/" + spec.Label},
+		{"launchctl", "print", "gui/501/" + spec.Label},
 		{"launchctl", "bootout", "gui/501/" + spec.Label},
 		{"launchctl", "bootstrap", "gui/501", filepath.Join(home, "Library", "LaunchAgents", spec.Label+".plist")},
 	}
@@ -161,6 +234,13 @@ func TestSystemdInstallRollbackDisablesOnlyNewEnablement(t *testing.T) {
 			err := NewSystemdBackend(filepath.Join(dir, "config"), fake).Install(context.Background(), spec)
 			if err == nil || !strings.Contains(err.Error(), tc.failing) {
 				t.Fatalf("Install = %v, want %s error", err, tc.failing)
+			}
+			if tc.failing == "enable" {
+				for _, call := range fake.calls {
+					if len(call) > 2 && call[2] == "restart" {
+						t.Fatalf("restart ran after enable failed: %v", fake.calls)
+					}
+				}
 			}
 			disabled := false
 			for _, call := range fake.calls {

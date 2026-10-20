@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,16 +154,48 @@ func (b *LaunchdBackend) bootout(ctx context.Context, target string) error {
 	return nil
 }
 
-// requireLabelUnloaded returns ErrLabelInUse when launchd has label loaded.
-func (b *LaunchdBackend) requireLabelUnloaded(ctx context.Context, label string) error {
-	_, stderr, err := b.runner.Run(ctx, "launchctl", "print", b.target(label))
-	if err == nil {
-		return ErrLabelInUse{Label: label}
+// loadedJob reports whether launchd has label loaded from our own definition.
+// It returns ErrLabelInUse when the label is loaded from anywhere else, or
+// when our plist at plistPath is not an owned definition: only a job loaded
+// from our owned plist may be booted out. launchctl print names the loaded
+// definition on its "path =" line; a loaded job without one fails closed.
+func (b *LaunchdBackend) loadedJob(ctx context.Context, label, plistPath string, owned bool) (bool, error) {
+	stdout, stderr, err := b.runner.Run(ctx, "launchctl", "print", b.target(label))
+	if err != nil {
+		if !isLaunchdNotLoaded(stderr) {
+			return false, commandError("query service", err, stderr)
+		}
+		return false, nil
 	}
-	if !isLaunchdNotLoaded(stderr) {
-		return commandError("query service", err, stderr)
+	if !owned || !samePath(launchdLoadedPath(stdout), plistPath) {
+		return false, ErrLabelInUse{Label: label}
 	}
-	return nil
+	return true, nil
+}
+
+// launchdLoadedPath returns the definition path from launchctl print output,
+// or "" if none is reported.
+func launchdLoadedPath(output []byte) string {
+	for _, line := range strings.Split(string(output), "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "path = "); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// samePath reports whether a and b name the same file, resolving symlinked
+// directories such as /var -> /private/var that launchd may report resolved.
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	resolvedA, errA := filepath.EvalSymlinks(a)
+	resolvedB, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && resolvedA == resolvedB
 }
 
 // LaunchdBackend manages service lifecycle via launchctl.
@@ -203,12 +236,11 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 	if err != nil {
 		return err
 	}
-	if !owned {
-		// Without our plist the label may name an agent loaded from another
-		// directory (for example /Library/LaunchAgents); never replace it.
-		if err := b.requireLabelUnloaded(ctx, spec.Label); err != nil {
-			return err
-		}
+	// The label may name an agent loaded from another directory (for example
+	// /Library/LaunchAgents); never replace it. Checked here without side
+	// effects, and again under the lock before acting on it.
+	if _, err := b.loadedJob(ctx, spec.Label, plistPath, owned); err != nil {
+		return err
 	}
 
 	lock, err := lockLabel(ctx, agentsDir, spec.Label)
@@ -218,6 +250,10 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 	defer func() { _ = lock.Release() }()
 	// Re-check under the lock: another process may have changed the file.
 	owned, err = requireReplaceable(plistPath, launchdOwnerLine)
+	if err != nil {
+		return err
+	}
+	loaded, err := b.loadedJob(ctx, spec.Label, plistPath, owned)
 	if err != nil {
 		return err
 	}
@@ -234,19 +270,26 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	// Reload our own job so it runs the new definition. A label without our
-	// plist was verified unloaded above; if a foreign job appeared since,
-	// bootstrap fails rather than replacing it.
-	if owned {
+	// Reload our own job so it runs the new definition. Only a job verified
+	// above as loaded from our owned plist is booted out; if a foreign job
+	// takes the label meanwhile, bootstrap fails rather than replacing it.
+	if loaded {
 		if err := b.bootout(ctx, b.target(spec.Label)); err != nil {
 			return err
 		}
 	}
 
-	// Bootstrap
 	_, bootstrapStderr, err := b.runner.Run(ctx, "launchctl", "bootstrap", "gui/"+strconv.Itoa(b.uid), plistPath)
 	if err != nil {
-		return commandError("bootstrap service", err, bootstrapStderr)
+		bootstrapErr := commandError("bootstrap service", err, bootstrapStderr)
+		if !owned {
+			// A failed fresh install must not leave an owned plist claiming
+			// a label that may belong to another job.
+			if removeErr := os.Remove(plistPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				return errors.Join(bootstrapErr, fmt.Errorf("remove plist: %w", removeErr))
+			}
+		}
+		return bootstrapErr
 	}
 
 	return nil
