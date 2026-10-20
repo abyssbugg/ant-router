@@ -1,0 +1,50 @@
+# Ant Router CI on Buildkite hosted agents (Linux and macOS gates) through
+# .buildkite/scripts/ci.sh.
+# Native Windows runs on CircleCI (.circleci/config.yml) because the
+# Buildkite cluster has no hosted Windows queue.
+
+env:
+  GOTOOLCHAIN: local
+
+steps:
+  - label: ":go: Quality and cross-builds (linux)"
+    key: quality
+    command: .buildkite/scripts/ci.sh quality
+    agents:
+      queue: linux-large
+    timeout_in_minutes: 45
+
+  - label: ":apple: Platform tests (macOS)"
+    key: platform-macos
+    command: .buildkite/scripts/ci.sh platform
+    agents:
+      queue: macos-medium
+    timeout_in_minutes: 40
+
+  - label: ":robot_face: Codex CLI E2E (linux)"
+    key: codex-linux
+    command: .buildkite/scripts/ci.sh codex-e2e
+    agents:
+      queue: linux-medium
+    timeout_in_minutes: 20
+
+  - label: ":robot_face: Codex CLI E2E (macOS)"
+    key: codex-macos
+    command: .buildkite/scripts/ci.sh codex-e2e
+    agents:
+      queue: macos-medium
+    timeout_in_minutes: 20
+
+  - label: ":package: Installer + CI scripts (macOS: shellcheck, sh curl+wget, pwsh)"
+    key: installer-macos
+    command: .buildkite/scripts/ci.sh installer
+    agents:
+      queue: macos-medium
+    timeout_in_minutes: 25
+
+  - label: ":zap: Fuzz smoke (linux)"
+    key: fuzz
+    command: .buildkite/scripts/ci.sh fuzz
+    agents:
+      queue: linux-medium
+    timeout_in_minutes: 30

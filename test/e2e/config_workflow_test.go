@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -69,8 +70,26 @@ func startDaemon(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instan
 	if err := process.command.Start(); err != nil {
 		t.Fatalf("routerd start failed: %v", err)
 	}
-	t.Cleanup(func() { process.stop() })
+	pid := process.command.Process.Pid
+	t.Cleanup(func() {
+		process.stop()
+		// After stop() the exec copy goroutine has finished, so reading the
+		// buffer is race-free. Captured stderr holds startup and fatal daemon
+		// errors; handler panics are recovered (HTTP 500) and are not logged.
+		if report := daemonFailureReport(t.Failed(), pid, process.stderr.Bytes()); report != "" {
+			t.Log(report)
+		}
+	})
 	return process
+}
+
+// daemonFailureReport returns the routerd diagnostics to log for a test, or
+// "" when the test passed or the daemon wrote nothing.
+func daemonFailureReport(failed bool, pid int, stderr []byte) string {
+	if !failed || len(stderr) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("routerd (pid %d) stderr:\n%s", pid, stderr)
 }
 
 func (p *daemonProcess) stop() {
@@ -86,22 +105,36 @@ func (p *daemonProcess) stop() {
 	})
 }
 
+// routerctlTimeout bounds one routerctl invocation. It is longer than the
+// control client's request timeout, so a slow daemon surfaces as routerctl's
+// own timeout error rather than a killed process.
+const routerctlTimeout = 30 * time.Second
+
 func routerctl(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instance string, arguments ...string) ([]byte, []byte, int) {
+	t.Helper()
+	return routerctlWithin(t, routerctlTimeout, binaries, stateRoot, runtimeRoot, instance, arguments...)
+}
+
+func routerctlWithin(t *testing.T, timeout time.Duration, binaries binaries, stateRoot, runtimeRoot, instance string, arguments ...string) ([]byte, []byte, int) {
 	t.Helper()
 	global := []string{"--instance", instance, "--state-dir", stateRoot, "--json"}
 	if runtimeRoot != "" {
 		global = append(global, "--runtime-dir", runtimeRoot)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, binaries.routerctl, append(global, arguments...)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
+	started := time.Now()
 	err := command.Run()
 	if err == nil {
 		return stdout.Bytes(), stderr.Bytes(), 0
 	}
 	if exit, ok := err.(*exec.ExitError); ok {
+		// Shown only for failing or -v runs; the duration tells a slow daemon
+		// (near the client timeout) apart from an unreachable one.
+		t.Logf("routerctl %v exited %d after %s: %s", arguments, exit.ExitCode(), time.Since(started).Round(time.Millisecond), bytes.TrimSpace(stderr.Bytes()))
 		return stdout.Bytes(), stderr.Bytes(), exit.ExitCode()
 	}
 	t.Fatalf("routerctl failed to execute: %v", err)
@@ -111,8 +144,10 @@ func routerctl(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instance
 func waitForDaemon(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instance string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		_, _, code := routerctl(t, binaries, stateRoot, runtimeRoot, instance, "status")
+	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
+		// Each probe gets only the time left, so a stuck daemon cannot
+		// stretch the startup wait past its deadline.
+		_, _, code := routerctlWithin(t, remaining, binaries, stateRoot, runtimeRoot, instance, "status")
 		if code == 0 {
 			return
 		}

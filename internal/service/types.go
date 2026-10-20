@@ -2,10 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"unicode/utf8"
+
+	"github.com/abyssbugg/ant-router/internal/filelock"
 )
 
 // OwnershipMarker is the marker constant for service ownership.
@@ -65,6 +71,26 @@ type ErrNotOwned struct {
 
 func (e ErrNotOwned) Error() string {
 	return fmt.Sprintf("file not owned by service: %s", e.Path)
+}
+
+// ErrNotInstalled is returned when a service definition file does not exist.
+type ErrNotInstalled struct {
+	Path string
+}
+
+func (e ErrNotInstalled) Error() string {
+	return fmt.Sprintf("service definition %s is not installed", e.Path)
+}
+
+// ErrLabelInUse is returned when Install finds the label already loaded by
+// the service manager without a definition this package owns, for example an
+// agent loaded from another directory. Install never replaces such a job.
+type ErrLabelInUse struct {
+	Label string
+}
+
+func (e ErrLabelInUse) Error() string {
+	return fmt.Sprintf("service %s is loaded from a definition this tool does not own", e.Label)
 }
 
 // ErrInvalidLabel is returned when a label is invalid.
@@ -129,6 +155,110 @@ func ValidateLabel(label string) error {
 	return nil
 }
 
+// Ownership is recorded as a dedicated line in each definition format so it
+// cannot be forged by data that merely mentions the marker. In a plist, '<'
+// inside a string value is escaped, so a raw comment line is structural; in a
+// unit file, X- prefixed keys are ignored by systemd.
+const (
+	launchdOwnerLine = "<!-- owned by " + OwnershipMarker + " -->"
+	systemdOwnerLine = "X-AntRouter-Owner=" + OwnershipMarker
+)
+
+// hasOwnerLine reports whether data contains ownerLine as a complete line
+// (surrounding whitespace ignored) that does not continue a previous line
+// ending in a backslash.
+func hasOwnerLine(data []byte, ownerLine string) bool {
+	continued := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if !continued && line == ownerLine {
+			return true
+		}
+		continued = strings.HasSuffix(line, `\`)
+	}
+	return false
+}
+
+// readOwnedDefinition checks if a service definition file exists and is owned.
+// Returns nil if file exists and contains OwnershipMarker.
+// Returns ErrNotInstalled if file does not exist.
+// Returns ErrNotRegularFile if the path is not a regular file (a FIFO,
+// device, or directory), checked on the opened descriptor so the type cannot
+// change between the check and the read.
+// Returns ErrNotOwned if file exists but does not contain OwnershipMarker.
+// Returns wrapped error for other read errors.
+func readOwnedDefinition(path, ownerLine string) error {
+	file, err := openDefinition(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotInstalled{Path: path}
+		}
+		return fmt.Errorf("read definition: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("read definition: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return ErrNotRegularFile{Path: path, Reason: "service definition must be a regular file"}
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("read definition: %w", err)
+	}
+	if !hasOwnerLine(data, ownerLine) {
+		return ErrNotOwned{Path: path}
+	}
+	return nil
+}
+
+// ErrUnsupportedSystemd reports a systemd too old for the append: output
+// directives the rendered unit relies on.
+type ErrUnsupportedSystemd struct {
+	Version int
+}
+
+func (e ErrUnsupportedSystemd) Error() string {
+	return fmt.Sprintf("systemd %d is not supported: StandardOutput=append: requires systemd 240 or newer", e.Version)
+}
+
+// requireReplaceable permits a missing definition and refuses one that
+// exists without the ownership marker. owned reports whether an owned
+// definition exists, so callers act on a loaded job only when it is ours.
+func requireReplaceable(path, ownerLine string) (owned bool, err error) {
+	err = readOwnedDefinition(path, ownerLine)
+	if err == nil {
+		return true, nil
+	}
+	var missing ErrNotInstalled
+	if errors.As(err, &missing) {
+		return false, nil
+	}
+	return false, err
+}
+
+// isNotInstalled reports whether err says the definition file is missing.
+func isNotInstalled(err error) bool {
+	var missing ErrNotInstalled
+	return errors.As(err, &missing)
+}
+
+// lockLabel serializes lifecycle operations for one label across processes,
+// so an Install and an Uninstall can never interleave their steps. The lock
+// file sits beside the definitions; launchd and systemd only load files with
+// their own definition suffixes.
+func lockLabel(ctx context.Context, dir, label string) (*filelock.Lock, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create %s: %w", dir, err)
+	}
+	lock, err := filelock.Acquire(ctx, filepath.Join(filepath.Clean(dir), "."+label+".lock"))
+	if err != nil {
+		return nil, fmt.Errorf("lock service %s: %w", label, err)
+	}
+	return lock, nil
+}
+
 // Spec defines a service specification.
 type Spec struct {
 	Label      string   // service label
@@ -157,6 +287,11 @@ func (s *Spec) Validate() error {
 	}
 	if !info.Mode().IsRegular() {
 		return ErrNotRegularFile{Path: s.Executable, Reason: "not a regular file"}
+	}
+	// Check execute permission for owner (user can execute)
+	// On Windows, Go does not report Unix execute bits, so skip this check
+	if runtime.GOOS != "windows" && info.Mode()&0o100 == 0 {
+		return ErrNotRegularFile{Path: s.Executable, Reason: "missing execute permission"}
 	}
 	for _, arg := range s.Args {
 		if hasControlCharacters(arg) {

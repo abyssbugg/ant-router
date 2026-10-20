@@ -1,0 +1,14 @@
+---
+# Codacy cloud analysis settings (the local CLI uses .codacy/codacy.yaml).
+#
+# Opengrep's generic Go security rules (dynamic file paths, exec.Command with
+# a non-constant binary, http.Redirect from a request, ResponseWriter.Write)
+# fire on every test harness by design: the installer and release tests read
+# temp files, run pwsh/shellcheck/bash from PATH and serve local fake release
+# endpoints that issue redirects. They are excluded for Opengrep only; all
+# other tools, and Opengrep on production code, still analyze everything.
+engines:
+  opengrep:
+    exclude_paths:
+      - "test/**"
+      - "**/*_test.go"

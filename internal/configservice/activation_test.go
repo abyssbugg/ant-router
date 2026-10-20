@@ -92,12 +92,48 @@ func TestStaleActivationCallbackDoesNotOverwriteDiagnostic(t *testing.T) {
 				}
 				return tc.freshErr
 			})
-			staleDone := make(chan CurrentResult)
-			go func() { staleDone <- applyTimeout(t, service, 30*time.Second) }()
-			<-entered
+			// The stale Apply runs off the test goroutine, so it must report
+			// failures through the channel rather than calling t.Fatal.
+			type applyOutcome struct {
+				result CurrentResult
+				err    error
+			}
+			staleDone := make(chan applyOutcome, 1)
+			staleData := canonicalConfig(t, 30*time.Second)
+			go func() {
+				validation, err := service.Validate(context.Background(), staleData)
+				if err != nil {
+					staleDone <- applyOutcome{err: err}
+					return
+				}
+				result, err := service.Apply(context.Background(), ApplyRequest{TOML: staleData, ExpectedRevision: validation.Revision, ExpectedGeneration: validation.BaseGeneration})
+				staleDone <- applyOutcome{result: result, err: err}
+			}()
+			select {
+			case <-entered:
+			case outcome := <-staleDone:
+				t.Fatalf("stale Apply() returned before its activation callback ran: %+v", outcome)
+			case <-time.After(10 * time.Second):
+				t.Fatal("stale activation callback was not entered")
+			}
 			fresh := applyTimeout(t, service, 31*time.Second)
 			close(release)
-			<-staleDone
+			var stale applyOutcome
+			select {
+			case stale = <-staleDone:
+			case <-time.After(10 * time.Second):
+				t.Fatal("stale Apply() did not return after release")
+			}
+			if stale.err != nil {
+				t.Fatalf("stale Apply() failed: %v", stale.err)
+			}
+			// The stale caller still learns its own activation outcome.
+			if tc.staleErr != nil && !strings.Contains(stale.result.Diagnostic, tc.staleErr.Error()) {
+				t.Fatalf("stale Apply() diagnostic = %q, want %q", stale.result.Diagnostic, tc.staleErr)
+			}
+			if tc.staleErr == nil && stale.result.Diagnostic != "" {
+				t.Fatalf("stale Apply() diagnostic = %q, want none", stale.result.Diagnostic)
+			}
 
 			current := service.Current()
 			if current.Generation != fresh.Generation {
