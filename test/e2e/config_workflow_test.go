@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -69,8 +70,26 @@ func startDaemon(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instan
 	if err := process.command.Start(); err != nil {
 		t.Fatalf("routerd start failed: %v", err)
 	}
-	t.Cleanup(func() { process.stop() })
+	pid := process.command.Process.Pid
+	t.Cleanup(func() {
+		process.stop()
+		// After stop() the exec copy goroutine has finished, so reading the
+		// buffer is race-free. Captured stderr holds startup and fatal daemon
+		// errors; handler panics are recovered (HTTP 500) and are not logged.
+		if report := daemonFailureReport(t.Failed(), pid, process.stderr.Bytes()); report != "" {
+			t.Log(report)
+		}
+	})
 	return process
+}
+
+// daemonFailureReport returns the routerd diagnostics to log for a test, or
+// "" when the test passed or the daemon wrote nothing.
+func daemonFailureReport(failed bool, pid int, stderr []byte) string {
+	if !failed || len(stderr) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("routerd (pid %d) stderr:\n%s", pid, stderr)
 }
 
 func (p *daemonProcess) stop() {

@@ -1,0 +1,124 @@
+version: 2
+project_name: ant-router
+
+builds:
+  - id: routerd
+    main: ./cmd/routerd
+    binary: routerd
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.version={{.Version}}
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.commit={{.FullCommit}}
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.date={{.CommitDate}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: routerctl
+    main: ./cmd/routerctl
+    binary: routerctl
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.version={{.Version}}
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.commit={{.FullCommit}}
+      - -X github.com/abyssbugg/ant-router/internal/buildinfo.date={{.CommitDate}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+    name_template: ant-router_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+# Keyless Sigstore signing of the checksum file with the CircleCI release
+# pipeline's OIDC identity (SIGSTORE_ID_TOKEN, see .circleci/scripts/release.sh);
+# verify with cosign verify-blob --bundle checksums.txt.sigstore.json
+# --certificate-identity <release pipeline definition URL>
+# --certificate-oidc-issuer https://oidc.circleci.com checksums.txt.
+# Snapshot builds skip it via --skip=sign.
+signs:
+  # The wrapper signs and then verifies the bundle against the installer
+  # identity; a failure stops GoReleaser before anything is published.
+  - cmd: bash
+    signature: "${artifact}.sigstore.json"
+    args:
+      - .circleci/scripts/sign-and-verify.sh
+      - ${artifact}
+      - ${signature}
+    artifacts: checksum
+
+homebrew_casks:
+  - repository:
+      owner: abyssbugg
+      name: homebrew-tap
+      # index tolerates an unset variable; .Env.X would abort the release.
+      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
+    # Prereleases must not replace the stable cask, and a missing tap token
+    # skips only the cask (release.sh warns) instead of failing the release.
+    skip_upload: '{{ if or .Prerelease (eq (index .Env "HOMEBREW_TAP_GITHUB_TOKEN") "") }}true{{ else }}false{{ end }}'
+    # The binaries are not notarized, so Gatekeeper would refuse the first
+    # run; clear quarantine on exactly the two installed binaries. Homebrew
+    # has already verified the archive checksum. Notarization would remove
+    # the need for this hook.
+    hooks:
+      post:
+        install: 'if OS.mac? then system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/routerd", "#{staged_path}/routerctl"] end'
+    binaries:
+      - routerd
+      - routerctl
+
+changelog:
+  use: github
+  groups:
+    - title: Features
+      regexp: "^feat"
+    - title: Fixes
+      regexp: "^fix"
+    - title: Other
+      regexp: ".*"
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: abyssbugg
+    name: ant-router
+  # Installers resolve /releases/latest and /releases/download/<tag>, which
+  # never serve drafts, so a release is published as soon as it is signed.
+  draft: false
+  prerelease: auto

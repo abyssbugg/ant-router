@@ -13,3 +13,6 @@ coverage.out
 .DS_Store
 .idea/
 .vscode/
+
+# goreleaser output
+dist/

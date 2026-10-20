@@ -114,6 +114,9 @@ case "$mode" in
     pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
     shellcheck --version | sed -n 2p
     shellcheck -x .buildkite/scripts/*.sh
+    if compgen -G '.circleci/scripts/*.sh' >/dev/null; then
+      shellcheck -x .circleci/scripts/*.sh
+    fi
     if [[ ! -d test/install ]]; then
       echo "This revision has no installer tests (test/install); CI scripts linted only."
       exit 0
