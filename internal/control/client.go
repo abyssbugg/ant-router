@@ -33,8 +33,13 @@ type ClientOptions struct {
 	IdleConnTimeout  time.Duration
 }
 
+// DefaultClientOptions returns the local control client defaults. The request
+// timeout covers the server's full request budget (DefaultServerOptions
+// ReadTimeout for the handler, WriteTimeout for the response) so a slow but
+// successful request, such as a configuration apply that fsyncs on a loaded
+// host, is not abandoned by the client while the server is still serving it.
 func DefaultClientOptions() ClientOptions {
-	return ClientOptions{RequestTimeout: 3 * time.Second, MaxResponseBytes: MaxResponseBody, MaxIdleConns: 2, IdleConnTimeout: 30 * time.Second}
+	return ClientOptions{RequestTimeout: 15 * time.Second, MaxResponseBytes: MaxResponseBody, MaxIdleConns: 2, IdleConnTimeout: 30 * time.Second}
 }
 
 type Client struct {

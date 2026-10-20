@@ -173,6 +173,11 @@ func describeCLIError(err error) cliErrorDetail {
 		}
 	case ExitConnection:
 		code, message = "connection", "unable to connect to daemon"
+		if isTimeoutError(err) {
+			// The daemon was reachable but did not answer in time; reporting
+			// it as unreachable hides the real failure.
+			code, message = "timeout", "daemon did not respond in time"
+		}
 	case ExitAuthentication:
 		code, message = "authentication", "authentication failed"
 	case ExitValidation:
@@ -195,4 +200,12 @@ func describeCLIError(err error) cliErrorDetail {
 		}
 	}
 	return cliErrorDetail{ExitCode: exit, Code: code, Message: message}
+}
+
+func isTimeoutError(err error) bool {
+	var clientErr *control.ClientError
+	if errors.As(err, &clientErr) && clientErr != nil {
+		return clientErr.Kind == control.ClientErrorTimeout
+	}
+	return errors.Is(err, context.DeadlineExceeded)
 }

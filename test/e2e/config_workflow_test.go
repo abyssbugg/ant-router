@@ -111,16 +111,22 @@ func routerctl(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instance
 	if runtimeRoot != "" {
 		global = append(global, "--runtime-dir", runtimeRoot)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Longer than the control client's request timeout, so a slow daemon
+	// surfaces as routerctl's own timeout error rather than a killed process.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, binaries.routerctl, append(global, arguments...)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
+	started := time.Now()
 	err := command.Run()
 	if err == nil {
 		return stdout.Bytes(), stderr.Bytes(), 0
 	}
 	if exit, ok := err.(*exec.ExitError); ok {
+		// Shown only for failing or -v runs; the duration tells a slow daemon
+		// (near the client timeout) apart from an unreachable one.
+		t.Logf("routerctl %v exited %d after %s: %s", arguments, exit.ExitCode(), time.Since(started).Round(time.Millisecond), bytes.TrimSpace(stderr.Bytes()))
 		return stdout.Bytes(), stderr.Bytes(), exit.ExitCode()
 	}
 	t.Fatalf("routerctl failed to execute: %v", err)
