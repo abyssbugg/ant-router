@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- owned by github.com/abyssbugg/ant-router -->
+  <key>Label</key>
+  <string>com.company.myapp</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$EXE</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$LOG</string>
+  <key>StandardErrorPath</key>
+  <string>$LOG</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
