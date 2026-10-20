@@ -54,6 +54,17 @@ func findModuleRoot(start, path string) (root string, visited []string, ok bool)
 	}
 }
 
+// readText reads a repository file with CRLF normalized to LF. CI checkouts
+// on Windows may still produce CRLF files, and the assertions here are about
+// content, not line endings.
+func readText(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n")), nil
+}
+
 // --- minimal block-YAML reader -------------------------------------------
 //
 // The release config uses only block mappings, block sequences and plain or
@@ -258,7 +269,7 @@ func (r *yamlReader) scalar(line yamlLine, value string) string {
 
 func loadConfig(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".goreleaser.yaml"))
+	data, err := readText(filepath.Join(repoRoot(t), ".goreleaser.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,7 +626,7 @@ func TestGoreleaserHomebrewCaskAndRelease(t *testing.T) {
 }
 
 func TestMakefileDeclaresReleaseTargets(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "Makefile"))
+	data, err := readText(filepath.Join(repoRoot(t), "Makefile"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,7 +655,7 @@ func phonyDeclares(makefile []byte, target string) bool {
 }
 
 func TestGitignoreExcludesReleaseOutput(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".gitignore"))
+	data, err := readText(filepath.Join(repoRoot(t), ".gitignore"))
 	if err != nil {
 		t.Fatal(err)
 	}

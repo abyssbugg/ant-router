@@ -41,3 +41,17 @@ func TestFindModuleRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestReadTextNormalizesCRLF(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "go.mod")
+	if err := os.WriteFile(path, []byte("module "+modulePath+"\r\n\r\ntoolchain go1.27.2\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := readText(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "module " + modulePath + "\n\ntoolchain go1.27.2\n"; string(data) != want {
+		t.Fatalf("readText = %q, want %q", data, want)
+	}
+}

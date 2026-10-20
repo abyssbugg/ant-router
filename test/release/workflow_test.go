@@ -33,7 +33,7 @@ func releaseConfigPath(t *testing.T) string {
 
 func loadReleaseConfig(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(releaseConfigPath(t))
+	data, err := readText(releaseConfigPath(t))
 	if err != nil {
 		t.Fatalf("read CircleCI release config: %v", err)
 	}
@@ -128,7 +128,7 @@ func assertTagOnlyFilters(t *testing.T, job any) {
 
 func goModToolchain(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
+	data, err := readText(filepath.Join(repoRoot(t), "go.mod"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ var pinnedTools = map[string]string{
 // TestReleaseToolsArePinnedWithChecksums requires every release tool to be
 // pinned to an exact version and verified against a recorded sha256.
 func TestReleaseToolsArePinnedWithChecksums(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".circleci", "scripts", "install-release-tools.sh"))
+	data, err := readText(filepath.Join(repoRoot(t), ".circleci", "scripts", "install-release-tools.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestReleaseScriptHidesPublishingTokensFromCI(t *testing.T) {
 // release pipeline definition) to what both installers accept.
 func TestInstallersVerifyTheReleasePipelineIdentity(t *testing.T) {
 	for _, name := range []string{"install.sh", "install.ps1"} {
-		data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", name))
+		data, err := readText(filepath.Join(repoRoot(t), "scripts", name))
 		if err != nil {
 			t.Fatal(err)
 		}
