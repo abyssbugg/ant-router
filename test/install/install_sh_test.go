@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -85,13 +86,16 @@ type release struct {
 	requests []string
 	// redirects maps a request path to a Location header served with 302.
 	redirects map[string]string
+	// truncated paths announce their full Content-Length but close the
+	// connection after half of the body.
+	truncated map[string]bool
 }
 
 // newRelease serves a well-formed release for every supported OS/arch.
 // mutate may adjust files before serving.
 func newRelease(t *testing.T, entries []archiveEntry, mutate func(files map[string][]byte)) *release {
 	t.Helper()
-	r := &release{t: t, files: map[string][]byte{}, redirects: map[string]string{}}
+	r := &release{t: t, files: map[string][]byte{}, redirects: map[string]string{}, truncated: map[string]bool{}}
 	var sums strings.Builder
 	for _, goos := range []string{"linux", "darwin"} {
 		for _, arch := range []string{"amd64", "arm64"} {
@@ -115,6 +119,7 @@ func (r *release) serve(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	r.requests = append(r.requests, req.URL.Path)
 	location, redirect := r.redirects[req.URL.Path]
+	truncate := r.truncated[req.URL.Path]
 	r.mu.Unlock()
 	if redirect {
 		http.Redirect(w, req, location, http.StatusFound)
@@ -133,7 +138,23 @@ func (r *release) serve(w http.ResponseWriter, req *http.Request) {
 		http.NotFound(w, req)
 		return
 	}
+	if truncate {
+		// A short body under a full Content-Length makes the server close
+		// the connection mid-transfer after the 200 headers were sent.
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body[:len(body)/2])
+		return
+	}
 	_, _ = w.Write(body)
+}
+
+// truncate makes path send its 200 headers and then drop the connection
+// halfway through the body.
+func (r *release) truncate(path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.truncated[path] = true
 }
 
 // requestsTo counts the requests made for path.
@@ -847,6 +868,19 @@ func TestInstallScriptWithWget(t *testing.T) {
 		// The first request plus at most 10 followed redirects.
 		if n := rel.requestsTo(asset); n != 11 {
 			t.Fatalf("archive requested %d times, want exactly 11", n)
+		}
+		assertUsedWget(t, h)
+		h.assertNothingInstalled()
+	})
+
+	t.Run("truncated 200 body is a download failure", func(t *testing.T) {
+		rel := newRelease(t, defaultEntries(), nil)
+		rel.truncate(asset)
+		h := newWgetHarness(t)
+		out, err := h.run("--base-url", rel.server.URL, "--install-dir", h.installDir, "--version", testVersion)
+		expectFailure(t, out, err, "failed to download")
+		if strings.Contains(out, "checksum mismatch") {
+			t.Fatalf("network truncation reported as a checksum mismatch:\n%s", out)
 		}
 		assertUsedWget(t, h)
 		h.assertNothingInstalled()

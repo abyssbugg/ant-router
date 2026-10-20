@@ -37,21 +37,34 @@ func repoRoot(t *testing.T) string {
 }
 
 // findModuleRoot returns the nearest directory at or above start whose go.mod
-// declares module path. It tolerates CRLF line endings so a Windows checkout
-// without LF normalization still resolves.
+// declares module path. The module directive may follow comments, blank lines
+// or other directives, may be quoted, and may carry a trailing comment; CRLF
+// line endings are tolerated.
 func findModuleRoot(start, path string) (root string, visited []string, ok bool) {
 	for dir := filepath.Clean(start); ; dir = filepath.Dir(dir) {
 		visited = append(visited, dir)
-		if data, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
-			first, _, _ := bytes.Cut(data, []byte("\n"))
-			if string(bytes.TrimRight(first, "\r")) == "module "+path {
-				return dir, visited, true
-			}
+		if data, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil && goModDeclares(data, path) {
+			return dir, visited, true
 		}
 		if filepath.Dir(dir) == dir {
 			return "", visited, false
 		}
 	}
+}
+
+// goModDeclares reports whether go.mod data contains the directive
+// "module path".
+func goModDeclares(data []byte, path string) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "module" && strings.Trim(fields[1], `"`) == path {
+			return true
+		}
+	}
+	return false
 }
 
 // readText reads a repository file with CRLF normalized to LF. CI checkouts

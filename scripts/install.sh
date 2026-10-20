@@ -171,12 +171,16 @@ fetch_once() {
 		curl -sS --proto '=https,http' --connect-timeout 10 --max-time 600 \
 			-o "$2" -w '%{http_code} %{redirect_url}' "$1"
 	else
-		# wget reports redirects it refuses to follow as errors; the status is
-		# taken from the response headers instead of the exit code. GNU wget
-		# strips the CR of each header line; other builds may keep it.
-		wget -q -S --max-redirect=0 --timeout=30 --tries=1 -O "$2" "$1" 2>&1 |
-			awk '$1 ~ /^HTTP\// { code = $2 } tolower($1) == "location:" { loc = $2 }
-				END { sub(/\r$/, "", loc); if (code == "") exit 1; print code " " loc }'
+		# wget reports redirects it refuses to follow (and 4xx/5xx) as errors,
+		# so the status is taken from the response headers. A non-zero exit
+		# after a 2xx status means the body transfer failed (reset, timeout,
+		# short read) and is a download failure. GNU wget strips the CR of each
+		# header line; other builds may keep it.
+		wget_rc=0
+		wget_out=$(wget -q -S --max-redirect=0 --timeout=30 --tries=1 -O "$2" "$1" 2>&1) || wget_rc=$?
+		printf '%s\n' "$wget_out" |
+			awk -v rc="$wget_rc" '$1 ~ /^HTTP\// { code = $2 } tolower($1) == "location:" { loc = $2 }
+				END { sub(/\r$/, "", loc); if (code == "") exit 1; if (code ~ /^2/ && rc != 0) exit 1; print code " " loc }'
 	fi
 }
 

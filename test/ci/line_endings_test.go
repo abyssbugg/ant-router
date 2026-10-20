@@ -1,6 +1,8 @@
 package ci
 
 import (
+	"bytes"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -46,6 +48,23 @@ func TestCheckoutLineEndingsAreLF(t *testing.T) {
 		}
 		if v := got[p+" text"]; v == "unset" || v == "unspecified" {
 			t.Errorf("%s: text = %q, want text normalization enabled", p, v)
+		}
+	}
+
+	// Behavioral check: write the indexed files out the way Git for Windows
+	// does (core.autocrlf=true) and require LF-only bytes.
+	prefix := t.TempDir() + string(filepath.Separator)
+	co := append([]string{"-C", root, "-c", "core.autocrlf=true", "checkout-index", "--prefix=" + prefix, "--"}, paths...)
+	if out, err := exec.Command("git", co...).CombinedOutput(); err != nil {
+		t.Fatalf("git checkout-index: %v\n%s", err, out)
+	}
+	for _, p := range paths {
+		data, err := os.ReadFile(filepath.Join(prefix, filepath.FromSlash(p)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte("\r\n")) {
+			t.Errorf("%s: checked out with CRLF under core.autocrlf=true", p)
 		}
 	}
 }

@@ -20,10 +20,14 @@ die() {
 export PATH="$HOME/bin:$PATH"
 
 tag="${CIRCLE_TAG:-}"
-semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z-]*(\.[0-9A-Za-z][0-9A-Za-z-]*)*)?$'
+# No +BUILD metadata (install.sh and install.ps1 reject it, and "+" in a
+# release-asset URL path needs encoding), and prerelease identifiers start
+# alphanumeric: every tag accepted here must also be accepted by both
+# installers (TestInstallersAcceptEveryReleasableTag).
 # [[ =~ ]] is POSIX ERE without REG_NEWLINE: ^ and $ anchor the whole value,
 # so a tag containing a newline cannot match.
-[[ "$tag" =~ $semver ]] || die "tag '$tag' is not a semantic version vMAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]"
+[[ "$tag" =~ $semver ]] || die "tag '$tag' is not a semantic version vMAJOR.MINOR.PATCH[-PRERELEASE]"
 
 sha="${CIRCLE_SHA1:-}"
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "CIRCLE_SHA1 is not a commit id"

@@ -15,7 +15,11 @@ func TestFindModuleRoot(t *testing.T) {
 		{"lf", "module " + modulePath + "\n\ngo 1.25\n", true},
 		{"crlf", "module " + modulePath + "\r\n\r\ngo 1.25\r\n", true},
 		{"no trailing newline", "module " + modulePath, true},
+		{"leading comment and blank line", "// Copyright\n\nmodule " + modulePath + "\n", true},
+		{"quoted path with trailing comment", "module \"" + modulePath + "\" // root\n", true},
 		{"other module", "module example.com/other\n", false},
+		{"directive after other content", "go 1.25\nmodule " + modulePath + "\n", true},
+		{"commented-out directive", "// module " + modulePath + "\nmodule example.com/other\n", false},
 		{"prefix of path", "module " + modulePath + "-fork\n", false},
 	}
 	for _, tc := range cases {

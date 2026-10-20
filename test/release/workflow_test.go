@@ -314,7 +314,7 @@ func callIndex(calls []string, prefix string) int {
 }
 
 func TestReleaseScriptRejectsInvalidTagsBeforeBuilding(t *testing.T) {
-	for _, tag := range []string{"", "1.2.3", "v1.2", "v1.2.3;id", "v01.2.3", "release-v1.2.3", "v1.2.3-", "v1.2.3\nv1"} {
+	for _, tag := range []string{"", "1.2.3", "v1.2", "v1.2.3;id", "v01.2.3", "release-v1.2.3", "v1.2.3-", "v1.2.3\nv1", "v1.2.3+build.1", "v1.2.3-rc.1+b", "v1.2.3--rc"} {
 		run := runReleaseScript(t, tag, true)
 		if run.err == nil {
 			t.Errorf("tag %q: release.sh succeeded, want rejection", tag)
@@ -430,6 +430,49 @@ func TestInstallersVerifyTheReleasePipelineIdentity(t *testing.T) {
 			if strings.Contains(script, stale) {
 				t.Errorf("%s still references the GitHub Actions signer %s", name, stale)
 			}
+		}
+	}
+}
+
+// TestInstallersAcceptEveryReleasableTag keeps the installers' version rule a
+// superset of release.sh's tag rule: a tag CircleCI signs and publishes
+// becomes /releases/latest, and an installer that rejects it breaks every
+// default install.
+func TestInstallersAcceptEveryReleasableTag(t *testing.T) {
+	root := repoRoot(t)
+	extract := func(file string, re *regexp.Regexp) *regexp.Regexp {
+		t.Helper()
+		data, err := readText(filepath.Join(root, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := re.FindSubmatch(data)
+		if m == nil {
+			t.Fatalf("%s: version pattern not found", file)
+		}
+		return regexp.MustCompile(string(m[1]))
+	}
+	release := extract(".circleci/scripts/release.sh", regexp.MustCompile(`(?m)^semver='([^']+)'$`))
+	installers := map[string]*regexp.Regexp{
+		"install.sh":  extract("scripts/install.sh", regexp.MustCompile(`grep -Eq '([^']+)'`)),
+		"install.ps1": extract("scripts/install.ps1", regexp.MustCompile(`-cnotmatch '([^']+)'`)),
+	}
+	for _, tag := range []string{
+		"v0.0.0", "v1.2.3", "v10.20.30", "v1.2.3-rc.1", "v1.2.3-alpha", "v1.2.3-0.3.7",
+		"v1.2.3-x-y.z-1", "v1.2.3--rc", "v1.2.3-rc.-1", "v1.2.3+build.1", "v1.2.3-rc..1",
+	} {
+		if !release.MatchString(tag) {
+			continue
+		}
+		for name, re := range installers {
+			if !re.MatchString(tag) {
+				t.Errorf("release.sh publishes %q but %s rejects it", tag, name)
+			}
+		}
+	}
+	for _, tag := range []string{"v1.2.3", "v1.2.3-rc.1"} {
+		if !release.MatchString(tag) {
+			t.Errorf("release.sh must accept %q", tag)
 		}
 	}
 }
