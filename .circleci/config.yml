@@ -2,7 +2,7 @@ version: 2.1
 
 # Native Windows verification. Buildkite (.buildkite/pipeline.yml) runs the
 # Linux and macOS gates; its cluster has no hosted Windows queue, so the
-# Windows job of .github/workflows/ci.yml runs here instead.
+# Windows platform job runs here.
 
 jobs:
   windows:
