@@ -21,3 +21,9 @@ coverage.out
 .verity/*
 !.verity/standard.yaml
 .claude/settings.local.json
+# Verity skills are installed per machine by the Verity CLI (verity init);
+# they are third-party tooling, not repository source.
+.claude/skills/verity-*/
+
+# goreleaser output
+dist/

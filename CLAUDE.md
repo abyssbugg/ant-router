@@ -343,8 +343,10 @@ superseded — ignore them unless investigating history.
 
 Knowledge the organization's other repositories learned is mirrored outside the
 repo at `~/.verity/orgs/<host>/<owner>/memory/` (`verity memory org` lists it).
-Each claim says where it came from; one that is wrong here is demoted for
-everyone with `verity memory demote <id> --reason "…"`.
+Each claim says where it came from. Demoting one with
+`verity memory demote <id> --reason "…"` changes shared organization memory for
+everyone, so it is a remote mutation (§8): report the wrong claim and its
+evidence, and run the demotion only with the user's explicit approval.
 
 ## Quality gate: accepted risks
 

@@ -22,13 +22,17 @@
 - config-file-integrity
 
 ## How It Works
-Every time the coding agent stops, the Verity hook:
-1. Runs static analysis via @codacy/analysis-cli
-2. Sends results + code to the Verity service
-3. An independent model reviews the code
-4. Returns PASS / WARN / FAIL with actionable findings
+This repository registers only a `SessionStart` hook, which snapshots the
+working tree with `verity baseline capture` (skipped when the `verity` CLI is
+not installed). Reviews run on demand — `verity analyze`, or the
+`/verity-analyze` skill that `verity init` installs per machine — and:
+1. Run static analysis via @codacy/analysis-cli
+2. Send results + code to the Verity service
+3. Have an independent model review the code
+4. Return PASS / WARN / FAIL with actionable findings
 
 _This Standard was derived from the codebase: languages, frameworks and
 architecture were detected, and the rules come from Verity's research-backed
-patterns reference. Project-specific patterns are not part of it yet — add them
-to `custom_patterns` in `.verity/standard.yaml` and run `verity standard push`._
+patterns reference. The project-specific rules are defined locally in
+`custom_patterns` in `.verity/standard.yaml`; run `verity standard push` to
+publish changes to them._

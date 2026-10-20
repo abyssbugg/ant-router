@@ -1,0 +1,4 @@
+# Check out text files with LF on every platform. Git for Windows defaults to
+# core.autocrlf=true, and CRLF checkouts break shell scripts, go.mod parsing and
+# line-anchored test assertions (see test/ci/line_endings_test.go).
+* text=auto eol=lf
