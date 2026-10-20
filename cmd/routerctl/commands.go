@@ -173,6 +173,11 @@ func describeCLIError(err error) cliErrorDetail {
 		}
 	case ExitConnection:
 		code, message = "connection", "unable to connect to daemon"
+		if timeout := timeoutMessage(err); timeout != "" {
+			// A timeout is not proof the daemon is unreachable; reporting it
+			// as a connection failure hides the real failure.
+			code, message = "timeout", timeout
+		}
 	case ExitAuthentication:
 		code, message = "authentication", "authentication failed"
 	case ExitValidation:
@@ -195,4 +200,25 @@ func describeCLIError(err error) cliErrorDetail {
 		}
 	}
 	return cliErrorDetail{ExitCode: exit, Code: code, Message: message}
+}
+
+// timeoutMessage describes a timeout using only what the error proves, or
+// returns "" when err is not a timeout. The daemon's own request_timeout is
+// the only evidence that it received the request; a client-side deadline may
+// expire during token retrieval, dialing, or while awaiting the response.
+func timeoutMessage(err error) string {
+	var clientErr *control.ClientError
+	if errors.As(err, &clientErr) && clientErr != nil {
+		switch {
+		case clientErr.Kind == control.ClientErrorAPI && clientErr.API == control.CodeRequestTimeout:
+			return "daemon request timed out"
+		case clientErr.Kind == control.ClientErrorTimeout:
+			return "control request timed out"
+		}
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "operation timed out"
+	}
+	return ""
 }

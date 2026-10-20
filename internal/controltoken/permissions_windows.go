@@ -3,8 +3,11 @@
 package controltoken
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -22,6 +25,22 @@ func privateTokenFile(path string, _ fs.FileMode) bool {
 	return applyPrivateWindowsACL(path) == nil
 }
 func syncTokenDirectory(string) error { return nil }
+
+// openTokenFile permits the DELETE-access handle used during publication to
+// remain open after the new name becomes visible. On Windows, Root.Open shares
+// read, write, and delete access; ordinary os.Open does not share delete access.
+// This changes sharing compatibility, not the read-only access or private ACL.
+func openTokenFile(path string) (*os.File, error) {
+	file, err := os.OpenInRoot(filepath.Dir(path), filepath.Base(path))
+	if err != nil {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			err = pathErr.Err
+		}
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return file, nil
+}
 
 func applyPrivateWindowsACL(path string) error {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
