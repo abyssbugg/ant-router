@@ -416,6 +416,7 @@ func TestFakeRunnerInstall(t *testing.T) {
 	}
 
 	fake := newFakeRunner()
+	notLoaded(fake)
 	backend := NewLaunchdBackend(homeDir, 501, fake)
 
 	ctx := context.Background()
@@ -424,7 +425,6 @@ func TestFakeRunnerInstall(t *testing.T) {
 		t.Fatalf("Install: %v", err)
 	}
 
-	// Verify bootout was called (may fail, so we ignore error)
 	// Verify bootstrap was called
 	bootstrapCall := findCall(fake.calls, "launchctl", "bootstrap")
 	if bootstrapCall == nil {
@@ -663,13 +663,18 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) (stdo
 			if s, ok := f.stderrMap[key]; ok {
 				stderrOut = s
 			}
-			return nil, stderrOut, e
+			return f.stdoutMap[key], stderrOut, e
 		}
 		if out, ok := f.stdoutMap[key]; ok {
 			return out, nil, nil
 		}
 		if key == "--version" {
 			return []byte("systemd 252 (252.22-1)\n+PAM +AUDIT\n"), nil, nil
+		}
+		if key == "is-enabled" {
+			// systemctl is-enabled prints the state and exits 1 for a unit
+			// that is not enabled, which is the state of a fresh install.
+			return []byte("disabled\n"), nil, errors.New("exit status 1")
 		}
 	}
 
@@ -920,6 +925,9 @@ func TestLaunchdInstallPropagatesBootoutError(t *testing.T) {
 		LogPath:    logPath,
 	}
 
+	// Bootout runs only when reinstalling over our own plist.
+	writeOwnedPlist(t, tmpDir, spec.Label)
+
 	// Mock runner that returns a real bootout error (not "not loaded")
 	fake := newFakeRunner()
 	fake.errMap = map[string]error{"bootout": fmt.Errorf("permission denied")}
@@ -958,6 +966,7 @@ func TestLaunchdInstallCreatesLogDirectory(t *testing.T) {
 	}
 
 	fake := newFakeRunner()
+	notLoaded(fake)
 	backend := NewLaunchdBackend(tmpDir, 501, fake)
 
 	ctx := context.Background()

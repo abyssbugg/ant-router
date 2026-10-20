@@ -153,6 +153,18 @@ func (b *LaunchdBackend) bootout(ctx context.Context, target string) error {
 	return nil
 }
 
+// requireLabelUnloaded returns ErrLabelInUse when launchd has label loaded.
+func (b *LaunchdBackend) requireLabelUnloaded(ctx context.Context, label string) error {
+	_, stderr, err := b.runner.Run(ctx, "launchctl", "print", b.target(label))
+	if err == nil {
+		return ErrLabelInUse{Label: label}
+	}
+	if !isLaunchdNotLoaded(stderr) {
+		return commandError("query service", err, stderr)
+	}
+	return nil
+}
+
 // LaunchdBackend manages service lifecycle via launchctl.
 type LaunchdBackend struct {
 	home   string
@@ -187,8 +199,16 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 	plistPath := filepath.Join(agentsDir, spec.Label+".plist")
 
 	// Refuse to replace a definition we do not own before any side effect.
-	if err := requireReplaceable(plistPath, launchdOwnerLine); err != nil {
+	owned, err := requireReplaceable(plistPath, launchdOwnerLine)
+	if err != nil {
 		return err
+	}
+	if !owned {
+		// Without our plist the label may name an agent loaded from another
+		// directory (for example /Library/LaunchAgents); never replace it.
+		if err := b.requireLabelUnloaded(ctx, spec.Label); err != nil {
+			return err
+		}
 	}
 
 	lock, err := lockLabel(ctx, agentsDir, spec.Label)
@@ -197,7 +217,8 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 	}
 	defer func() { _ = lock.Release() }()
 	// Re-check under the lock: another process may have changed the file.
-	if err := requireReplaceable(plistPath, launchdOwnerLine); err != nil {
+	owned, err = requireReplaceable(plistPath, launchdOwnerLine)
+	if err != nil {
 		return err
 	}
 
@@ -213,9 +234,13 @@ func (b *LaunchdBackend) Install(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	// Bootout (ignore not-loaded error only)
-	if err := b.bootout(ctx, b.target(spec.Label)); err != nil {
-		return err
+	// Reload our own job so it runs the new definition. A label without our
+	// plist was verified unloaded above; if a foreign job appeared since,
+	// bootstrap fails rather than replacing it.
+	if owned {
+		if err := b.bootout(ctx, b.target(spec.Label)); err != nil {
+			return err
+		}
 	}
 
 	// Bootstrap
@@ -323,10 +348,16 @@ func (b *LaunchdBackend) Status(ctx context.Context, label string) (Status, erro
 			return Status{}, commandError("query service", err, stderr)
 		}
 		plistPath := filepath.Join(b.home, "Library", "LaunchAgents", label+".plist")
-		if _, statErr := os.Stat(plistPath); statErr == nil {
+		_, statErr := os.Stat(plistPath)
+		switch {
+		case statErr == nil:
 			return Status{State: StateStopped}, nil
+		case os.IsNotExist(statErr):
+			return Status{State: StateNotInstalled}, nil
+		default:
+			// An uninspectable definition is not proof of absence.
+			return Status{}, fmt.Errorf("inspect definition: %w", statErr)
 		}
-		return Status{State: StateNotInstalled}, nil
 	}
 
 	outputStr := string(stdout)

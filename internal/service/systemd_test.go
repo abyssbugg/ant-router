@@ -349,11 +349,13 @@ func TestSystemdBackendInstall(t *testing.T) {
 		t.Fatalf("unit file not created: %v", err)
 	}
 
-	// Verify runner was called with daemon-reload, enable --now
+	// Verify runner was called with daemon-reload, is-enabled, enable, restart
 	expectedCalls := [][]string{
 		{"systemctl", "--version"},
 		{"systemctl", "--user", "daemon-reload"},
-		{"systemctl", "--user", "enable", "--now", "test-service.service"},
+		{"systemctl", "--user", "is-enabled", "test-service.service"},
+		{"systemctl", "--user", "enable", "test-service.service"},
+		{"systemctl", "--user", "restart", "test-service.service"},
 	}
 
 	if len(fake.calls) != len(expectedCalls) {

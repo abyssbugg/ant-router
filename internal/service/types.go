@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,6 +80,17 @@ type ErrNotInstalled struct {
 
 func (e ErrNotInstalled) Error() string {
 	return fmt.Sprintf("service definition %s is not installed", e.Path)
+}
+
+// ErrLabelInUse is returned when Install finds the label already loaded by
+// the service manager without a definition this package owns, for example an
+// agent loaded from another directory. Install never replaces such a job.
+type ErrLabelInUse struct {
+	Label string
+}
+
+func (e ErrLabelInUse) Error() string {
+	return fmt.Sprintf("service %s is loaded from a definition this tool does not own", e.Label)
 }
 
 // ErrInvalidLabel is returned when a label is invalid.
@@ -170,14 +182,29 @@ func hasOwnerLine(data []byte, ownerLine string) bool {
 // readOwnedDefinition checks if a service definition file exists and is owned.
 // Returns nil if file exists and contains OwnershipMarker.
 // Returns ErrNotInstalled if file does not exist.
+// Returns ErrNotRegularFile if the path is not a regular file (a FIFO,
+// device, or directory), checked on the opened descriptor so the type cannot
+// change between the check and the read.
 // Returns ErrNotOwned if file exists but does not contain OwnershipMarker.
 // Returns wrapped error for other read errors.
 func readOwnedDefinition(path, ownerLine string) error {
-	data, err := os.ReadFile(path)
+	file, err := openDefinition(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotInstalled{Path: path}
 		}
+		return fmt.Errorf("read definition: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("read definition: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return ErrNotRegularFile{Path: path, Reason: "service definition must be a regular file"}
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
 		return fmt.Errorf("read definition: %w", err)
 	}
 	if !hasOwnerLine(data, ownerLine) {
@@ -197,14 +224,18 @@ func (e ErrUnsupportedSystemd) Error() string {
 }
 
 // requireReplaceable permits a missing definition and refuses one that
-// exists without the ownership marker.
-func requireReplaceable(path, ownerLine string) error {
-	err := readOwnedDefinition(path, ownerLine)
+// exists without the ownership marker. owned reports whether an owned
+// definition exists, so callers act on a loaded job only when it is ours.
+func requireReplaceable(path, ownerLine string) (owned bool, err error) {
+	err = readOwnedDefinition(path, ownerLine)
+	if err == nil {
+		return true, nil
+	}
 	var missing ErrNotInstalled
 	if errors.As(err, &missing) {
-		return nil
+		return false, nil
 	}
-	return err
+	return false, err
 }
 
 // isNotInstalled reports whether err says the definition file is missing.

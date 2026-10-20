@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/abyssbugg/ant-router/internal/atomicfile"
 )
@@ -173,7 +174,7 @@ func (b *SystemdBackend) Install(ctx context.Context, spec Spec) error {
 	}
 
 	// Refuse to replace a unit we do not own before any side effect.
-	if err := requireReplaceable(unitPath, systemdOwnerLine); err != nil {
+	if _, err := requireReplaceable(unitPath, systemdOwnerLine); err != nil {
 		return err
 	}
 
@@ -188,7 +189,7 @@ func (b *SystemdBackend) Install(ctx context.Context, spec Spec) error {
 	}
 	defer func() { _ = lock.Release() }()
 	// Re-check under the lock: another process may have changed the file.
-	if err := requireReplaceable(unitPath, systemdOwnerLine); err != nil {
+	if _, err := requireReplaceable(unitPath, systemdOwnerLine); err != nil {
 		return err
 	}
 
@@ -210,19 +211,54 @@ func (b *SystemdBackend) Install(ctx context.Context, spec Spec) error {
 		return commandError("daemon-reload", err, stderr)
 	}
 
-	// Enable and start. enable --now can create the enablement symlink and
-	// then fail to start, so undo the enablement rather than leave a unit
-	// that would start at the next login while Install reported failure.
-	_, stderr, err = b.runner.Run(ctx, "systemctl", "--user", "enable", "--now", unitName)
+	// Enable and (re)start as separate steps so a failure is attributed to
+	// the step that failed. restart, not start, so a reinstall runs the new
+	// definition. If either step fails, undo only an enablement this Install
+	// created: a unit that was already enabled stays as the user had it.
+	wasEnabled, err := b.isEnabled(ctx, unitName)
 	if err != nil {
-		enableErr := commandError("enable", err, stderr)
-		if _, undoStderr, undoErr := b.runner.Run(ctx, "systemctl", "--user", "disable", unitName); undoErr != nil {
-			return errors.Join(enableErr, commandError("undo enable", undoErr, undoStderr))
-		}
-		return enableErr
+		return err
 	}
-
+	if _, stderr, err := b.runner.Run(ctx, "systemctl", "--user", "enable", unitName); err != nil {
+		return b.undoEnable(ctx, unitName, wasEnabled, commandError("enable", err, stderr))
+	}
+	if _, stderr, err := b.runner.Run(ctx, "systemctl", "--user", "restart", unitName); err != nil {
+		return b.undoEnable(ctx, unitName, wasEnabled, commandError("restart", err, stderr))
+	}
 	return nil
+}
+
+// rollbackTimeout bounds cleanup that must run even after the caller's
+// context is cancelled.
+const rollbackTimeout = 10 * time.Second
+
+// isEnabled reports whether unitName is enabled. systemctl is-enabled exits
+// 0 for enabled states and non-zero with the state on stdout otherwise; a
+// failure with no state is a query error, not "disabled".
+func (b *SystemdBackend) isEnabled(ctx context.Context, unitName string) (bool, error) {
+	stdout, stderr, err := b.runner.Run(ctx, "systemctl", "--user", "is-enabled", unitName)
+	if err == nil {
+		return true, nil
+	}
+	if strings.TrimSpace(string(stdout)) != "" {
+		return false, nil
+	}
+	return false, commandError("query enablement", err, stderr)
+}
+
+// undoEnable disables unitName after a failed Install unless it was enabled
+// beforehand. The rollback ignores the caller's cancellation, which is
+// often what made the install fail, but is still bounded.
+func (b *SystemdBackend) undoEnable(ctx context.Context, unitName string, wasEnabled bool, cause error) error {
+	if wasEnabled {
+		return cause
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+	if _, stderr, err := b.runner.Run(cleanupCtx, "systemctl", "--user", "disable", unitName); err != nil {
+		return errors.Join(cause, commandError("undo enable", err, stderr))
+	}
+	return cause
 }
 
 // Uninstall uninstalls a service.
