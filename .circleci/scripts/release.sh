@@ -23,9 +23,9 @@ tag="${CIRCLE_TAG:-}"
 semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]+[A-Za-z-][0-9A-Za-z-]*|[A-Za-z][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]+[A-Za-z-][0-9A-Za-z-]*|[A-Za-z][0-9A-Za-z-]*))*)?$'
 # SemVer 2.0.0 prerelease identifiers (numeric ones without leading zeros),
 # except that identifiers must start alphanumeric and +BUILD metadata is not
-# allowed (install.sh and install.ps1 reject both, and "+" in a release-asset
-# URL path needs encoding): every tag accepted here must also be accepted by both
-# installers (TestInstallersAcceptEveryReleasableTag).
+# allowed, because install.sh and install.ps1 reject both: every tag accepted
+# here must also be accepted by both installers
+# (TestInstallersAcceptEveryReleasableTag).
 # [[ =~ ]] is POSIX ERE without REG_NEWLINE: ^ and $ anchor the whole value,
 # so a tag containing a newline cannot match.
 [[ "$tag" =~ $semver ]] || die "tag '$tag' is not a semantic version vMAJOR.MINOR.PATCH[-PRERELEASE]"
