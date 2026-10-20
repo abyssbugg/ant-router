@@ -1,3 +1,10 @@
+//go:build !windows
+
+// The launchd and systemd backends manage services only on macOS and Linux
+// hosts; these tests drive them against the host filesystem with POSIX
+// absolute paths and execute bits, so they do not apply on Windows. The
+// production code still compiles and is vetted for Windows.
+
 package service
 
 import (
