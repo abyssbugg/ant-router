@@ -343,10 +343,8 @@ superseded — ignore them unless investigating history.
 
 Knowledge the organization's other repositories learned is mirrored outside the
 repo at `~/.verity/orgs/<host>/<owner>/memory/` (`verity memory org` lists it).
-Each claim says where it came from. Demoting one with
-`verity memory demote <id> --reason "…"` changes shared organization memory for
-everyone, so it is a remote mutation (§8): report the wrong claim and its
-evidence, and run the demotion only with the user's explicit approval.
+Each claim says where it came from; one that is wrong here is demoted for
+everyone with `verity memory demote <id> --reason "…"`.
 
 ## Quality gate: accepted risks
 
@@ -425,5 +423,15 @@ its reason.
 
 <!-- verity-memory:preserve -->
 <!-- Add binding, hand-curated guidance here; it survives Verity regeneration. -->
+**Shared Verity state needs explicit user approval (binding; overrides the
+generated guidance above).** These commands change state shared beyond this
+checkout, so they are remote mutations under §8. Draft or propose them, show
+the user what would be recorded and why, and run them only after the user
+explicitly approves:
+
+- `verity reflect` (records a node in the shared knowledge base)
+- `verity feedback finding … false_positive` (becomes a project-wide suppression)
+- `verity memory demote` (changes organization memory for everyone)
+- `verity standard push` (publishes the Standard)
 <!-- /verity-memory:preserve -->
 <!-- verity-memory:end -->

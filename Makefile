@@ -341,16 +341,17 @@ release-snapshot:
 release-test:
 	$(GO) test ./test/release/... -count=1
 
-# Static analysis (Codacy CLI: revive, opengrep, trivy, lizard; config in .codacy/).
+# Local static analysis with the Codacy CLI, running every tool configured in
+# .codacy/codacy.yaml (versions pinned there). It is an opt-in developer check,
+# not part of verify/ci: the CLI is not provisioned on the CI agents, and the
+# hosted Codacy analysis already gates every pull request. The script fails
+# when an analyzer does not complete, which codacy-cli itself does not report.
 .PHONY: codacy-install codacy-analyze verity-doctor
 codacy-install:
 	codacy-cli install
 
 codacy-analyze:
-	codacy-cli analyze --tool revive
-	codacy-cli analyze --tool opengrep
-	codacy-cli analyze --tool trivy
-	codacy-cli analyze --tool lizard
+	sh scripts/codacy-analyze.sh
 
 verity-doctor:
 	verity doctor

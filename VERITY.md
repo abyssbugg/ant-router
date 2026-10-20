@@ -31,6 +31,11 @@ not installed). Reviews run on demand — `verity analyze`, or the
 3. Have an independent model review the code
 4. Return PASS / WARN / FAIL with actionable findings
 
+**Prerequisite:** reviews send analysis results and source code to the Verity
+service, so they need a Verity account with access to this project
+(`verity login`). Without it, local static analysis still runs but the service
+review, run history, and shared memory are unavailable.
+
 _This Standard was derived from the codebase: languages, frameworks and
 architecture were detected, and the rules come from Verity's research-backed
 patterns reference. The project-specific rules are defined locally in
