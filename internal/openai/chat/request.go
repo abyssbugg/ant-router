@@ -29,7 +29,7 @@ func encodeRequestInternal(request canonical.Request, upstreamModel string, stre
 		return nil, nil, invalid("request", "canonical request is invalid")
 	}
 	if strings.TrimSpace(upstreamModel) == "" || strings.TrimSpace(upstreamModel) != upstreamModel {
-		return nil, nil, invalid("request.upstream_model", "upstream model is invalid")
+		return nil, nil, configurationErr("request.upstream_model", "upstream model is invalid")
 	}
 	if request.Continuation() != nil {
 		return nil, nil, unsupported("request.continuation")
@@ -75,7 +75,14 @@ func encodeRequestInternal(request canonical.Request, upstreamModel string, stre
 		body["max_tokens"] = maxTokens
 	}
 	encoded, err := json.Marshal(body)
-	return encoded, nameMap, err
+	if err != nil {
+		return nil, nil, protocolErr("request")
+	}
+	// Bound the fully encoded Chat Completions body before sending it
+	if len(encoded) > canonical.MaxRequestBytes {
+		return nil, nil, invalid("request", "encoded chat request exceeds limit")
+	}
+	return encoded, nameMap, nil
 }
 
 func encodeMessages(items []canonical.Item) ([]map[string]any, error) {

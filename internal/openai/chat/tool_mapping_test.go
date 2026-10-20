@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ func mappingNameMap() ToolNameMap {
 		"editor__write_file": {Kind: canonical.ToolDefinitionKindCustom, Name: "write_file", Namespace: "editor"},
 		"crm__lookup":        {Kind: canonical.ToolDefinitionKindFunction, Name: "lookup", Namespace: "crm"},
 		"lookup":             {Kind: canonical.ToolDefinitionKindFunction, Name: "lookup"},
+		"unmapped__tool":     {Kind: canonical.ToolDefinitionKindFunction, Name: "unmapped__tool"},
 	}
 }
 
@@ -211,7 +213,12 @@ func TestAccumulatorWithoutNameMapKeepsPlainCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index, item := range response.Items()[1:] {
+	items := response.Items()
+	// Initial message + the five mapped calls: a dropped call must fail here.
+	if len(items) != 6 {
+		t.Fatalf("got %d items, want 6 (1 message + 5 calls)", len(items))
+	}
+	for index, item := range items[1:] {
 		call, ok := item.ToolCall()
 		if !ok || call.Namespace() != "" {
 			t.Fatalf("item %d = %q namespace %q; nil map must keep plain function calls", index, item.Type(), call.Namespace())
@@ -282,8 +289,9 @@ func TestAccumulatorBoundsTotalRetainedToolArguments(t *testing.T) {
 			break
 		}
 	}
-	if err == nil || !strings.Contains(err.Error(), "arguments_total_limit") {
-		t.Fatalf("err = %v, want arguments_total_limit protocol error", err)
+	var target *Error
+	if !errors.As(err, &target) || target.Code != "protocol" || target.Path != "tool.arguments_total_limit" {
+		t.Fatalf("err = %v, want protocol at tool.arguments_total_limit", err)
 	}
 }
 
@@ -321,11 +329,13 @@ func TestAccumulatorCountsReplayedPreNameArgumentsOnce(t *testing.T) {
 func TestAccumulatorBoundsBufferedCustomArguments(t *testing.T) {
 	fragment := strings.Repeat("a", 64<<10)
 	chunks := []string{`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","function":{"name":"apply_patch","arguments":"{\"input\":\""}}]}}]}`}
-	for written := 0; written <= canonical.MaxJSONBytes; written += len(fragment) {
+	// Buffered custom arguments are bounded per call by MaxCustomArgumentBytes.
+	for written := 0; written <= MaxCustomArgumentBytes; written += len(fragment) {
 		chunks = append(chunks, `{"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"`+fragment+`"}}]}}]}`)
 	}
 	_, _, err := runMappingStream(t, chunks, mappingNameMap())
-	if err == nil || !strings.Contains(err.Error(), "arguments_limit") {
-		t.Fatalf("err = %v, want arguments_limit protocol error", err)
+	var target *Error
+	if !errors.As(err, &target) || target.Code != "protocol" || target.Path != "tool.arguments_limit" {
+		t.Fatalf("err = %v, want protocol at tool.arguments_limit", err)
 	}
 }

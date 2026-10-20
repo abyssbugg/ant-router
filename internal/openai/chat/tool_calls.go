@@ -1,13 +1,17 @@
 package chat
 
 import (
-	"strings"
-
 	"encoding/json"
+	"strings"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
 	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 )
+
+// MaxCustomArgumentBytes is the wire size limit for custom-tool arguments.
+// Custom inputs are up to 2 MiB decoded; when JSON-encoded with {"input":"..."},
+// each byte can escape to up to 6 bytes (\uXXXX), plus the wrapper overhead.
+const MaxCustomArgumentBytes = 6*canonical.MaxCustomToolInputBytes + len(`{"input":""}`)
 
 // resolvedTool is the canonical identity behind one upstream function name.
 type resolvedTool struct {
@@ -17,12 +21,29 @@ type resolvedTool struct {
 }
 
 // resolveTool maps an upstream function name back to the canonical tool it
-// was encoded from. Names absent from the map are plain function tools.
-func resolveTool(nameMap ToolNameMap, upstream string) resolvedTool {
-	if info, ok := nameMap[upstream]; ok {
-		return resolvedTool{kind: info.Kind, namespace: info.Namespace, name: info.Name}
+// was encoded from. A nil map means the caller declared no name mapping and
+// every name is a plain function tool. A non-nil map, even an empty one, is
+// the complete set of tools the request declared, so any other name is an
+// undeclared call that must not enter the canonical history.
+func resolveTool(nameMap ToolNameMap, upstream string) (resolvedTool, error) {
+	if nameMap == nil {
+		return resolvedTool{kind: canonical.ToolDefinitionKindFunction, name: upstream}, nil
 	}
-	return resolvedTool{kind: canonical.ToolDefinitionKindFunction, name: upstream}
+	info, ok := nameMap[upstream]
+	if !ok {
+		return resolvedTool{}, protocolErr("tool.undeclared")
+	}
+	return resolvedTool{kind: info.Kind, namespace: info.Namespace, name: info.Name}, nil
+}
+
+// declaresCustomTool reports whether the map contains any custom tool.
+func (m ToolNameMap) declaresCustomTool() bool {
+	for _, info := range m {
+		if info.Kind == canonical.ToolDefinitionKindCustom {
+			return true
+		}
+	}
+	return false
 }
 
 func (t resolvedTool) custom() bool { return t.kind == canonical.ToolDefinitionKindCustom }
@@ -36,8 +57,14 @@ func (t resolvedTool) itemType() canonical.ItemType {
 
 // decodeCustomInput extracts the freeform input of a custom tool call from its
 // function arguments, which must be exactly the JSON object {"input": string}.
+// Parses with custom-input size limits to accommodate the 2 MiB decoded limit
+// plus JSON escaping overhead.
 func decodeCustomInput(arguments string) (string, error) {
-	value, err := canonicaljson.Parse([]byte(arguments), canonicaljson.DefaultLimits())
+	limits := canonicaljson.Limits{
+		MaximumBytes: MaxCustomArgumentBytes,
+		MaximumDepth: canonicaljson.DefaultLimits().MaximumDepth,
+	}
+	value, err := canonicaljson.Parse([]byte(arguments), limits)
 	if err != nil || !value.IsObject() {
 		return "", protocolErr("tool.custom_input")
 	}
@@ -54,7 +81,10 @@ func decodeCustomInput(arguments string) (string, error) {
 		return "", protocolErr("tool.custom_input")
 	}
 	// The input size bound is enforced by canonical.NewCustomToolCall; the
-	// buffered arguments are already capped at canonical.MaxJSONBytes.
+	// buffered arguments are already capped at maxCustomArgumentBytes.
+	if len(input) > canonical.MaxCustomToolInputBytes {
+		return "", protocolErr("tool.custom_input")
+	}
 	return input, nil
 }
 
@@ -85,10 +115,15 @@ func buildToolCallItem(tool resolvedTool, itemID canonical.ItemID, callID canoni
 	// Providers stream parameterless function calls with no argument
 	// fragments; an empty (whitespace-only) argument string is the empty
 	// object. Custom tools keep their raw input above.
-	if strings.TrimSpace(arguments) == "" {
+	if strings.Trim(arguments, " \t\r\n") == "" {
 		arguments = "{}"
 	}
-	parsed, err := canonicaljson.Parse([]byte(arguments), canonicaljson.DefaultLimits())
+	// Function tool arguments are limited to MaxJSONBytes (1 MiB)
+	limits := canonicaljson.Limits{
+		MaximumBytes: canonical.MaxJSONBytes,
+		MaximumDepth: canonicaljson.DefaultLimits().MaximumDepth,
+	}
+	parsed, err := canonicaljson.Parse([]byte(arguments), limits)
 	if err != nil {
 		return canonical.Item{}, protocolErr("tool.arguments")
 	}

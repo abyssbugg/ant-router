@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"entries\":[{\"canonical_item_id\":\"item_AQEBAQEBAQEBAQEBAQEBAQ\",\"encrypted_content\":\"cipher-seed\",\"upstream_item_id\":\"rs_seed\"}], \"version\":1}")

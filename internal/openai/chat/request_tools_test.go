@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func mustCustomGrammarTool(t *testing.T, name, description string, syntax canoni
 
 func mustJSONSchema(t *testing.T) canonicaljson.Value {
 	t.Helper()
-	schema := `{"type":"object","properties":{"arg":{"type":"string"}},"required":["arg"]}`
+	schema := `{"type":"object","properties":{"arg":{"type":"string"}},"required":["arg"],"additionalProperties":false}`
 	val, err := canonicaljson.Parse([]byte(schema), canonicaljson.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -146,32 +147,25 @@ func TestEncodeToolsNamespaceFlatten(t *testing.T) {
 	}
 }
 
-// TestEncodeToolsNameTooLong: function name > 64 chars returns error with path
+// TestEncodeToolsNameTooLong: function name > 64 chars returns error with exact path and code
 func TestEncodeToolsNameTooLong(t *testing.T) {
 	fn1 := mustFunctionTool(t, "get", "Get")
-	// When flattened, namespace name + "__" + member name must be <= 64 chars
-	// Create a namespace that when flattened exceeds 64 chars
-	ns := mustNamespace(t, strings.Repeat("n", 61), "desc", []canonical.ToolDefinition{fn1})
+	// 60 + len("__") + 3 == 65: rejected with exact path.
+	ns := mustNamespace(t, strings.Repeat("n", 60), "desc", []canonical.ToolDefinition{fn1})
 
 	_, err := encodeTools([]canonical.ToolDefinition{ns})
-	if err == nil {
-		t.Fatalf("expected error for flattened name too long, got none")
+	var target *Error
+	if !errors.As(err, &target) || target.Code != "invalid" || target.Path != "request.tools[0].tools[0].name" {
+		t.Fatalf("err = %#v, want invalid at request.tools[0].tools[0].name", err)
 	}
-	if !strings.Contains(err.Error(), "tools[0]") {
-		t.Errorf("expected error path to reference tools[0]")
-	}
-}
 
-// TestEncodeToolsInvalidCharacters: validates that invalid characters are caught at construction
-func TestEncodeToolsInvalidCharacters(t *testing.T) {
-	// validToolName allows only [a-zA-Z0-9_-], starting with letter
-	// This is caught at construction, so we just verify the invariant
-	fn := mustFunctionTool(t, "valid_name", "Desc")
-	if !fn.Valid() {
-		t.Fatalf("valid function tool should be valid")
+	// 59 + len("__") + 3 == 64: accepted (boundary case).
+	fnOk := mustFunctionTool(t, "get", "Get")
+	nsOk := mustNamespace(t, strings.Repeat("n", 59), "desc", []canonical.ToolDefinition{fnOk})
+	_, err = encodeTools([]canonical.ToolDefinition{nsOk})
+	if err != nil {
+		t.Fatalf("64-byte flattened name rejected: %v", err)
 	}
-	// Characters like @ are caught during NewToolNamespace
-	// Verify that only valid names can be constructed
 }
 
 // TestEncodeToolsCollisionCustomFunctionNamespace: collision between flattened and direct names
@@ -183,11 +177,9 @@ func TestEncodeToolsCollisionCustomFunctionNamespace(t *testing.T) {
 	ns := mustNamespace(t, "x", "desc", []canonical.ToolDefinition{fn2})
 
 	_, err := encodeTools([]canonical.ToolDefinition{fn1, ns})
-	if err == nil {
-		t.Fatalf("expected error for name collision, got none")
-	}
-	if !strings.Contains(err.Error(), "tools") {
-		t.Errorf("expected error to reference tools array")
+	var target *Error
+	if !errors.As(err, &target) || target.Code != "invalid" || target.Path != "request.tools[1].tools[0].name" {
+		t.Fatalf("err = %#v, want invalid at request.tools[1].tools[0].name", err)
 	}
 }
 

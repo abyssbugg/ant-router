@@ -62,7 +62,10 @@ func codeForChatStatus(status int) execution.ErrorCode {
 	}
 }
 
-const maxChatSSELine = 1 << 20
+// maxChatSSELine accommodates one SSE data line carrying a maximal custom
+// argument fragment double-escaped in the chunk JSON (SSE event wrapper and
+// delta argument double-encoding). Add overhead for the chunk structure.
+const maxChatSSELine = 2*chat.MaxCustomArgumentBytes + 64<<10
 
 // chatEventSource converts one Chat Completions SSE stream into canonical
 // events. Recv is not safe for concurrent use.
@@ -214,7 +217,7 @@ var _ streaming.EventSource = (*chatEventSource)(nil)
 func (p *Provider) executeChat(ctx context.Context, upstreamModel string, request canonical.Request) (streaming.EventSource, error) {
 	body, names, err := chat.EncodeRequestWithTools(request, upstreamModel, true)
 	if err != nil {
-		if chat.IsUnsupported(err) {
+		if chat.IsUnsupported(err) || chat.IsInvalid(err) {
 			return nil, execution.NewError(execution.CodeInvalidRequest, "request", 0, err)
 		}
 		return nil, execution.NewError(execution.CodeInternal, "request", 0, err)

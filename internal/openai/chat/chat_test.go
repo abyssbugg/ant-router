@@ -199,6 +199,7 @@ func TestAccumulatorBoundsPendingToolArgumentsBeforeName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// No custom tool is declared, so unnamed arguments are bounded as JSON.
 	for sent := 0; sent <= canonical.MaxJSONBytes; sent += len(fragment) {
 		if _, err := accumulator.Accept(chunk); err != nil {
 			if sent+len(fragment) <= canonical.MaxJSONBytes {

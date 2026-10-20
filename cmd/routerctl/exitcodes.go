@@ -82,6 +82,10 @@ func exitCode(err error) int {
 			return ExitAuthentication
 		case control.ClientErrorAPI:
 			switch clientErr.API {
+			case control.CodeRequestTimeout:
+				// The daemon ran out of time; classify it with client-side
+				// timeouts rather than as an internal failure.
+				return ExitConnection
 			case control.CodeUnauthorized:
 				return ExitAuthentication
 			case control.CodeConfigurationInvalid, control.CodeConfigurationTooLarge:
