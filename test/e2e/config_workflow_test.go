@@ -105,15 +105,23 @@ func (p *daemonProcess) stop() {
 	})
 }
 
+// routerctlTimeout bounds one routerctl invocation. It is longer than the
+// control client's request timeout, so a slow daemon surfaces as routerctl's
+// own timeout error rather than a killed process.
+const routerctlTimeout = 30 * time.Second
+
 func routerctl(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instance string, arguments ...string) ([]byte, []byte, int) {
+	t.Helper()
+	return routerctlWithin(t, routerctlTimeout, binaries, stateRoot, runtimeRoot, instance, arguments...)
+}
+
+func routerctlWithin(t *testing.T, timeout time.Duration, binaries binaries, stateRoot, runtimeRoot, instance string, arguments ...string) ([]byte, []byte, int) {
 	t.Helper()
 	global := []string{"--instance", instance, "--state-dir", stateRoot, "--json"}
 	if runtimeRoot != "" {
 		global = append(global, "--runtime-dir", runtimeRoot)
 	}
-	// Longer than the control client's request timeout, so a slow daemon
-	// surfaces as routerctl's own timeout error rather than a killed process.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, binaries.routerctl, append(global, arguments...)...)
 	var stdout, stderr bytes.Buffer
@@ -136,8 +144,10 @@ func routerctl(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instance
 func waitForDaemon(t *testing.T, binaries binaries, stateRoot, runtimeRoot, instance string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		_, _, code := routerctl(t, binaries, stateRoot, runtimeRoot, instance, "status")
+	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
+		// Each probe gets only the time left, so a stuck daemon cannot
+		// stretch the startup wait past its deadline.
+		_, _, code := routerctlWithin(t, remaining, binaries, stateRoot, runtimeRoot, instance, "status")
 		if code == 0 {
 			return
 		}
