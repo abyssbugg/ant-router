@@ -108,7 +108,10 @@ func TestDaemonSpecRejectsInvalidInput(t *testing.T) {
 
 func TestNewManagerSelectsBackend(t *testing.T) {
 	runner := fakeRunnerFunc(nil)
-	p := Platform{Home: "/home/u", ConfigDir: "/home/u/.config", StateDir: "/state", UID: 501, Runner: runner}
+	// Paths must be absolute on the host running the test (a Unix literal
+	// such as "/home/u" is not absolute on Windows).
+	root := t.TempDir()
+	p := Platform{Home: filepath.Join(root, "home"), ConfigDir: filepath.Join(root, "home", ".config"), StateDir: filepath.Join(root, "state"), UID: 501, Runner: runner}
 	for goos, want := range map[string]any{
 		"darwin":  &LaunchdBackend{},
 		"linux":   &SystemdBackend{},
@@ -132,13 +135,14 @@ func TestNewManagerSelectsBackend(t *testing.T) {
 
 func TestNewManagerRequiresPlatformFields(t *testing.T) {
 	runner := fakeRunnerFunc(nil)
+	abs := t.TempDir()
 	for name, p := range map[string]Platform{
 		"darwin no home":       {GOOS: "darwin", UID: 501, Runner: runner},
 		"darwin relative home": {GOOS: "darwin", Home: "home", UID: 501, Runner: runner},
-		"darwin negative uid":  {GOOS: "darwin", Home: "/h", UID: -1, Runner: runner},
+		"darwin negative uid":  {GOOS: "darwin", Home: abs, UID: -1, Runner: runner},
 		"linux no config dir":  {GOOS: "linux", Runner: runner},
 		"windows no state dir": {GOOS: "windows", Runner: runner},
-		"nil runner":           {GOOS: "linux", ConfigDir: "/c"},
+		"nil runner":           {GOOS: "linux", ConfigDir: abs},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewManager(p); err == nil {
