@@ -91,6 +91,17 @@ if (Test-Path -LiteralPath 'test/install' -PathType Container) {
     Remove-Item Env:ANT_ROUTER_REQUIRE_INSTALL_TOOLS
 }
 
+# Real Task Scheduler lifecycle through the production backend (opt-in: it
+# registers and removes a task under \AntRouter\ for the CI user).
+if (Test-Path -LiteralPath 'internal/service' -PathType Container) {
+    $env:ANT_ROUTER_TASK_SCHEDULER_E2E = '1'
+    try {
+        Invoke-Native go @('test', './internal/service', '-run', '^TestTaskSchedulerIntegration$', '-count=1', '-v')
+    } finally {
+        Remove-Item Env:ANT_ROUTER_TASK_SCHEDULER_E2E -ErrorAction SilentlyContinue
+    }
+}
+
 # Race coverage for Windows-specific code needs cgo and MinGW-w64 >= 8.
 $env:PATH = $mingwBin + ';' + $env:PATH
 $env:CGO_ENABLED = '1'

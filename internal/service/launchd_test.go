@@ -554,59 +554,88 @@ func TestUninstallBootoutErrorKeepsFile(t *testing.T) {
 }
 
 // TestStatusParsing tests status parsing for running/stopped/not-found.
-func TestStatusParsing(t *testing.T) {
-	tests := []struct {
-		name          string
-		launchctlOut  string
-		expectedState State
-	}{
-		{
-			name:          "running",
-			launchctlOut:  "state = running\n",
-			expectedState: StateRunning,
-		},
-		{
-			name:          "stopped",
-			launchctlOut:  "state = idle\n",
-			expectedState: StateStopped,
-		},
-		{
-			name:          "not-found",
-			launchctlOut:  "",
-			expectedState: StateNotInstalled,
-		},
+// TestLaunchdStatus verifies that installation is decided by the plist on
+// disk, and that launchctl print output maps to states without guessing.
+func TestLaunchdStatus(t *testing.T) {
+	notFound := errors.New("exit status 113")
+	// A real exit status, so the exit-code branch is exercised on its own.
+	exit113 := exec.Command("sh", "-c", "exit 113").Run()
+	var exitErr *exec.ExitError
+	if !errors.As(exit113, &exitErr) || exitErr.ExitCode() != 113 {
+		t.Fatalf("could not produce exit status 113: %v", exit113)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
-
-			fake := &fakeRunner{
-				stdoutMap: map[string][]byte{
-					"print": []byte(tt.launchctlOut),
-				},
-			}
-			if tt.name == "not-found" {
-				fake.errMap = map[string]error{
-					"print": errNotFound,
+	for _, tc := range []struct {
+		name       string
+		plist      bool
+		unreadable bool
+		stdout     string
+		stderr     string
+		err        error
+		want       State
+		wantDetail string
+		wantErr    bool
+		wantCalls  int
+	}{
+		{name: "no plist", plist: false, err: notFound, want: StateNotInstalled, wantCalls: 0},
+		{name: "plist but not loaded", plist: true, stderr: "Could not find service \"my-service\" in domain for user gui: 501\n", err: notFound, want: StateStopped, wantDetail: "not loaded", wantCalls: 1},
+		{name: "exit 113 without stderr", plist: true, err: exit113, want: StateStopped, wantDetail: "not loaded", wantCalls: 1},
+		{name: "no such process", plist: true, stderr: "Bad request.\nNo such process\n", err: errors.New("exit status 3"), want: StateStopped, wantDetail: "not loaded", wantCalls: 1},
+		// An uninspectable definition is not proof of absence or presence.
+		{name: "unreadable plist", plist: true, unreadable: true, wantErr: true, wantCalls: 0},
+		{name: "running", plist: true, stdout: "gui/501/my-service = {\n\tstate = running\n\tpid = 42\n}\n", want: StateRunning, wantCalls: 1},
+		{name: "not running", plist: true, stdout: "gui/501/my-service = {\n\tstate = not running\n}\n", want: StateStopped, wantCalls: 1},
+		{name: "waiting", plist: true, stdout: "\tstate = waiting\n", want: StateStopped, wantCalls: 1},
+		{name: "unrecognized state", plist: true, stdout: "\tstate = spawn scheduled\n", want: StateUnknown, wantDetail: "spawn scheduled", wantCalls: 1},
+		{name: "no state line", plist: true, stdout: "garbage\n", want: StateUnknown, wantCalls: 1},
+		{name: "other failure", plist: true, stderr: "Operation not permitted\n", err: errors.New("exit status 1"), wantErr: true, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tc.plist {
+				dir := filepath.Join(home, "Library", "LaunchAgents")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "my-service.plist"), []byte(OwnershipMarker), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if tc.unreadable {
+					if os.Geteuid() == 0 {
+						t.Skip("root bypasses directory permissions")
+					}
+					if err := os.Chmod(dir, 0); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 				}
 			}
-
-			backend := NewLaunchdBackend(tmpDir, 501, fake)
-			ctx := context.Background()
-
-			status, err := backend.Status(ctx, "com.test.app")
+			calls := 0
+			runner := fakeRunnerFunc(func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+				calls++
+				if name != "launchctl" || len(args) != 2 || args[0] != "print" || args[1] != "gui/501/my-service" {
+					t.Fatalf("unexpected call %s %q", name, args)
+				}
+				return []byte(tc.stdout), []byte(tc.stderr), tc.err
+			})
+			st, err := NewLaunchdBackend(home, 501, runner).Status(context.Background(), "my-service")
+			if calls != tc.wantCalls {
+				t.Fatalf("runner calls = %d, want %d", calls, tc.wantCalls)
+			}
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %+v", st)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Status: %v", err)
 			}
-			if status.State != tt.expectedState {
-				t.Errorf("Status: got state %v, want %v", status.State, tt.expectedState)
+			if st.State != tc.want || st.Detail != tc.wantDetail {
+				t.Fatalf("Status = %+v, want state %v detail %q", st, tc.want, tc.wantDetail)
 			}
 		})
 	}
 }
-
-// Helpers
 
 func assertGoldenPlist(t *testing.T, name string, plist []byte, exe, logPath string) {
 	t.Helper()

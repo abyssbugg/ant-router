@@ -6,7 +6,9 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -379,34 +381,57 @@ func (b *LaunchdBackend) Stop(ctx context.Context, label string) error {
 	})
 }
 
-// Status returns the status of a service.
+// Status returns the status of a LaunchAgent.
+//
+// Installation is decided by the plist on disk. An installed plist that
+// launchd does not know about (exit status 113, "Could not find service")
+// is reported as stopped with detail "not loaded".
 func (b *LaunchdBackend) Status(ctx context.Context, label string) (Status, error) {
 	if err := ValidateLabel(label); err != nil {
 		return Status{}, err
 	}
-	stdout, stderr, err := b.runner.Run(ctx, "launchctl", "print", b.target(label))
-
-	if err != nil {
-		if !isLaunchdNotLoaded(stderr) {
-			return Status{}, commandError("query service", err, stderr)
-		}
-		plistPath := filepath.Join(b.home, "Library", "LaunchAgents", label+".plist")
-		_, statErr := os.Stat(plistPath)
-		switch {
-		case statErr == nil:
-			return Status{State: StateStopped}, nil
-		case os.IsNotExist(statErr):
+	plistPath := filepath.Join(b.home, "Library", "LaunchAgents", label+".plist")
+	if _, err := os.Lstat(plistPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			return Status{State: StateNotInstalled}, nil
-		default:
-			// An uninspectable definition is not proof of absence.
-			return Status{}, fmt.Errorf("inspect definition: %w", statErr)
+		}
+		// An uninspectable definition is not proof of absence.
+		return Status{}, fmt.Errorf("stat plist: %w", err)
+	}
+
+	stdout, stderr, err := b.runner.Run(ctx, "launchctl", "print", "gui/"+strconv.Itoa(b.uid)+"/"+label)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if (errors.As(err, &exitErr) && exitErr.ExitCode() == launchctlNotFoundExit) || isLaunchdNotLoaded(stderr) {
+			return Status{State: StateStopped, Detail: "not loaded"}, nil
+		}
+		return Status{}, commandError("query service", err, stderr)
+	}
+
+	state, ok := launchdState(stdout)
+	switch {
+	case !ok:
+		return Status{State: StateUnknown}, nil
+	case state == "running":
+		return Status{State: StateRunning}, nil
+	case state == "not running" || state == "waiting" || state == "exited":
+		return Status{State: StateStopped}, nil
+	default:
+		return Status{State: StateUnknown, Detail: state}, nil
+	}
+}
+
+// launchctlNotFoundExit is launchctl's exit status for an unknown service.
+const launchctlNotFoundExit = 113
+
+// launchdState extracts the first "state = <value>" line from launchctl
+// print output.
+func launchdState(out []byte) (string, bool) {
+	for _, line := range strings.Split(string(out), "\n") {
+		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
+		if found && strings.TrimSpace(key) == "state" {
+			return strings.TrimSpace(value), true
 		}
 	}
-
-	outputStr := string(stdout)
-	if strings.Contains(outputStr, "state = running") {
-		return Status{State: StateRunning}, nil
-	}
-
-	return Status{State: StateStopped}, nil
+	return "", false
 }
