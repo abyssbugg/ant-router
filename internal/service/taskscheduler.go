@@ -319,6 +319,14 @@ Register-ScheduledTask ` + taskRef(spec.Label) + ` -Xml $xml -Force | Out-Null
 	if info.present && !info.owned {
 		return ErrNotOwned{Path: taskName(spec.Label)}
 	}
+	// A reinstall keeps the definition it replaces, so a failure part way
+	// through can put the previous service back as it was.
+	var previous string
+	if info.present {
+		if previous, err = b.exportTask(ctx, spec.Label); err != nil {
+			return err
+		}
+	}
 	if _, err := b.script(ctx, "register task", register); err != nil {
 		return err
 	}
@@ -327,12 +335,13 @@ Register-ScheduledTask ` + taskRef(spec.Label) + ` -Xml $xml -Force | Out-Null
 	// process running the previous definition, so stop it first.
 	if info.present {
 		if _, err := b.script(ctx, "stop task", "Stop-ScheduledTask "+taskRef(spec.Label)+"\n"); err != nil {
-			return err
+			// The old process is still running the previous definition.
+			return errors.Join(err, b.restoreTask(ctx, spec.Label, previous, false))
 		}
 	}
 	if _, err := b.script(ctx, "start task", "Start-ScheduledTask "+taskRef(spec.Label)+"\n"); err != nil {
 		if info.present {
-			return err
+			return errors.Join(err, b.restoreTask(ctx, spec.Label, previous, info.state == taskStateRunning))
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 		defer cancel()
@@ -340,6 +349,40 @@ Register-ScheduledTask ` + taskRef(spec.Label) + ` -Xml $xml -Force | Out-Null
 			return errors.Join(err, undoErr)
 		}
 		return err
+	}
+	return nil
+}
+
+// exportTask returns the registered definition as base64 UTF-16LE, the
+// encoding Register-ScheduledTask scripts embed.
+func (b *TaskSchedulerBackend) exportTask(ctx context.Context, label string) (string, error) {
+	stdout, err := b.script(ctx, "export task", "[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((Export-ScheduledTask "+taskRef(label)+")))\n")
+	if err != nil {
+		return "", err
+	}
+	encoded := strings.TrimSpace(string(stdout))
+	if raw, err := base64.StdEncoding.DecodeString(encoded); err != nil || len(raw) == 0 || len(raw)%2 != 0 {
+		return "", fmt.Errorf("export task: unexpected output %q", truncateForError(stdout))
+	}
+	return encoded, nil
+}
+
+// restoreTask re-registers a definition exported by exportTask and, if the
+// task was running before, starts it again. It runs detached from ctx so a
+// cancelled install still rolls back.
+func (b *TaskSchedulerBackend) restoreTask(ctx context.Context, label, encoded string, start bool) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+	register := `$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('` + encoded + `'))
+Register-ScheduledTask ` + taskRef(label) + ` -Xml $xml -Force | Out-Null
+`
+	if _, err := b.script(cleanupCtx, "restore task", register); err != nil {
+		return fmt.Errorf("restore previous task definition: %w", err)
+	}
+	if start {
+		if _, err := b.script(cleanupCtx, "restart task", "Start-ScheduledTask "+taskRef(label)+"\n"); err != nil {
+			return fmt.Errorf("restore previous task definition: restart: %w", err)
+		}
 	}
 	return nil
 }
