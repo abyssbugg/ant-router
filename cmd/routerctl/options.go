@@ -110,6 +110,37 @@ func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
 		default:
 			return options, cliCommand{}, errUsage
 		}
+	case "service":
+		if len(remaining) < 2 {
+			return options, cliCommand{}, errUsage
+		}
+		command.Action = remaining[1]
+		switch command.Action {
+		case "status", "start", "stop", "uninstall":
+			if len(remaining) != 2 {
+				return options, cliCommand{}, errUsage
+			}
+		case "install":
+			// service install or service install --routerd <path>
+			if len(remaining) > 4 {
+				return options, cliCommand{}, errUsage
+			}
+			if len(remaining) >= 3 {
+				if remaining[2] != "--routerd" {
+					return options, cliCommand{}, errUsage
+				}
+				if len(remaining) != 4 {
+					return options, cliCommand{}, errUsage
+				}
+				command.Args = []string{remaining[3]}
+			}
+		default:
+			return options, cliCommand{}, errUsage
+		}
+	case "doctor":
+		if len(remaining) != 1 {
+			return options, cliCommand{}, errUsage
+		}
 	default:
 		return options, cliCommand{}, errUsage
 	}

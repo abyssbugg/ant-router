@@ -199,6 +199,9 @@ func describeCLIError(err error) cliErrorDetail {
 			message = "data plane is unavailable"
 		}
 	}
+	if serviceMessage, ok := serviceErrorMessage(err); ok {
+		message = serviceMessage
+	}
 	return cliErrorDetail{ExitCode: exit, Code: code, Message: message}
 }
 

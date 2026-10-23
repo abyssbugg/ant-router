@@ -57,6 +57,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		return ExitSuccess
 	}
+	if command.Name == "service" {
+		return executeServiceCommand(ctx, options, command, stdout, stderr, defaultServiceDeps())
+	}
+	if command.Name == "doctor" {
+		return executeDoctor(ctx, options, stdout, stderr, factory, defaultServiceDeps())
+	}
 	if command.Name == "codex" && command.Action == "token" {
 		return executeCodexToken(ctx, options, stdout, stderr)
 	}
