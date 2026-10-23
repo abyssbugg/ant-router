@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/daemon"
+	"github.com/abyssbugg/ant-router/internal/privateacl"
 	"golang.org/x/sys/windows"
 )
 
@@ -22,11 +23,7 @@ func TestRunLogFileIsPrivateOnWindows(t *testing.T) {
 	if code := run(context.Background(), []string{"--log-file", logPath}, io.Discard, &stderr, factory); code != 0 {
 		t.Fatalf("run() = %d stderr %q, want 0", code, stderr.String())
 	}
-	descriptor, err := windows.GetNamedSecurityInfo(logPath, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		t.Fatal(err)
-	}
-	requirePrivateDACL(t, logPath, descriptor)
+	requirePrivateDACL(t, logPath)
 }
 
 // A log created in a directory whose inheritable ACL grants Everyone read
@@ -58,23 +55,12 @@ func TestCreatePrivateLogFileDoesNotInheritAccess(t *testing.T) {
 	if _, err := file.WriteString("line\n"); err != nil {
 		t.Fatalf("write log: %v", err)
 	}
-	descriptor, err := windows.GetNamedSecurityInfo(logPath, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		t.Fatal(err)
-	}
-	requirePrivateDACL(t, logPath, descriptor)
+	requirePrivateDACL(t, logPath)
 }
 
-func requirePrivateDACL(t *testing.T, path string, descriptor *windows.SECURITY_DESCRIPTOR) {
+func requirePrivateDACL(t *testing.T, path string) {
 	t.Helper()
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
+	if err := privateacl.Verify(path); err != nil {
 		t.Fatal(err)
-	}
-	sddl := descriptor.String()
-	dacl := sddl[strings.Index(sddl, "D:"):]
-	aces := strings.Count(dacl, "(")
-	if !strings.HasPrefix(dacl, "D:P") || aces != 2 || !strings.Contains(dacl, "(A;;FA;;;SY)") || !strings.Contains(dacl, "(A;;FA;;;"+user.User.Sid.String()+")") {
-		t.Fatalf("%s DACL = %q, want protected with only SYSTEM and the current user", path, dacl)
 	}
 }
