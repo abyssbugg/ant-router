@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 const maxOutputSize = 64 * 1024 // 64 KiB
@@ -11,7 +13,8 @@ const maxOutputSize = 64 * 1024 // 64 KiB
 // ExecRunner implements Runner using os/exec.
 type ExecRunner struct{}
 
-// Run executes launchctl or systemctl with bounded output (64 KiB per stream).
+// Run executes launchctl, systemctl, or the system Windows PowerShell with
+// bounded output (64 KiB per stream).
 func (r *ExecRunner) Run(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error) {
 	cmd, err := serviceCommand(ctx, name, args...)
 	if err != nil {
@@ -21,15 +24,23 @@ func (r *ExecRunner) Run(ctx context.Context, name string, args ...string) (stdo
 }
 
 // serviceCommand is the only place this package builds an *exec.Cmd. The
-// program is always a string literal (launchctl or systemctl) so ExecRunner
-// can never become a general command runner; arguments are passed as a
-// vector and never through a shell.
+// program is always fixed (launchctl, systemctl, or the system copy of
+// Windows PowerShell) so ExecRunner can never become a general command
+// runner; arguments are passed as a vector and never through a shell.
 func serviceCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
 	switch name {
 	case "launchctl":
 		return exec.CommandContext(ctx, "launchctl", args...), nil
 	case "systemctl":
 		return exec.CommandContext(ctx, "systemctl", args...), nil
+	case "powershell":
+		// Resolved from SystemRoot, not PATH, so a planted powershell.exe
+		// earlier in PATH is never run.
+		root := os.Getenv("SystemRoot")
+		if !filepath.IsAbs(root) {
+			return nil, fmt.Errorf("SystemRoot %q is not an absolute path", root)
+		}
+		return exec.CommandContext(ctx, filepath.Join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), args...), nil
 	default:
 		return nil, fmt.Errorf("command %q is not permitted", name)
 	}

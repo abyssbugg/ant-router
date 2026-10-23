@@ -3,14 +3,14 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/csv"
+	"encoding/base64"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"os/user"
+	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf16"
-
-	"github.com/abyssbugg/ant-router/internal/atomicfile"
 )
 
 // quoteWindowsArg quotes one argument so that CommandLineToArgvW (and the
@@ -48,63 +48,58 @@ func quoteWindowsArg(s string) string {
 	return buf.String()
 }
 
-// taskXMLOwned reports whether a stored task XML carries the ownership
-// marker. Files written by renderTaskXML are UTF-16LE with a BOM, so the
-// content is decoded before searching; anything else is searched as-is.
-func taskXMLOwned(data []byte) bool {
-	if len(data) >= 2 && data[0] == 0xFF && data[1] == 0xFE {
-		body := data[2:]
-		if len(body)%2 != 0 {
-			return false
-		}
-		units := make([]uint16, len(body)/2)
-		for i := range units {
-			units[i] = uint16(body[2*i]) | uint16(body[2*i+1])<<8
-		}
-		return strings.Contains(string(utf16.Decode(units)), OwnershipMarker)
-	}
-	return bytes.Contains(data, []byte(OwnershipMarker))
-}
+// taskFolder is the Task Scheduler folder holding every task this package
+// manages; Register-ScheduledTask creates it on first use.
+const taskFolder = `\AntRouter\`
 
-// renderTaskXML renders a Task Scheduler 1.2 XML from a Spec.
-// The XML is encoded as UTF-16LE with BOM.
-func renderTaskXML(spec Spec) ([]byte, error) {
+// maxEncodedCommand bounds the -EncodedCommand argument well below the
+// 32767-character Windows command-line limit.
+const maxEncodedCommand = 30000
+
+// sidPattern matches a Windows security identifier string.
+var sidPattern = regexp.MustCompile(`^S-[0-9]+(-[0-9]+)+$`)
+
+func taskName(label string) string { return taskFolder + label }
+
+// renderTaskXML renders a Task Scheduler 1.2 definition for spec, encoded as
+// UTF-16LE with a BOM. The task runs as, and starts at the logon of, the
+// installing user identified by userSID. Task Scheduler cannot redirect a
+// task's output, so spec.LogPath reaches the service as "--log-file PATH".
+// RegistrationInfo/Description is exactly OwnershipMarker: it is the
+// ownership proof checked before every lifecycle operation.
+func renderTaskXML(spec Spec, userSID string) ([]byte, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
+	if !sidPattern.MatchString(userSID) {
+		return nil, fmt.Errorf("current user SID %q is not a Windows security identifier", userSID)
+	}
+	user := escapeXMLString(userSID)
+	args := append(append([]string(nil), spec.Args...), "--log-file", spec.LogPath)
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = quoteWindowsArg(arg)
+	}
 
-	// Build the XML structure
 	var buf bytes.Buffer
-
-	// XML declaration with UTF-16 encoding
-	buf.WriteString(`<?xml version="1.0" encoding="UTF-16"?>`)
-	buf.WriteString("\n")
-
-	// Root element with namespace
-	buf.WriteString(`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">`)
-	buf.WriteString("\n")
-
-	// RegistrationInfo with ownership marker in Description
+	buf.WriteString(`<?xml version="1.0" encoding="UTF-16"?>` + "\n")
+	buf.WriteString(`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` + "\n")
 	buf.WriteString("  <RegistrationInfo>\n")
-	buf.WriteString("    <Description>")
-	buf.WriteString(escapeXMLString(OwnershipMarker))
-	buf.WriteString("</Description>\n")
+	buf.WriteString("    <Description>" + escapeXMLString(OwnershipMarker) + "</Description>\n")
 	buf.WriteString("  </RegistrationInfo>\n")
-
-	// Triggers with LogonTrigger for current user
 	buf.WriteString("  <Triggers>\n")
 	buf.WriteString("    <LogonTrigger>\n")
 	buf.WriteString("      <Enabled>true</Enabled>\n")
+	buf.WriteString("      <UserId>" + user + "</UserId>\n")
 	buf.WriteString("    </LogonTrigger>\n")
 	buf.WriteString("  </Triggers>\n")
-
-	// Principal
-	buf.WriteString("  <Principal id=\"Author\">\n")
-	buf.WriteString("    <LogonType>InteractiveToken</LogonType>\n")
-	buf.WriteString("    <RunLevel>LeastPrivilege</RunLevel>\n")
-	buf.WriteString("  </Principal>\n")
-
-	// Settings
+	buf.WriteString("  <Principals>\n")
+	buf.WriteString("    <Principal id=\"Author\">\n")
+	buf.WriteString("      <UserId>" + user + "</UserId>\n")
+	buf.WriteString("      <LogonType>InteractiveToken</LogonType>\n")
+	buf.WriteString("      <RunLevel>LeastPrivilege</RunLevel>\n")
+	buf.WriteString("    </Principal>\n")
+	buf.WriteString("  </Principals>\n")
 	buf.WriteString("  <Settings>\n")
 	buf.WriteString("    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n")
 	buf.WriteString("    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n")
@@ -116,242 +111,334 @@ func renderTaskXML(spec Spec) ([]byte, error) {
 	buf.WriteString("    </RestartOnFailure>\n")
 	buf.WriteString("    <Hidden>false</Hidden>\n")
 	buf.WriteString("  </Settings>\n")
-
-	// Actions with Exec
 	buf.WriteString("  <Actions Context=\"Author\">\n")
 	buf.WriteString("    <Exec>\n")
-	buf.WriteString("      <Command>")
-	buf.WriteString(escapeXMLString(spec.Executable))
-	buf.WriteString("</Command>\n")
-
-	// Build Arguments string with Windows quoting
-	if len(spec.Args) > 0 {
-		var argsBuf strings.Builder
-		for i, arg := range spec.Args {
-			if i > 0 {
-				argsBuf.WriteString(" ")
-			}
-			argsBuf.WriteString(quoteWindowsArg(arg))
-		}
-		buf.WriteString("      <Arguments>")
-		buf.WriteString(escapeXMLString(argsBuf.String()))
-		buf.WriteString("</Arguments>\n")
-	}
-
+	buf.WriteString("      <Command>" + escapeXMLString(spec.Executable) + "</Command>\n")
+	buf.WriteString("      <Arguments>" + escapeXMLString(strings.Join(quoted, " ")) + "</Arguments>\n")
 	buf.WriteString("    </Exec>\n")
 	buf.WriteString("  </Actions>\n")
-
 	buf.WriteString("</Task>\n")
 
-	// Convert UTF-8 to UTF-16LE with BOM
-	utf8Bytes := buf.Bytes()
-	utf16Bytes := utf16.Encode([]rune(string(utf8Bytes)))
-
-	// Add BOM
-	result := make([]byte, 0, len(utf16Bytes)*2+2)
-	result = append(result, 0xFF, 0xFE) // UTF-16LE BOM
-
-	// Append UTF-16LE bytes
-	for _, ch := range utf16Bytes {
-		result = append(result, byte(ch), byte(ch>>8))
-	}
-
-	return result, nil
+	return append([]byte{0xFF, 0xFE}, utf16LE(buf.String())...), nil
 }
 
-// TaskSchedulerBackend manages service lifecycle via Windows Task Scheduler.
+func utf16LE(s string) []byte {
+	units := utf16.Encode([]rune(s))
+	out := make([]byte, 0, 2*len(units))
+	for _, unit := range units {
+		out = append(out, byte(unit), byte(unit>>8))
+	}
+	return out
+}
+
+// psQuote renders s as a PowerShell single-quoted string literal.
+func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
+// taskRef is the cmdlet parameters naming the task for label.
+func taskRef(label string) string {
+	return "-TaskPath " + psQuote(taskFolder) + " -TaskName " + psQuote(label)
+}
+
+// encodePowerShell returns the -EncodedCommand form of a script that stops on
+// the first error. The base64 argument needs no command-line quoting.
+func encodePowerShell(script string) (string, error) {
+	encoded := base64.StdEncoding.EncodeToString(utf16LE("$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n" + script))
+	if len(encoded) > maxEncodedCommand {
+		return "", fmt.Errorf("task definition too large for the PowerShell command line (%d > %d)", len(encoded), maxEncodedCommand)
+	}
+	return encoded, nil
+}
+
+// TaskSchedulerBackend manages a per-user service as a Windows Task
+// Scheduler task through the ScheduledTasks PowerShell cmdlets. Their task
+// State enum is locale-independent, unlike schtasks' display text, and
+// Stop-ScheduledTask succeeds for a task that is not running.
+//
+// The registered task's own definition is the ownership record: every
+// operation first queries the task and acts only when its description is
+// exactly OwnershipMarker. Lifecycle operations for one label are serialized
+// with a lock file in stateDir.
 type TaskSchedulerBackend struct {
-	stateDir string
-	runner   Runner
+	stateDir       string
+	runner         Runner
+	currentUserSID func() (string, error)
 }
 
 // Compile-time assertion that *TaskSchedulerBackend implements Manager.
 var _ Manager = (*TaskSchedulerBackend)(nil)
 
-// NewTaskSchedulerBackend creates a Task Scheduler backend.
-// stateDir is where task XML files are stored and serves as the ownership record.
+// NewTaskSchedulerBackend creates a Task Scheduler backend. stateDir holds the
+// per-label lifecycle lock files.
 func NewTaskSchedulerBackend(stateDir string, runner Runner) *TaskSchedulerBackend {
-	return &TaskSchedulerBackend{
-		stateDir: stateDir,
-		runner:   runner,
+	return &TaskSchedulerBackend{stateDir: stateDir, runner: runner, currentUserSID: currentUserSID}
+}
+
+// currentUserSID returns the SID of the current Windows user (user.Current
+// reports the SID as Uid on Windows).
+func currentUserSID() (string, error) {
+	current, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("look up current user: %w", err)
+	}
+	return current.Uid, nil
+}
+
+func (b *TaskSchedulerBackend) powershell(ctx context.Context, encoded string) ([]byte, []byte, error) {
+	return b.runner.Run(ctx, "powershell", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
+}
+
+// script runs one cmdlet script, returning its output or a command error.
+func (b *TaskSchedulerBackend) script(ctx context.Context, op, script string) ([]byte, error) {
+	encoded, err := encodePowerShell(script)
+	if err != nil {
+		return nil, err
+	}
+	stdout, stderr, err := b.powershell(ctx, encoded)
+	if err != nil {
+		return nil, commandError(op, err, stderr)
+	}
+	return stdout, nil
+}
+
+// taskInfo is the queried state of the task for one label.
+type taskInfo struct {
+	present bool
+	owned   bool
+	state   int
+}
+
+// queryScript prints "absent", or "present", the State enum value, the SID
+// of the task's principal (translated from an account name if needed; empty
+// if it has none), the Description lines, and a final "." so an empty
+// Description is still distinguishable from truncated output. A missing
+// task is recognized by the error category, which is not localized.
+func queryScript(label string) string {
+	return `try { $task = Get-ScheduledTask ` + taskRef(label) + ` -ErrorAction Stop }
+catch { if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { 'absent'; exit 0 }; throw }
+$user = [string]$task.Principal.UserId
+$sid = ''
+if ($user -match '^S-[0-9]+(-[0-9]+)+$') { $sid = $user }
+elseif ($user) { try { $sid = ([Security.Principal.NTAccount]$user).Translate([Security.Principal.SecurityIdentifier]).Value } catch { $sid = '' } }
+'present'
+[int]$task.State
+$sid
+[string]$task.Description
+'.'
+`
+}
+
+// query reports whether the task exists, whether it is owned, and its State
+// enum value. The task is owned only if its Description is exactly
+// OwnershipMarker and its principal is the current user: Task Scheduler
+// folders are machine-wide, so another user's same-named task is foreign.
+func (b *TaskSchedulerBackend) query(ctx context.Context, label string) (taskInfo, error) {
+	sid, err := b.currentUserSID()
+	if err != nil {
+		return taskInfo{}, fmt.Errorf("query task: %w", err)
+	}
+	stdout, err := b.script(ctx, "query task", queryScript(label))
+	if err != nil {
+		return taskInfo{}, err
+	}
+	lines := strings.Split(strings.TrimRight(strings.ReplaceAll(string(stdout), "\r\n", "\n"), "\n"), "\n")
+	switch {
+	case len(lines) == 1 && lines[0] == "absent":
+		return taskInfo{}, nil
+	case len(lines) >= 4 && lines[0] == "present" && lines[len(lines)-1] == ".":
+		state, err := strconv.Atoi(lines[1])
+		if err != nil {
+			return taskInfo{}, fmt.Errorf("query task: unexpected state %q", lines[1])
+		}
+		description := strings.Join(lines[3:len(lines)-1], "\n")
+		return taskInfo{present: true, owned: description == OwnershipMarker && strings.EqualFold(lines[2], sid), state: state}, nil
+	default:
+		return taskInfo{}, fmt.Errorf("query task: unexpected output %q", truncateForError(stdout))
 	}
 }
 
-// Install installs a service via Task Scheduler.
+func truncateForError(b []byte) string {
+	const limit = 128
+	if len(b) > limit {
+		b = b[:limit]
+	}
+	return string(b)
+}
+
+// ownedTask queries the task for label and requires that it exists and is
+// owned.
+func (b *TaskSchedulerBackend) ownedTask(ctx context.Context, label string) (taskInfo, error) {
+	info, err := b.query(ctx, label)
+	switch {
+	case err != nil:
+		return taskInfo{}, err
+	case !info.present:
+		return taskInfo{}, ErrNotInstalled{Path: taskName(label)}
+	case !info.owned:
+		return taskInfo{}, ErrNotOwned{Path: taskName(label)}
+	}
+	return info, nil
+}
+
+// Install registers (or replaces its own) task and starts it. A same-named
+// task without the ownership marker is never replaced. A newly registered
+// task that fails to start is removed again so its logon trigger cannot
+// launch a service whose installation failed.
 func (b *TaskSchedulerBackend) Install(ctx context.Context, spec Spec) error {
-	// Validate label FIRST, before any side effects
 	if err := ValidateLabel(spec.Label); err != nil {
 		return err
 	}
-
 	if err := spec.Validate(); err != nil {
 		return fmt.Errorf("invalid spec: %w", err)
 	}
+	sid, err := b.currentUserSID()
+	if err != nil {
+		return fmt.Errorf("install task: %w", err)
+	}
+	definition, err := renderTaskXML(spec, sid)
+	if err != nil {
+		return fmt.Errorf("render task: %w", err)
+	}
+	register := `$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('` + base64.StdEncoding.EncodeToString(definition[2:]) + `'))
+Register-ScheduledTask ` + taskRef(spec.Label) + ` -Xml $xml -Force | Out-Null
+`
+	// Size-check the definition before touching Task Scheduler.
+	if _, err := encodePowerShell(register); err != nil {
+		return err
+	}
 
-	xmlPath := filepath.Join(b.stateDir, spec.Label+".xml")
+	lock, err := lockLabel(ctx, b.stateDir, spec.Label)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 
-	// Check if XML exists and is owned
-	if data, err := os.ReadFile(xmlPath); err == nil {
-		if !taskXMLOwned(data) {
-			return ErrNotOwned{Path: xmlPath}
+	info, err := b.query(ctx, spec.Label)
+	if err != nil {
+		return err
+	}
+	if info.present && !info.owned {
+		return ErrNotOwned{Path: taskName(spec.Label)}
+	}
+	if _, err := b.script(ctx, "register task", register); err != nil {
+		return err
+	}
+	// Re-registering does not stop a running instance, and with
+	// MultipleInstancesPolicy IgnoreNew the start below would leave the old
+	// process running the previous definition, so stop it first.
+	if info.present {
+		if _, err := b.script(ctx, "stop task", "Stop-ScheduledTask "+taskRef(spec.Label)+"\n"); err != nil {
+			return err
 		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read xml: %w", err)
 	}
-
-	// Render XML
-	xmlData, err := renderTaskXML(spec)
-	if err != nil {
-		return fmt.Errorf("render xml: %w", err)
+	if _, err := b.script(ctx, "start task", "Start-ScheduledTask "+taskRef(spec.Label)+"\n"); err != nil {
+		if info.present {
+			return err
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		defer cancel()
+		if _, undoErr := b.script(cleanupCtx, "undo register", "Unregister-ScheduledTask "+taskRef(spec.Label)+" -Confirm:$false\n"); undoErr != nil {
+			return errors.Join(err, undoErr)
+		}
+		return err
 	}
-
-	// Create stateDir
-	if err := os.MkdirAll(b.stateDir, 0o700); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
-	}
-
-	// Write XML atomically
-	_, err = atomicfile.Write(ctx, xmlPath, xmlData, 0o600)
-	if err != nil {
-		return fmt.Errorf("write xml: %w", err)
-	}
-
-	// Create task via schtasks
-	taskName := "\\AntRouter\\" + spec.Label
-	_, stderr, err := b.runner.Run(ctx, "schtasks", "/Create", "/TN", taskName, "/XML", xmlPath, "/F")
-	if err != nil {
-		return commandError("create task", err, stderr)
-	}
-
-	// Run the task immediately
-	_, stderr, err = b.runner.Run(ctx, "schtasks", "/Run", "/TN", taskName)
-	if err != nil {
-		return commandError("run task", err, stderr)
-	}
-
 	return nil
 }
 
-// Uninstall uninstalls a service via Task Scheduler.
+// Uninstall stops and removes the owned task. A missing task is already
+// uninstalled; a foreign one is refused. A task that cannot be stopped is
+// kept so its process is never left running without a definition.
 func (b *TaskSchedulerBackend) Uninstall(ctx context.Context, label string) error {
 	if err := ValidateLabel(label); err != nil {
 		return err
 	}
+	lock, err := lockLabel(ctx, b.stateDir, label)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 
-	xmlPath := filepath.Join(b.stateDir, label+".xml")
-
-	// Ownership is proven by our XML; unreadable paths get no side effects.
-	data, err := os.ReadFile(xmlPath)
-	existed := err == nil
-	switch {
-	case existed:
-		if !taskXMLOwned(data) {
-			return ErrNotOwned{Path: xmlPath}
+	if _, err := b.ownedTask(ctx, label); err != nil {
+		var missing ErrNotInstalled
+		if errors.As(err, &missing) {
+			return nil
 		}
-	case !os.IsNotExist(err):
-		return fmt.Errorf("read xml: %w", err)
+		return err
 	}
-
-	taskName := "\\AntRouter\\" + label
-
-	// Stopping a task that is not running fails; that is expected.
-	_, _, _ = b.runner.Run(ctx, "schtasks", "/End", "/TN", taskName)
-
-	// Without our XML the task is assumed absent, so a delete failure is
-	// expected. With our XML a delete failure is real and the XML is kept so
-	// ownership can still be proven on retry.
-	_, stderr, err := b.runner.Run(ctx, "schtasks", "/Delete", "/TN", taskName, "/F")
-	if err != nil && existed {
-		return commandError("delete task", err, stderr)
+	if _, err := b.script(ctx, "stop task", "Stop-ScheduledTask "+taskRef(label)+"\n"); err != nil {
+		return err
 	}
-
-	// Remove XML file
-	if err := os.Remove(xmlPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove xml: %w", err)
+	if _, err := b.script(ctx, "delete task", "Unregister-ScheduledTask "+taskRef(label)+" -Confirm:$false\n"); err != nil {
+		// The delete may have taken effect before failing (for example, a
+		// timeout); only a task that is still registered is a failure.
+		info, queryErr := b.query(ctx, label)
+		if queryErr == nil && !info.present {
+			return nil
+		}
+		return errors.Join(err, queryErr)
 	}
-
 	return nil
 }
 
-// Start starts a service via Task Scheduler.
+// Start runs the owned task.
 func (b *TaskSchedulerBackend) Start(ctx context.Context, label string) error {
-	if err := ValidateLabel(label); err != nil {
-		return err
-	}
-
-	taskName := "\\AntRouter\\" + label
-	_, stderr, err := b.runner.Run(ctx, "schtasks", "/Run", "/TN", taskName)
-	if err != nil {
-		return commandError("start task", err, stderr)
-	}
-
-	return nil
+	return b.lifecycle(ctx, label, "start task", "Start-ScheduledTask")
 }
 
-// Stop stops a service via Task Scheduler.
+// Stop ends the owned task; stopping a task that is not running succeeds.
 func (b *TaskSchedulerBackend) Stop(ctx context.Context, label string) error {
+	return b.lifecycle(ctx, label, "stop task", "Stop-ScheduledTask")
+}
+
+func (b *TaskSchedulerBackend) lifecycle(ctx context.Context, label, op, cmdlet string) error {
 	if err := ValidateLabel(label); err != nil {
 		return err
 	}
-
-	taskName := "\\AntRouter\\" + label
-	_, stderr, err := b.runner.Run(ctx, "schtasks", "/End", "/TN", taskName)
+	lock, err := lockLabel(ctx, b.stateDir, label)
 	if err != nil {
-		return commandError("stop task", err, stderr)
+		return err
 	}
-
-	return nil
+	defer lock.Release()
+	if _, err := b.ownedTask(ctx, label); err != nil {
+		return err
+	}
+	_, err = b.script(ctx, op, cmdlet+" "+taskRef(label)+"\n")
+	return err
 }
 
-// Status returns the status of a service via Task Scheduler.
-// If the XML file does not exist, returns StateNotInstalled without calling runner.
+// ScheduledTasks StateEnum values.
+const (
+	taskStateUnknown  = 0
+	taskStateDisabled = 1
+	taskStateQueued   = 2
+	taskStateReady    = 3
+	taskStateRunning  = 4
+)
+
+// Status reports the state of the owned task from its State enum value.
 func (b *TaskSchedulerBackend) Status(ctx context.Context, label string) (Status, error) {
 	if err := ValidateLabel(label); err != nil {
 		return Status{}, err
 	}
-
-	xmlPath := filepath.Join(b.stateDir, label+".xml")
-	if _, err := os.Stat(xmlPath); err != nil {
-		if os.IsNotExist(err) {
+	info, err := b.ownedTask(ctx, label)
+	if err != nil {
+		var missing ErrNotInstalled
+		if errors.As(err, &missing) {
 			return Status{State: StateNotInstalled}, nil
 		}
-		return Status{}, fmt.Errorf("stat xml: %w", err)
+		return Status{}, err
 	}
-
-	// Query task status
-	taskName := "\\AntRouter\\" + label
-	stdout, stderr, err := b.runner.Run(ctx, "schtasks", "/Query", "/TN", taskName, "/FO", "CSV", "/NH")
-	if err != nil {
-		return Status{}, commandError("query task", err, stderr)
-	}
-
-	// Parse CSV
-	reader := csv.NewReader(bytes.NewReader(stdout))
-	records, err := reader.ReadAll()
-	if err != nil {
-		return Status{}, fmt.Errorf("parse csv: %w", err)
-	}
-
-	if len(records) == 0 {
-		return Status{State: StateUnknown}, nil
-	}
-
-	record := records[0]
-	if len(record) < 3 {
-		return Status{State: StateUnknown}, nil
-	}
-
-	// Status is in the 3rd field (index 2)
-	status := strings.TrimSpace(record[2])
-	switch status {
-	case "Running":
+	switch info.state {
+	case taskStateRunning:
 		return Status{State: StateRunning}, nil
-	case "Ready":
+	case taskStateReady:
 		return Status{State: StateStopped}, nil
-	case "Disabled":
+	case taskStateDisabled:
 		return Status{State: StateStopped, Detail: "disabled"}, nil
+	case taskStateQueued:
+		return Status{State: StateUnknown, Detail: "queued"}, nil
+	case taskStateUnknown:
+		return Status{State: StateUnknown}, nil
 	default:
-		// Non-English or unknown status
-		return Status{State: StateUnknown, Detail: status}, nil
+		return Status{State: StateUnknown, Detail: fmt.Sprintf("state %d", info.state)}, nil
 	}
 }
