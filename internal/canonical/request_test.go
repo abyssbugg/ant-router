@@ -123,3 +123,11 @@ func mustTool(t *testing.T, name string) ToolDefinition {
 	}
 	return tool
 }
+
+// An invalid receiver is never returned as a successful rewrite, whether or
+// not it declares hosted web search.
+func TestWithoutHostedWebSearchToolsRejectsInvalidRequest(t *testing.T) {
+	if _, err := (Request{}).WithoutHostedWebSearchTools(); err == nil {
+		t.Fatal("WithoutHostedWebSearchTools() accepted an invalid request")
+	}
+}

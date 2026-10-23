@@ -27,7 +27,9 @@ reviews:
   suggested_reviewers: false
   auto_assign_reviewers: false
   poem: false
-  path_filters: []
+  path_filters:
+    - "!.claude/skills/**"
+    - "!.verity/memory/**"
   path_instructions:
     - path: "**/*.go"
       instructions: >-

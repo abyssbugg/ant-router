@@ -319,6 +319,42 @@ func (r Request) WithoutContinuation() Request {
 	return copyValue
 }
 
+// WithoutHostedWebSearchTools returns the request with every hosted web-search
+// tool declaration removed, for a model that does not offer hosted web search.
+// The result is always revalidated, so an invalid receiver, or a tool choice
+// that only the removed declarations could satisfy, is rejected rather than
+// silently changed. When removing the declarations leaves no tools, a
+// parallel tool-call request is dropped too: nothing remains to call in
+// parallel. A request whose history contains hosted search calls is returned
+// unchanged (after validation): that history still requires hosted web
+// search, so removing the declaration cannot make the request executable and
+// the caller's capability check reports it.
+func (r Request) WithoutHostedWebSearchTools() (Request, error) {
+	params := RequestParams{ID: r.id, Model: r.model, Input: r.input, Tools: r.tools, ToolChoice: r.toolChoice, Output: r.output, Sampling: r.sampling, Continuation: r.continuation, ReasoningSummary: r.reasoningSummary}
+	if !hasHostedSearchHistory(r.input) {
+		tools := make([]ToolDefinition, 0, len(r.tools))
+		for _, tool := range r.tools {
+			if tool.Kind() != ToolDefinitionKindWebSearch {
+				tools = append(tools, tool)
+			}
+		}
+		if len(tools) == 0 && len(r.tools) > 0 {
+			params.Output.parallelToolCalls = false
+		}
+		params.Tools = tools
+	}
+	return NewRequest(params)
+}
+
+func hasHostedSearchHistory(input []Item) bool {
+	for _, item := range input {
+		if _, ok := item.HostedSearchCall(); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // Valid reports whether the request satisfies all local and cross-value invariants.
 func (r Request) Valid() bool {
 	_, err := NewRequest(RequestParams{ID: r.id, Model: r.model, Input: r.input, Tools: r.tools, ToolChoice: r.toolChoice, Output: r.output, Sampling: r.sampling, Continuation: r.continuation, ReasoningSummary: r.reasoningSummary})

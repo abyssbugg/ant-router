@@ -26,6 +26,47 @@ func TestRunLogFileIsPrivateOnWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	requirePrivateDACL(t, logPath, descriptor)
+}
+
+// A log created in a directory whose inheritable ACL grants Everyone read
+// access is private from the moment it exists: the protected DACL is part
+// of creation, not applied afterwards.
+func TestCreatePrivateLogFileDoesNotInheritAccess(t *testing.T) {
+	dir := t.TempDir()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;" + user.User.Sid.String() + ")(A;OICI;FR;;;WD)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := open.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "routerd.log")
+	file, err := createPrivateLogFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.WriteString("line\n"); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	descriptor, err := windows.GetNamedSecurityInfo(logPath, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirePrivateDACL(t, logPath, descriptor)
+}
+
+func requirePrivateDACL(t *testing.T, path string, descriptor *windows.SECURITY_DESCRIPTOR) {
+	t.Helper()
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +75,6 @@ func TestRunLogFileIsPrivateOnWindows(t *testing.T) {
 	dacl := sddl[strings.Index(sddl, "D:"):]
 	aces := strings.Count(dacl, "(")
 	if !strings.HasPrefix(dacl, "D:P") || aces != 2 || !strings.Contains(dacl, "(A;;FA;;;SY)") || !strings.Contains(dacl, "(A;;FA;;;"+user.User.Sid.String()+")") {
-		t.Fatalf("log file DACL = %q, want protected with only SYSTEM and the current user", dacl)
+		t.Fatalf("%s DACL = %q, want protected with only SYSTEM and the current user", path, dacl)
 	}
 }

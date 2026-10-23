@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/abyssbugg/ant-router/internal/canonical"
+	"github.com/abyssbugg/ant-router/internal/canonicaljson"
 	"github.com/abyssbugg/ant-router/internal/credential"
 	"github.com/abyssbugg/ant-router/internal/execution"
 	"github.com/abyssbugg/ant-router/internal/streaming"
@@ -42,10 +43,20 @@ func chatWireRequest(t *testing.T) canonical.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
+	schema, err := canonicaljson.Parse([]byte(`{"type":"object"}`), canonicaljson.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The scripted upstream calls "lookup", so the request declares it.
+	lookup, err := canonical.NewToolDefinition("lookup", "finds payloads", schema)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := canonical.NewRequest(canonical.RequestParams{
 		ID:    chatTestRequestID(t, 1),
 		Model: "deepseek-chat",
 		Input: []canonical.Item{item},
+		Tools: []canonical.ToolDefinition{lookup},
 	})
 	if err != nil {
 		t.Fatal(err)

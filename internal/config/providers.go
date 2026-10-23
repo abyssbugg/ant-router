@@ -443,22 +443,23 @@ func validateProviders(c Config) error {
 					return providerValidationError(path, "parallel tools requires tools capability")
 				}
 				if provider.Kind == ProviderKindOpenAI && provider.Wire == ProviderWireChat {
-					if customIndex >= 0 || namespaceIndex >= 0 || hostedSearchIndex >= 0 {
+					if hostedSearchIndex >= 0 {
 						return providerValidationError(modelPrefix+".capabilities", "capability is unavailable on the chat wire")
 					}
 					for _, capability := range model.Capabilities {
-						if capability == "continuation" || capability == "image_input" {
+						if capability == "continuation" {
 							return providerValidationError(modelPrefix+".capabilities", "capability is deferred for the chat wire")
 						}
 					}
 				}
-				if provider.Kind == ProviderKindOpenAI && provider.Wire == ProviderWireChat && model.Codex != nil && model.Codex.Enabled {
-					return providerValidationError(modelPrefix+".codex", "Codex integration requires the Responses wire")
-				}
 				if err := validateCodexModel(model.Codex, modelPrefix+".codex"); err != nil {
 					return err
 				}
-				if provider.Kind == ProviderKindOpenAI && model.Codex != nil && model.Codex.Enabled && (!hasText || !hasTools || customIndex < 0 || namespaceIndex < 0 || hostedSearchIndex < 0 || parallelIndex < 0) {
+				// Chat-wire models have web search disabled, so their Codex
+				// baseline omits hosted web search; the router withholds the
+				// hosted tool Codex always offers.
+				needsHostedSearch := provider.Wire != ProviderWireChat
+				if provider.Kind == ProviderKindOpenAI && model.Codex != nil && model.Codex.Enabled && (!hasText || !hasTools || customIndex < 0 || namespaceIndex < 0 || (needsHostedSearch && hostedSearchIndex < 0) || parallelIndex < 0) {
 					return providerValidationError(modelPrefix+".capabilities", "Codex-enabled OpenAI model requires the complete Codex capability baseline")
 				}
 				if provider.Kind == ProviderKindAnthropic {
