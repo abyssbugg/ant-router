@@ -14,5 +14,16 @@ coverage.out
 .idea/
 .vscode/
 
+# Verity — machine-local state. Everything in .verity/ is ignored except the
+# shared standard, which is meant to be committed. The knowledge graph under
+# .verity/memory/ is machine-local too: the service rebuilds it, and committing
+# it puts generated notes in every diff and pull request.
+.verity/*
+!.verity/standard.yaml
+.claude/settings.local.json
+# Verity skills are installed per machine by the Verity CLI (verity init);
+# they are third-party tooling, not repository source.
+.claude/skills/verity-*/
+
 # goreleaser output
 dist/
