@@ -351,7 +351,7 @@ codacy-install:
 	codacy-cli install
 
 codacy-analyze:
-	sh scripts/codacy-analyze.sh
+	GO='$(GO)' sh scripts/codacy-analyze.sh
 
 verity-doctor:
 	verity doctor

@@ -52,7 +52,7 @@ esac
 exit 0
 `
 
-func runCodacyAnalyze(t *testing.T, modes string) (string, []string, error) {
+func runCodacyAnalyze(t *testing.T, modes string, extraEnv ...string) (string, []string, error) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("codacy-analyze.sh is a POSIX shell script")
@@ -69,6 +69,7 @@ func runCodacyAnalyze(t *testing.T, modes string) (string, []string, error) {
 	cmd := exec.Command("sh", script)
 	cmd.Dir = filepath.Join("..", "..")
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+log, "STUB_MODES="+modes)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	output, runErr := cmd.CombinedOutput()
 	data, _ := os.ReadFile(log)
 	return string(output), strings.Fields(string(data)), runErr
@@ -123,4 +124,44 @@ func TestCodacyAnalyzeCountsEveryFinding(t *testing.T) {
 func lastLine(output string) string {
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	return lines[len(lines)-1]
+}
+
+// The script must build its SARIF checker with the toolchain selected by the
+// Makefile's GO variable, not whatever "go" is first on PATH.
+func TestCodacyAnalyzeHonorsGOToolchain(t *testing.T) {
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go not on PATH")
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "used")
+	wrapper := filepath.Join(dir, "pinned-go")
+	script := "#!/bin/sh\necho \"$@\" >> '" + marker + "'\nexec '" + realGo + "' \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output, _, err := runCodacyAnalyze(t, "", "GO="+wrapper)
+	if err != nil {
+		t.Fatalf("codacy-analyze.sh failed: %v\n%s", err, output)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || !strings.HasPrefix(string(data), "build ") {
+		t.Fatalf("GO toolchain %s was not used to build sarifcheck (log %q, err %v)", wrapper, data, err)
+	}
+}
+
+// make must forward its GO variable to the script.
+func TestMakeCodacyAnalyzeForwardsGO(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("codacy-analyze.sh is a POSIX shell script")
+	}
+	cmd := exec.Command("make", "-n", "GO=/pinned/go", "codacy-analyze")
+	cmd.Dir = filepath.Join("..", "..")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n codacy-analyze: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "GO='/pinned/go' sh scripts/codacy-analyze.sh") {
+		t.Fatalf("make does not forward GO to the script:\n%s", out)
+	}
 }

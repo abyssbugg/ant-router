@@ -24,7 +24,7 @@ workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
 sarifcheck="$workdir/sarifcheck"
-go build -o "$sarifcheck" ./scripts/sarifcheck
+"${GO:-go}" build -o "$sarifcheck" ./scripts/sarifcheck
 
 failed=""
 for tool in $tools; do
