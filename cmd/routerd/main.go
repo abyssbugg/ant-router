@@ -52,21 +52,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, factory d
 		// Scheduler) pass the log path here. The directory is created if
 		// missing (a fresh install has none yet) and the file is opened for
 		// append and made owner-only: mode 0600 (existing files included),
-		// or a private ACL on Windows.
+		// or a private ACL on Windows, set at creation.
 		if err := os.MkdirAll(filepath.Dir(*logFile), 0o700); err != nil {
 			_, _ = fmt.Fprintf(stderr, "ant-router: create log directory: %v\n", err)
 			return 1
 		}
-		file, err := os.OpenFile(*logFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+		file, err := openLogFile(*logFile)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "ant-router: open log file: %v\n", err)
 			return 1
 		}
 		defer file.Close()
-		if err := securePrivateFile(file); err != nil {
-			_, _ = fmt.Fprintf(stderr, "ant-router: secure log file: %v\n", err)
-			return 1
-		}
 		stdout, stderr = file, file
 		// http.Server and other standard-logger users write to the process
 		// logger when no ErrorLog is set; send them to the log file too.
