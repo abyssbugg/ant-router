@@ -198,6 +198,17 @@ func hasImageBlocks(blocks []canonical.ContentBlock) bool {
 	return false
 }
 
+// appendTextPart adds text as a content part. Text directly following another
+// text part joins it with a newline, so adjacent text blocks read the same as
+// on the text-only path (blocksToText).
+func appendTextPart(parts []map[string]any, text string) []map[string]any {
+	if last := len(parts) - 1; last >= 0 && parts[last]["type"] == "text" {
+		parts[last]["text"] = parts[last]["text"].(string) + "\n" + text
+		return parts
+	}
+	return append(parts, map[string]any{"type": "text", "text": text})
+}
+
 // blocksToContentParts converts blocks to an array of content parts (text and image_url)
 func blocksToContentParts(blocks []canonical.ContentBlock, path string) ([]map[string]any, error) {
 	parts := make([]map[string]any, 0, len(blocks))
@@ -205,18 +216,12 @@ func blocksToContentParts(blocks []canonical.ContentBlock, path string) ([]map[s
 		blockPath := fmt.Sprintf("%s[%d]", path, index)
 
 		if textValue, ok := block.Text(); ok {
-			parts = append(parts, map[string]any{
-				"type": "text",
-				"text": textValue.Text(),
-			})
+			parts = appendTextPart(parts, textValue.Text())
 			continue
 		}
 
 		if jsonValue, ok := block.JSON(); ok {
-			parts = append(parts, map[string]any{
-				"type": "text",
-				"text": string(jsonValue.Value().Bytes()),
-			})
+			parts = appendTextPart(parts, string(jsonValue.Value().Bytes()))
 			continue
 		}
 

@@ -155,6 +155,7 @@ func TestValidateChatWireCodexRequiresChatBaseline(t *testing.T) {
 	for _, missing := range chatCodexBaseline {
 		cfg := Default()
 		provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
+		provider.Models[0].Capabilities = nil // the fixture's own text/tools must not mask the missing one
 		for _, capability := range chatCodexBaseline {
 			if capability != missing {
 				provider.Models[0].Capabilities = append(provider.Models[0].Capabilities, capability)

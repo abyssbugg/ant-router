@@ -256,6 +256,18 @@ visibility = "list"
 		if !ok || toolMap["type"] != "function" {
 			t.Fatalf("Upstream request has a non-function tool %v", tool)
 		}
+		function, ok := toolMap["function"].(map[string]any)
+		name, _ := function["name"].(string)
+		if !ok || name == "" {
+			t.Fatalf("Upstream function tool has no name: %v", tool)
+		}
+		if name == "web_search" {
+			t.Fatalf("Upstream request declares hosted web search as function %q", name)
+		}
+	}
+
+	if req.method != http.MethodPost {
+		t.Fatalf("Upstream request method = %q, want POST", req.method)
 	}
 
 	// Check authorization.

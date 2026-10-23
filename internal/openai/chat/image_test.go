@@ -423,3 +423,62 @@ func TestEncodeMessagesRejectsImageInToolResult(t *testing.T) {
 		t.Fatalf("err = %v, want unsupported for an image tool result", err)
 	}
 }
+
+// Adjacent text blocks read the same with or without an image: they are joined
+// with a newline into one text part, exactly as the text-only path joins them.
+func TestEncodeMessageWithImageJoinsAdjacentTextBlocks(t *testing.T) {
+	textBlock := func(value string) canonical.ContentBlock {
+		text, err := canonical.NewTextContent(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, err := canonical.NewTextBlock(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return block
+	}
+	image, err := canonical.NewRemoteImage("https://example.com/img.jpg", "image/jpeg", canonical.ImageDetailLow, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageBlock, err := canonical.NewImageBlock(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := canonical.NewMessage(fixedItemID(t, 1), canonical.Role("user"), []canonical.ContentBlock{textBlock("one"), textBlock("two"), imageBlock, textBlock("three")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := canonical.NewMessageItem(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := canonical.NewRequest(canonical.RequestParams{ID: fixedRequestID(t, 1), Model: "gpt-4-vision", Input: []canonical.Item{item}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := EncodeRequest(request, "gpt-4-vision", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data struct {
+		Messages []struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, part := range data.Messages[0].Content {
+		got = append(got, part.Type+":"+part.Text)
+	}
+	want := []string{"text:one\ntwo", "image_url:", "text:three"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("content parts = %q, want %q", got, want)
+	}
+}

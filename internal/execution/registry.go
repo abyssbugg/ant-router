@@ -171,7 +171,12 @@ func (r *Registry) Execute(ctx context.Context, request canonical.Request) (stre
 		// failing the turn.
 		withheld, err := request.WithoutHostedWebSearchTools()
 		if err != nil {
-			return nil, NewError(CodeInvalidRequest, "request.tools", 0, nil)
+			path := "request.tools"
+			var canonicalErr *canonical.Error
+			if errors.As(err, &canonicalErr) && canonicalErr.Path != "" {
+				path = canonicalErr.Path
+			}
+			return nil, NewError(CodeInvalidRequest, path, 0, err)
 		}
 		request = withheld
 	}
