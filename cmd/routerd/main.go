@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -49,7 +50,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, factory d
 	if *logFile != "" {
 		// Service managers that cannot redirect output (Windows Task
 		// Scheduler) pass the log path here; the file is opened for append
-		// and owner-only on create.
+		// and owner-only on create, its directory created if missing (a
+		// fresh install has none yet).
+		if err := os.MkdirAll(filepath.Dir(*logFile), 0o700); err != nil {
+			_, _ = fmt.Fprintf(stderr, "ant-router: create log directory: %v\n", err)
+			return 1
+		}
 		file, err := os.OpenFile(*logFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "ant-router: open log file: %v\n", err)
@@ -57,6 +63,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, factory d
 		}
 		defer file.Close()
 		stdout, stderr = file, file
+		// http.Server and other standard-logger users write to the process
+		// logger when no ErrorLog is set; send them to the log file too.
+		previous := log.Writer()
+		log.SetOutput(file)
+		defer log.SetOutput(previous)
 	}
 	options := daemon.Options{
 		Instance:    *instance,

@@ -207,16 +207,36 @@ type taskInfo struct {
 	state   int
 }
 
-// query reports whether the task exists, whether it is owned, and its State
-// enum value. A missing task is recognized by the error category, which is
-// not localized; every other failure is an error.
-func (b *TaskSchedulerBackend) query(ctx context.Context, label string) (taskInfo, error) {
-	stdout, err := b.script(ctx, "query task", `try { $task = Get-ScheduledTask `+taskRef(label)+` -ErrorAction Stop }
+// queryScript prints "absent", or "present", the State enum value, the SID
+// of the task's principal (translated from an account name if needed; empty
+// if it has none), the Description lines, and a final "." so an empty
+// Description is still distinguishable from truncated output. A missing
+// task is recognized by the error category, which is not localized.
+func queryScript(label string) string {
+	return `try { $task = Get-ScheduledTask ` + taskRef(label) + ` -ErrorAction Stop }
 catch { if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { 'absent'; exit 0 }; throw }
+$user = [string]$task.Principal.UserId
+$sid = ''
+if ($user -match '^S-[0-9]+(-[0-9]+)+$') { $sid = $user }
+elseif ($user) { try { $sid = ([Security.Principal.NTAccount]$user).Translate([Security.Principal.SecurityIdentifier]).Value } catch { $sid = '' } }
 'present'
 [int]$task.State
-$task.Description
-`)
+$sid
+[string]$task.Description
+'.'
+`
+}
+
+// query reports whether the task exists, whether it is owned, and its State
+// enum value. The task is owned only if its Description is exactly
+// OwnershipMarker and its principal is the current user: Task Scheduler
+// folders are machine-wide, so another user's same-named task is foreign.
+func (b *TaskSchedulerBackend) query(ctx context.Context, label string) (taskInfo, error) {
+	sid, err := b.currentUserSID()
+	if err != nil {
+		return taskInfo{}, fmt.Errorf("query task: %w", err)
+	}
+	stdout, err := b.script(ctx, "query task", queryScript(label))
 	if err != nil {
 		return taskInfo{}, err
 	}
@@ -224,12 +244,13 @@ $task.Description
 	switch {
 	case len(lines) == 1 && lines[0] == "absent":
 		return taskInfo{}, nil
-	case len(lines) >= 2 && lines[0] == "present":
+	case len(lines) >= 4 && lines[0] == "present" && lines[len(lines)-1] == ".":
 		state, err := strconv.Atoi(lines[1])
 		if err != nil {
 			return taskInfo{}, fmt.Errorf("query task: unexpected state %q", lines[1])
 		}
-		return taskInfo{present: true, owned: strings.Join(lines[2:], "\n") == OwnershipMarker, state: state}, nil
+		description := strings.Join(lines[3:len(lines)-1], "\n")
+		return taskInfo{present: true, owned: description == OwnershipMarker && strings.EqualFold(lines[2], sid), state: state}, nil
 	default:
 		return taskInfo{}, fmt.Errorf("query task: unexpected output %q", truncateForError(stdout))
 	}
@@ -300,6 +321,14 @@ Register-ScheduledTask ` + taskRef(spec.Label) + ` -Xml $xml -Force | Out-Null
 	}
 	if _, err := b.script(ctx, "register task", register); err != nil {
 		return err
+	}
+	// Re-registering does not stop a running instance, and with
+	// MultipleInstancesPolicy IgnoreNew the start below would leave the old
+	// process running the previous definition, so stop it first.
+	if info.present {
+		if _, err := b.script(ctx, "stop task", "Stop-ScheduledTask "+taskRef(spec.Label)+"\n"); err != nil {
+			return err
+		}
 	}
 	if _, err := b.script(ctx, "start task", "Start-ScheduledTask "+taskRef(spec.Label)+"\n"); err != nil {
 		if info.present {

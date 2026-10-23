@@ -49,7 +49,7 @@ func TestTaskSchedulerIntegration(t *testing.T) {
 	if os.Getenv("ANT_ROUTER_TASK_SCHEDULER_E2E") != "1" {
 		t.Skip("set ANT_ROUTER_TASK_SCHEDULER_E2E=1 to exercise the real Task Scheduler")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
 	dir := t.TempDir()

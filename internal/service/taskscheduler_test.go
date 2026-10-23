@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf16"
 )
 
@@ -218,6 +219,7 @@ const testSID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
 type fakeTask struct {
 	state       int
 	description string
+	userSID     string
 	xml         string
 }
 
@@ -237,8 +239,9 @@ type fakeScheduler struct {
 	tasks map[string]*fakeTask
 	fail  map[string]fakeFailure
 	ops   []string
-	// callers records the ctx caller value of each call, for serialization.
-	callers []any
+	// beforeCall, if set, runs before each call outside mu, so a test can
+	// hold one lifecycle operation in the middle of its call sequence.
+	beforeCall func(op string)
 }
 
 func newFakeScheduler(t *testing.T) *fakeScheduler {
@@ -279,10 +282,12 @@ func (f *fakeScheduler) Run(ctx context.Context, name string, args ...string) ([
 		f.t.Fatalf("script has no ScheduledTasks cmdlet:\n%s", script)
 	}
 	op, label := match[1], match[2]
+	if f.beforeCall != nil {
+		f.beforeCall(op)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ops = append(f.ops, op+" "+label)
-	f.callers = append(f.callers, ctx.Value(callerKey{}))
 	failure, failing := f.fail[op]
 	if failing && !failure.applied {
 		return nil, []byte("synthetic " + op + " failure"), failure.err
@@ -294,7 +299,7 @@ func (f *fakeScheduler) Run(ctx context.Context, name string, args ...string) ([
 		if task == nil {
 			stdout = "absent\r\n"
 		} else {
-			stdout = fmt.Sprintf("present\r\n%d\r\n%s\r\n", task.state, task.description)
+			stdout = fmt.Sprintf("present\r\n%d\r\n%s\r\n%s\r\n.\r\n", task.state, task.userSID, task.description)
 		}
 	case "Register":
 		encoded := xmlPattern.FindStringSubmatch(script)
@@ -303,7 +308,11 @@ func (f *fakeScheduler) Run(ctx context.Context, name string, args ...string) ([
 		}
 		document := decodeUTF16Base64(f.t, encoded[1])
 		parsed := parseTaskXML(f.t, document)
-		f.tasks[label] = &fakeTask{state: 3, description: parsed.Registration.Description, xml: document}
+		previous := 3
+		if task != nil {
+			previous = task.state
+		}
+		f.tasks[label] = &fakeTask{state: previous, description: parsed.Registration.Description, userSID: parsed.Principal.UserID, xml: document}
 	case "Start", "Stop":
 		if task == nil {
 			return nil, []byte("task not found"), errors.New("exit status 1")
@@ -326,8 +335,6 @@ func (f *fakeScheduler) opList() string {
 	defer f.mu.Unlock()
 	return strings.Join(f.ops, ", ")
 }
-
-type callerKey struct{}
 
 func decodeUTF16Base64(t *testing.T, encoded string) string {
 	t.Helper()
@@ -404,7 +411,9 @@ func newTestBackend(t *testing.T, runner Runner) *TaskSchedulerBackend {
 	return backend
 }
 
-func ownedTask(state int) *fakeTask { return &fakeTask{state: state, description: OwnershipMarker} }
+func ownedTask(state int) *fakeTask {
+	return &fakeTask{state: state, description: OwnershipMarker, userSID: testSID}
+}
 
 func expectOps(t *testing.T, scheduler *fakeScheduler, want ...string) {
 	t.Helper()
@@ -485,7 +494,44 @@ func TestTaskSchedulerInstallReplacesItsOwnTask(t *testing.T) {
 	if err := newTestBackend(t, scheduler).Install(context.Background(), taskSpec(t)); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	expectOps(t, scheduler, "Get test-service", "Register test-service", "Start test-service")
+	// The running instance is stopped so the new definition takes effect
+	// (MultipleInstancesPolicy IgnoreNew would ignore the start otherwise).
+	expectOps(t, scheduler, "Get test-service", "Register test-service", "Stop test-service", "Start test-service")
+	if task := scheduler.tasks["test-service"]; task.state != 4 {
+		t.Fatalf("task state = %d, want running", task.state)
+	}
+}
+
+// Task Scheduler folders are machine-wide: a task carrying the marker but
+// running as another user (or as no specific user) is foreign.
+func TestTaskSchedulerRefusesAnotherUsersTask(t *testing.T) {
+	for name, sid := range map[string]string{"other user": "S-1-5-21-1111111111-2222222222-3333333333-1002", "no principal": ""} {
+		t.Run(name, func(t *testing.T) {
+			scheduler := newFakeScheduler(t)
+			scheduler.tasks["test-service"] = &fakeTask{state: 4, description: OwnershipMarker, userSID: sid}
+			backend := newTestBackend(t, scheduler)
+			ctx := context.Background()
+			var notOwned ErrNotOwned
+			for op, err := range map[string]error{
+				"Install":   backend.Install(ctx, taskSpec(t)),
+				"Uninstall": backend.Uninstall(ctx, "test-service"),
+				"Start":     backend.Start(ctx, "test-service"),
+				"Stop":      backend.Stop(ctx, "test-service"),
+			} {
+				if !errors.As(err, &notOwned) {
+					t.Errorf("%s err = %v, want ErrNotOwned", op, err)
+				}
+			}
+			if _, err := backend.Status(ctx, "test-service"); !errors.As(err, &notOwned) {
+				t.Errorf("Status err = %v, want ErrNotOwned", err)
+			}
+			for _, op := range scheduler.ops {
+				if !strings.HasPrefix(op, "Get ") {
+					t.Fatalf("foreign task was changed: %v", scheduler.ops)
+				}
+			}
+		})
+	}
 }
 
 // A same-named task without the ownership marker is never replaced.
@@ -522,7 +568,8 @@ func TestTaskSchedulerInstallFailures(t *testing.T) {
 		{"start fails on fresh install", nil, "Start", []string{"Get test-service", "Register test-service", "Start test-service", "Unregister test-service"}, false},
 		// A reinstall keeps the (updated) owned task: there is no previous
 		// state to restore, and removing it would uninstall the service.
-		{"start fails on reinstall", ownedTask(3), "Start", []string{"Get test-service", "Register test-service", "Start test-service"}, true},
+		{"start fails on reinstall", ownedTask(3), "Start", []string{"Get test-service", "Register test-service", "Stop test-service", "Start test-service"}, true},
+		{"stop fails on reinstall", ownedTask(4), "Stop", []string{"Get test-service", "Register test-service", "Stop test-service"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			scheduler := newFakeScheduler(t)
@@ -701,7 +748,7 @@ func TestTaskSchedulerStatusFailures(t *testing.T) {
 			t.Fatalf("Status err = %v, want the query failure", err)
 		}
 	})
-	for name, stdout := range map[string]string{"empty": "", "garbage": "maybe\r\n", "bad state": "present\r\nrunning\r\n" + OwnershipMarker + "\r\n", "truncated": "present\r\n"} {
+	for name, stdout := range map[string]string{"empty": "", "garbage": "maybe\r\n", "bad state": "present\r\nrunning\r\n" + OwnershipMarker + "\r\n", "truncated": "present\r\n", "no terminator": "present\r\n3\r\n" + testSID + "\r\n" + OwnershipMarker + "\r\n"} {
 		t.Run("malformed "+name, func(t *testing.T) {
 			runner := fakeRunnerFunc(func(context.Context, string, ...string) ([]byte, []byte, error) { return []byte(stdout), nil, nil })
 			if _, err := newTestBackend(t, runner).Status(context.Background(), "test-service"); err == nil {
@@ -711,34 +758,36 @@ func TestTaskSchedulerStatusFailures(t *testing.T) {
 	}
 }
 
-// Lifecycle operations on one label never interleave their scheduler calls.
+// Lifecycle operations on one label never interleave their scheduler calls:
+// with Install paused between registering and starting the task, a
+// concurrent Uninstall makes no call until Install finishes.
 func TestTaskSchedulerSerializesLifecycleOperations(t *testing.T) {
 	scheduler := newFakeScheduler(t)
 	backend := newTestBackend(t, scheduler)
 	spec := taskSpec(t)
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			ctx := context.WithValue(context.Background(), callerKey{}, i)
-			if i%2 == 0 {
-				_ = backend.Install(ctx, spec)
-			} else {
-				_ = backend.Uninstall(ctx, spec.Label)
-			}
-		}(i)
-	}
-	wg.Wait()
-	seen := map[any]bool{}
-	for i, caller := range scheduler.callers {
-		if i > 0 && caller != scheduler.callers[i-1] {
-			if seen[caller] {
-				t.Fatalf("calls interleaved: %v", scheduler.callers)
-			}
+	paused, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	scheduler.beforeCall = func(op string) {
+		if op == "Start" {
+			once.Do(func() { close(paused); <-release })
 		}
-		seen[caller] = true
 	}
+	installed := make(chan error, 1)
+	go func() { installed <- backend.Install(context.Background(), spec) }()
+	<-paused
+	uninstalled := make(chan error, 1)
+	go func() { uninstalled <- backend.Uninstall(context.Background(), spec.Label) }()
+	// Without the lock Uninstall's first query would be recorded at once.
+	time.Sleep(200 * time.Millisecond)
+	expectOps(t, scheduler, "Get test-service", "Register test-service")
+	close(release)
+	if err := <-installed; err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := <-uninstalled; err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	expectOps(t, scheduler, "Get test-service", "Register test-service", "Start test-service", "Get test-service", "Stop test-service", "Unregister test-service")
 }
 
 func TestUnsafeLabelsRejected(t *testing.T) {
