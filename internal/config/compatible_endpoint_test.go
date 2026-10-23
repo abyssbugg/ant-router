@@ -60,18 +60,6 @@ func TestDecodeOlderSchemaRejectsEndpointFields(t *testing.T) {
 	}
 }
 
-func TestValidateChatWireRejectsDeferredCapabilities(t *testing.T) {
-	for _, capability := range []string{"continuation", "image_input"} {
-		cfg := Default()
-		provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
-		provider.Models[0].Capabilities = []string{"text", capability}
-		cfg.Providers = []ProviderConfig{provider}
-		if err := cfg.Validate(); err == nil {
-			t.Fatalf("chat wire accepted capability %q", capability)
-		}
-	}
-}
-
 func TestValidateCompatibleEndpointRules(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -128,23 +116,78 @@ func TestValidateCompatibleEndpointRules(t *testing.T) {
 	}
 }
 
+func chatCodexModel() *CodexModelConfig {
+	return &CodexModelConfig{Enabled: true, DisplayName: "DeepSeek Chat", Description: "DeepSeek through the chat wire", ContextWindow: 128000, EffectiveContextWindowPercent: 90, Priority: 1, Visibility: CodexVisibilityList}
+}
+
+// chatCodexBaseline is the Codex baseline on the chat wire: everything except
+// hosted web search, which is disabled for chat-wire models.
+var chatCodexBaseline = []string{"custom_tools", "namespace_tools", "parallel_tools", "text", "tools"}
+
 func TestValidateChatWireRestrictions(t *testing.T) {
-	for _, capability := range []string{"custom_tools", "namespace_tools", "hosted_web_search"} {
+	cfg := Default()
+	provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
+	provider.Models[0].Capabilities = []string{"text", "tools", "hosted_web_search"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("chat wire accepted hosted_web_search")
+	}
+	for _, capability := range []string{"custom_tools", "namespace_tools"} {
 		cfg := Default()
 		provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
 		provider.Models[0].Capabilities = []string{"text", "tools", capability}
 		cfg.Providers = []ProviderConfig{provider}
-		if err := cfg.Validate(); err == nil {
-			t.Fatalf("chat wire accepted capability %q", capability)
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("chat wire rejected capability %q: %v", capability, err)
 		}
 	}
+}
+
+func TestValidateChatWireCodexRequiresChatBaseline(t *testing.T) {
 	cfg := Default()
 	provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
-	provider.Models[0].Capabilities = []string{"text", "tools"}
-	provider.Models[0].Codex = &CodexModelConfig{Enabled: true}
+	provider.Models[0].Capabilities = append([]string(nil), chatCodexBaseline...)
+	provider.Models[0].Codex = chatCodexModel()
 	cfg.Providers = []ProviderConfig{provider}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("chat wire accepted a Codex-enabled model")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("chat wire rejected a Codex model with the chat baseline: %v", err)
+	}
+	for _, missing := range chatCodexBaseline {
+		cfg := Default()
+		provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
+		provider.Models[0].Capabilities = nil // the fixture's own text/tools must not mask the missing one
+		for _, capability := range chatCodexBaseline {
+			if capability != missing {
+				provider.Models[0].Capabilities = append(provider.Models[0].Capabilities, capability)
+			}
+		}
+		if missing == "tools" {
+			continue // tools is a prerequisite of the other tool capabilities.
+		}
+		provider.Models[0].Codex = chatCodexModel()
+		cfg.Providers = []ProviderConfig{provider}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("chat wire accepted a Codex model missing %q", missing)
+		}
+	}
+}
+
+// The relaxed chat baseline must not leak to the Responses wire, where hosted
+// web search remains part of the Codex baseline.
+func TestValidateResponsesWireCodexStillRequiresHostedWebSearch(t *testing.T) {
+	for _, wire := range []string{"", "responses"} {
+		cfg := Default()
+		provider := compatibleProvider("https://api.deepseek.com/v1", wire)
+		provider.Models[0].Capabilities = append([]string(nil), chatCodexBaseline...)
+		provider.Models[0].Codex = chatCodexModel()
+		cfg.Providers = []ProviderConfig{provider}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("wire %q accepted a Codex model without hosted_web_search", wire)
+		}
+		provider.Models[0].Capabilities = append(provider.Models[0].Capabilities, "hosted_web_search")
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("wire %q rejected the full Codex baseline: %v", wire, err)
+		}
 	}
 }
 
@@ -165,5 +208,20 @@ func TestCanonicalPreservesEndpointRoundTrip(t *testing.T) {
 	again, err := Canonical(decoded)
 	if err != nil || string(again) != string(encoded) {
 		t.Fatalf("canonical encoding is not stable: %q vs %q", again, encoded)
+	}
+}
+
+func TestValidateChatWireImageInputAcceptedContinuationDeferred(t *testing.T) {
+	cfg := Default()
+	provider := compatibleProvider("https://api.deepseek.com/v1", "chat")
+	provider.Models[0].Capabilities = []string{"image_input", "text"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("chat wire rejected image_input: %v", err)
+	}
+	provider.Models[0].Capabilities = []string{"continuation", "text"}
+	cfg.Providers = []ProviderConfig{provider}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("chat wire accepted continuation")
 	}
 }

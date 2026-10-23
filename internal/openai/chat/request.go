@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -146,10 +147,6 @@ func encodeMessageItem(item canonical.Item, path string) (map[string]any, error)
 	if !ok {
 		return nil, unsupported(path)
 	}
-	text, err := blocksToText(message.Content(), path+".content")
-	if err != nil {
-		return nil, err
-	}
 	role := "user"
 	switch message.Role() {
 	case canonical.Role("system"), canonical.Role("developer"):
@@ -161,7 +158,90 @@ func encodeMessageItem(item canonical.Item, path string) (map[string]any, error)
 	default:
 		return nil, invalid(path+".role", "message role is unsupported")
 	}
-	return map[string]any{"role": role, "content": text}, nil
+
+	// Check if content has images
+	contentPath := path + ".content"
+	blocks := message.Content()
+	hasImages := hasImageBlocks(blocks)
+
+	var content any
+	if hasImages {
+		// Images are only allowed in user messages
+		if role != "user" {
+			return nil, unsupported(contentPath + "[*]")
+		}
+		// Encode as array of content parts
+		parts, err := blocksToContentParts(blocks, contentPath)
+		if err != nil {
+			return nil, err
+		}
+		content = parts
+	} else {
+		// No images: use plain string content (existing behavior)
+		text, err := blocksToText(blocks, contentPath)
+		if err != nil {
+			return nil, err
+		}
+		content = text
+	}
+
+	return map[string]any{"role": role, "content": content}, nil
+}
+
+// hasImageBlocks checks if any block is an image
+func hasImageBlocks(blocks []canonical.ContentBlock) bool {
+	for _, block := range blocks {
+		if _, ok := block.Image(); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// appendTextPart adds text as a content part. Text directly following another
+// text part joins it with a newline, so adjacent text blocks read the same as
+// on the text-only path (blocksToText).
+func appendTextPart(parts []map[string]any, text string) []map[string]any {
+	if last := len(parts) - 1; last >= 0 && parts[last]["type"] == "text" {
+		parts[last]["text"] = parts[last]["text"].(string) + "\n" + text
+		return parts
+	}
+	return append(parts, map[string]any{"type": "text", "text": text})
+}
+
+// blocksToContentParts converts blocks to an array of content parts (text and image_url)
+func blocksToContentParts(blocks []canonical.ContentBlock, path string) ([]map[string]any, error) {
+	parts := make([]map[string]any, 0, len(blocks))
+	for index, block := range blocks {
+		blockPath := fmt.Sprintf("%s[%d]", path, index)
+
+		if textValue, ok := block.Text(); ok {
+			parts = appendTextPart(parts, textValue.Text())
+			continue
+		}
+
+		if jsonValue, ok := block.JSON(); ok {
+			parts = appendTextPart(parts, string(jsonValue.Value().Bytes()))
+			continue
+		}
+
+		if image, ok := block.Image(); ok {
+			url, ok := image.URL()
+			if !ok {
+				data, _ := image.Bytes()
+				url = "data:" + image.MIME() + ";base64," + base64.StdEncoding.EncodeToString(data)
+			}
+			imageURL := map[string]any{"url": url}
+			if detail := image.Detail(); detail != canonical.ImageDetailAuto {
+				imageURL["detail"] = string(detail)
+			}
+			parts = append(parts, map[string]any{"type": "image_url", "image_url": imageURL})
+			continue
+		}
+
+		return nil, unsupported(blockPath)
+	}
+	return parts, nil
 }
 
 func blocksToText(blocks []canonical.ContentBlock, path string) (string, error) {
