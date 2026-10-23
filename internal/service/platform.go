@@ -50,7 +50,8 @@ type DaemonOptions struct {
 	// --runtime-dir. RuntimeRoot is empty on Windows and then omitted.
 	StateRoot   string
 	RuntimeRoot string
-	// LogPath is where the backend directs daemon output when it can.
+	// LogPath receives daemon output: launchd and systemd redirect to it;
+	// Task Scheduler passes it to routerd as --log-file.
 	LogPath string
 }
 
@@ -106,7 +107,8 @@ type Platform struct {
 	Home string
 	// ConfigDir is the user's configuration directory, e.g. ~/.config (systemd).
 	ConfigDir string
-	// StateDir holds backend-owned records such as task XML (Task Scheduler).
+	// StateDir holds backend-owned state such as per-label lock files (Task
+	// Scheduler); task ownership itself is read from the registered task.
 	StateDir string
 	// UID is the user's numeric ID (launchd gui/<uid> domain).
 	UID    int
