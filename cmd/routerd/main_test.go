@@ -100,6 +100,12 @@ func TestRunLogFileOpenFailure(t *testing.T) {
 	if code := run(context.Background(), []string{"--log-file", filepath.Join(parent, "routerd.log")}, io.Discard, &stderr, factory); code != 1 || !strings.Contains(stderr.String(), "create log directory") {
 		t.Fatalf("run() = %d stderr %q, want 1 and a create-log-directory error", code, stderr.String())
 	}
+	// The log path itself is a directory: the directory step succeeds and
+	// opening the file fails.
+	stderr.Reset()
+	if code := run(context.Background(), []string{"--log-file", t.TempDir()}, io.Discard, &stderr, factory); code != 1 || !strings.Contains(stderr.String(), "open log file") {
+		t.Fatalf("run() = %d stderr %q, want 1 and an open-log-file error", code, stderr.String())
+	}
 	if code := run(context.Background(), []string{"--log-file", "relative.log"}, io.Discard, &stderr, factory); code != 2 {
 		t.Fatalf("relative log file exit = %d, want 2", code)
 	}

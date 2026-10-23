@@ -748,11 +748,16 @@ func TestTaskSchedulerStatusFailures(t *testing.T) {
 			t.Fatalf("Status err = %v, want the query failure", err)
 		}
 	})
-	for name, stdout := range map[string]string{"empty": "", "garbage": "maybe\r\n", "bad state": "present\r\nrunning\r\n" + OwnershipMarker + "\r\n", "truncated": "present\r\n", "no terminator": "present\r\n3\r\n" + testSID + "\r\n" + OwnershipMarker + "\r\n"} {
+	for name, stdout := range map[string]string{"empty": "", "garbage": "maybe\r\n", "bad state": "present\r\nrunning\r\n" + testSID + "\r\n" + OwnershipMarker + "\r\n.\r\n", "truncated": "present\r\n", "no terminator": "present\r\n3\r\n" + testSID + "\r\n" + OwnershipMarker + "\r\n"} {
 		t.Run("malformed "+name, func(t *testing.T) {
 			runner := fakeRunnerFunc(func(context.Context, string, ...string) ([]byte, []byte, error) { return []byte(stdout), nil, nil })
-			if _, err := newTestBackend(t, runner).Status(context.Background(), "test-service"); err == nil {
+			_, err := newTestBackend(t, runner).Status(context.Background(), "test-service")
+			if err == nil {
 				t.Fatalf("Status accepted query output %q", stdout)
+			}
+			// Well-formed except for the state: must fail in state parsing.
+			if name == "bad state" && !strings.Contains(err.Error(), "unexpected state") {
+				t.Fatalf("Status err = %v, want an unexpected-state error", err)
 			}
 		})
 	}
