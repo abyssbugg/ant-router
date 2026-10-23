@@ -2,6 +2,9 @@
 
 package main
 
-// securePrivateFile is a no-op where the 0600 mode given to OpenFile already
-// makes a newly created log owner-only.
-func securePrivateFile(string) error { return nil }
+import "os"
+
+// securePrivateFile makes the open log owner-only. OpenFile applies 0600
+// only when it creates the file, so an existing file is tightened through
+// its descriptor (no path lookup, so no symlink swap between open and chmod).
+func securePrivateFile(file *os.File) error { return file.Chmod(0o600) }

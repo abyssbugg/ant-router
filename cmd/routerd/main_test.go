@@ -147,3 +147,29 @@ func TestRunLogFileCreatesFileAndCapturesStandardLogger(t *testing.T) {
 		t.Fatal("run did not restore the standard logger output")
 	}
 }
+
+// An existing log file with broader permissions is tightened to owner-only
+// before routerd appends to it.
+func TestRunLogFileTightensExistingFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows access is governed by the ACL; see TestRunLogFileIsPrivateOnWindows")
+	}
+	logPath := filepath.Join(t.TempDir(), "routerd.log")
+	if err := os.WriteFile(logPath, []byte("previous\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(logPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	factory := func(daemon.Options) (daemonRunner, error) { return fakeRunner{}, nil }
+	if code := run(context.Background(), []string{"--log-file", logPath}, io.Discard, io.Discard, factory); code != 0 {
+		t.Fatalf("run() = %d, want 0", code)
+	}
+	info, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("log mode = %v, want 0600", info.Mode().Perm())
+	}
+}

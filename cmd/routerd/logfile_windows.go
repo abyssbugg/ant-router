@@ -4,14 +4,16 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"golang.org/x/sys/windows"
 )
 
-// securePrivateFile gives path a protected DACL granting access only to
+// securePrivateFile gives the open log file a protected DACL granting access only to
 // SYSTEM and the current user, the Windows equivalent of mode 0600 (the
 // permission bits passed to OpenFile do not restrict access on Windows).
-func securePrivateFile(path string) error {
+func securePrivateFile(file *os.File) error {
+	path := file.Name()
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return err
