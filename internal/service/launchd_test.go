@@ -558,9 +558,16 @@ func TestUninstallBootoutErrorKeepsFile(t *testing.T) {
 // disk, and that launchctl print output maps to states without guessing.
 func TestLaunchdStatus(t *testing.T) {
 	notFound := errors.New("exit status 113")
+	// A real exit status, so the exit-code branch is exercised on its own.
+	exit113 := exec.Command("sh", "-c", "exit 113").Run()
+	var exitErr *exec.ExitError
+	if !errors.As(exit113, &exitErr) || exitErr.ExitCode() != 113 {
+		t.Fatalf("could not produce exit status 113: %v", exit113)
+	}
 	for _, tc := range []struct {
 		name       string
 		plist      bool
+		unreadable bool
 		stdout     string
 		stderr     string
 		err        error
@@ -571,6 +578,10 @@ func TestLaunchdStatus(t *testing.T) {
 	}{
 		{name: "no plist", plist: false, err: notFound, want: StateNotInstalled, wantCalls: 0},
 		{name: "plist but not loaded", plist: true, stderr: "Could not find service \"my-service\" in domain for user gui: 501\n", err: notFound, want: StateStopped, wantDetail: "not loaded", wantCalls: 1},
+		{name: "exit 113 without stderr", plist: true, err: exit113, want: StateStopped, wantDetail: "not loaded", wantCalls: 1},
+		{name: "no such process", plist: true, stderr: "Bad request.\nNo such process\n", err: errors.New("exit status 3"), want: StateStopped, wantDetail: "not loaded", wantCalls: 1},
+		// An uninspectable definition is not proof of absence or presence.
+		{name: "unreadable plist", plist: true, unreadable: true, wantErr: true, wantCalls: 0},
 		{name: "running", plist: true, stdout: "gui/501/my-service = {\n\tstate = running\n\tpid = 42\n}\n", want: StateRunning, wantCalls: 1},
 		{name: "not running", plist: true, stdout: "gui/501/my-service = {\n\tstate = not running\n}\n", want: StateStopped, wantCalls: 1},
 		{name: "waiting", plist: true, stdout: "\tstate = waiting\n", want: StateStopped, wantCalls: 1},
@@ -587,6 +598,15 @@ func TestLaunchdStatus(t *testing.T) {
 				}
 				if err := os.WriteFile(filepath.Join(dir, "my-service.plist"), []byte(OwnershipMarker), 0o644); err != nil {
 					t.Fatal(err)
+				}
+				if tc.unreadable {
+					if os.Geteuid() == 0 {
+						t.Skip("root bypasses directory permissions")
+					}
+					if err := os.Chmod(dir, 0); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 				}
 			}
 			calls := 0

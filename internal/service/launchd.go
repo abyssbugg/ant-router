@@ -402,8 +402,7 @@ func (b *LaunchdBackend) Status(ctx context.Context, label string) (Status, erro
 	stdout, stderr, err := b.runner.Run(ctx, "launchctl", "print", "gui/"+strconv.Itoa(b.uid)+"/"+label)
 	if err != nil {
 		var exitErr *exec.ExitError
-		if (errors.As(err, &exitErr) && exitErr.ExitCode() == launchctlNotFoundExit) ||
-			bytes.Contains(stderr, []byte("Could not find service")) {
+		if (errors.As(err, &exitErr) && exitErr.ExitCode() == launchctlNotFoundExit) || isLaunchdNotLoaded(stderr) {
 			return Status{State: StateStopped, Detail: "not loaded"}, nil
 		}
 		return Status{}, commandError("query service", err, stderr)
