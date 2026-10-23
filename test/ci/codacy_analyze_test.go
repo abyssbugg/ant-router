@@ -10,14 +10,18 @@ import (
 )
 
 // stubCodacyCLI mimics codacy-cli v2: "analyze --tool T --format sarif -o F"
-// always exits 0. STUB_FAILURES lists "tool:mode" pairs selecting how T fails,
-// covering each way the real CLI signals an analyzer failure:
+// normally exits 0. STUB_MODES lists "tool:mode" pairs selecting how T behaves,
+// covering each way the real CLI can signal an analyzer failure:
 //   - empty-runs:  the "runs": [] document written for a failed/unknown tool
 //   - exec-failed: a run whose invocation reports "executionSuccessful": false
 //   - no-output:   no SARIF file at all
 //   - empty-file:  a zero-length SARIF file
+//   - exit-status: a well-formed successful SARIF run but a nonzero CLI exit
 //
-// Any other tool gets a successful run.
+// and one success mode:
+//   - findings:    a compact single-line SARIF run with three findings
+//
+// Any other tool gets a successful run with no findings.
 const stubCodacyCLI = `#!/bin/sh
 tool="" out=""
 while [ $# -gt 0 ]; do
@@ -29,7 +33,7 @@ while [ $# -gt 0 ]; do
 done
 echo "$tool" >> "$STUB_LOG"
 mode=ok
-for f in $STUB_FAILURES; do
+for f in $STUB_MODES; do
   case "$f" in
     "$tool":*) mode="${f#*:}" ;;
   esac
@@ -39,12 +43,14 @@ case "$mode" in
   exec-failed) printf '{"runs": [{"tool": {"driver": {"name": "%s"}}, "invocations": [{"executionSuccessful": false}], "results": []}], "version": "2.1.0"}\n' "$tool" > "$out" ;;
   no-output) ;;
   empty-file) : > "$out" ;;
+  exit-status) printf '{"runs": [{"tool": {"driver": {"name": "%s"}}, "invocations": [{"executionSuccessful": true}], "results": []}], "version": "2.1.0"}\n' "$tool" > "$out"; exit 3 ;;
+  findings) printf '{"runs":[{"tool":{"driver":{"name":"%s"}},"invocations":[{"executionSuccessful":true}],"results":[{"ruleId":"a"},{"ruleId":"b"},{"ruleId":"c"}]}],"version":"2.1.0"}\n' "$tool" > "$out" ;;
   *) printf '{"runs": [{"tool": {"driver": {"name": "%s"}}, "invocations": [{"executionSuccessful": true}], "results": []}], "version": "2.1.0"}\n' "$tool" > "$out" ;;
 esac
 exit 0
 `
 
-func runCodacyAnalyze(t *testing.T, failures string) (string, []string, error) {
+func runCodacyAnalyze(t *testing.T, modes string) (string, []string, error) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("codacy-analyze.sh is a POSIX shell script")
@@ -60,7 +66,7 @@ func runCodacyAnalyze(t *testing.T, failures string) (string, []string, error) {
 	}
 	cmd := exec.Command("sh", script)
 	cmd.Dir = filepath.Join("..", "..")
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+log, "STUB_FAILURES="+failures)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "STUB_LOG="+log, "STUB_MODES="+modes)
 	output, runErr := cmd.CombinedOutput()
 	data, _ := os.ReadFile(log)
 	return string(output), strings.Fields(string(data)), runErr
@@ -84,18 +90,35 @@ func TestCodacyAnalyzeRunsEveryConfiguredTool(t *testing.T) {
 // failure signal into a failure that names the tool, while still running each
 // configured tool exactly once so all failures are reported.
 func TestCodacyAnalyzeFailsWhenAnAnalyzerFails(t *testing.T) {
-	for _, mode := range []string{"empty-runs", "exec-failed", "no-output", "empty-file"} {
+	for _, mode := range []string{"empty-runs", "exec-failed", "no-output", "empty-file", "exit-status"} {
 		t.Run(mode, func(t *testing.T) {
 			output, calls, err := runCodacyAnalyze(t, "opengrep:"+mode)
 			if err == nil {
 				t.Fatalf("codacy-analyze.sh succeeded although opengrep failed (%s):\n%s", mode, output)
 			}
-			if !strings.Contains(output, "failed analyzers: opengrep") {
-				t.Fatalf("failure output does not name exactly the failed tool:\n%s", output)
+			if got := lastLine(output); got != "codacy-analyze: failed analyzers: opengrep" {
+				t.Fatalf("failure summary = %q, want exactly opengrep:\n%s", got, output)
 			}
 			if strings.Join(calls, " ") != strings.Join(configuredTools, " ") {
 				t.Fatalf("tools run = %v, want %v", calls, configuredTools)
 			}
 		})
 	}
+}
+
+// The finding count must count findings, not SARIF lines: codacy-cli writes
+// compact single-line SARIF.
+func TestCodacyAnalyzeCountsEveryFinding(t *testing.T) {
+	output, _, err := runCodacyAnalyze(t, "lizard:findings")
+	if err != nil {
+		t.Fatalf("codacy-analyze.sh failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "\nlizard: 3 finding(s)\n") {
+		t.Fatalf("output does not report 3 lizard findings:\n%s", output)
+	}
+}
+
+func lastLine(output string) string {
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	return lines[len(lines)-1]
 }
