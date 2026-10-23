@@ -17,6 +17,7 @@ import (
 //   - no-output:   no SARIF file at all
 //   - empty-file:  a zero-length SARIF file
 //   - exit-status: a well-formed successful SARIF run but a nonzero CLI exit
+//   - wrong-driver: a successful run, but of a different analyzer
 //
 // and one success mode:
 //   - findings:    a compact single-line SARIF run with three findings
@@ -44,6 +45,7 @@ case "$mode" in
   no-output) ;;
   empty-file) : > "$out" ;;
   exit-status) printf '{"runs": [{"tool": {"driver": {"name": "%s"}}, "invocations": [{"executionSuccessful": true}], "results": []}], "version": "2.1.0"}\n' "$tool" > "$out"; exit 3 ;;
+  wrong-driver) printf '{"runs": [{"tool": {"driver": {"name": "Other", "rules": [{"name": "%s"}]}}, "invocations": [{"executionSuccessful": true}], "results": []}], "version": "2.1.0"}\n' "$tool" > "$out" ;;
   findings) printf '{"runs":[{"tool":{"driver":{"name":"%s"}},"invocations":[{"executionSuccessful":true}],"results":[{"ruleId":"a"},{"ruleId":"b"},{"ruleId":"c"}]}],"version":"2.1.0"}\n' "$tool" > "$out" ;;
   *) printf '{"runs": [{"tool": {"driver": {"name": "%s"}}, "invocations": [{"executionSuccessful": true}], "results": []}], "version": "2.1.0"}\n' "$tool" > "$out" ;;
 esac
@@ -90,7 +92,7 @@ func TestCodacyAnalyzeRunsEveryConfiguredTool(t *testing.T) {
 // failure signal into a failure that names the tool, while still running each
 // configured tool exactly once so all failures are reported.
 func TestCodacyAnalyzeFailsWhenAnAnalyzerFails(t *testing.T) {
-	for _, mode := range []string{"empty-runs", "exec-failed", "no-output", "empty-file", "exit-status"} {
+	for _, mode := range []string{"empty-runs", "exec-failed", "no-output", "empty-file", "exit-status", "wrong-driver"} {
 		t.Run(mode, func(t *testing.T) {
 			output, calls, err := runCodacyAnalyze(t, "opengrep:"+mode)
 			if err == nil {

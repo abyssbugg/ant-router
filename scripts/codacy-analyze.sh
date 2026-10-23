@@ -3,10 +3,10 @@
 # and fail if any of them did not produce a successful SARIF run.
 #
 # codacy-cli v2 exits 0 even when an analyzer fails or is unknown, so its exit
-# status alone is not enough: the SARIF output must also contain a run for the
-# tool (a failed tool yields "runs": []) and no invocation with
-# "executionSuccessful": false. Every tool still runs so a single invocation
-# reports all failures.
+# status alone is not enough: scripts/sarifcheck also parses each SARIF report
+# and requires a run of that analyzer with no failed invocation (a failed tool
+# yields "runs": []). Every tool still runs so a single invocation reports all
+# failures.
 set -eu
 
 config=.codacy/codacy.yaml
@@ -23,20 +23,19 @@ fi
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
+sarifcheck="$workdir/sarifcheck"
+go build -o "$sarifcheck" ./scripts/sarifcheck
+
 failed=""
 for tool in $tools; do
   echo "--- codacy-cli analyze --tool $tool"
   sarif="$workdir/$tool.sarif"
   status=0
   codacy-cli analyze --tool "$tool" --format sarif -o "$sarif" || status=$?
-  if [ "$status" -ne 0 ] || [ ! -s "$sarif" ] || ! grep -q '"driver"' "$sarif" || grep -Eq '"executionSuccessful"[[:space:]]*:[[:space:]]*false' "$sarif"; then
+  if [ "$status" -ne 0 ] || ! "$sarifcheck" "$tool" "$sarif"; then
     echo "codacy-analyze: $tool did not complete successfully" >&2
     failed="$failed $tool"
-    continue
   fi
-  # SARIF is usually compact single-line JSON: count occurrences, not lines.
-  results=$(awk '{ n += gsub(/"ruleId"/, "") } END { print n + 0 }' "$sarif")
-  echo "$tool: $results finding(s)"
 done
 
 if [ -n "$failed" ]; then
