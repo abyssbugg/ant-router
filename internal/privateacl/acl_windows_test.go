@@ -218,15 +218,30 @@ func TestDirectoryDescriptorPropagatesToChildren(t *testing.T) {
 	if err != nil || dacl == nil || dacl.AceCount == 0 {
 		t.Fatalf("child DACL = %v, %v", dacl, err)
 	}
+	var sawSystem, sawUser bool
 	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
 			t.Fatal(err)
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if ace.Header.AceFlags&windows.INHERITED_ACE == 0 || (!sid.Equals(system) && !sid.Equals(user.User.Sid)) {
-			t.Fatalf("child ACE %d: flags %#x sid %s, want an inherited SYSTEM or current-user entry", i, ace.Header.AceFlags, sid)
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&windows.INHERITED_ACE == 0 {
+			t.Fatalf("child ACE %d: type %d flags %#x, want an inherited allow entry", i, ace.Header.AceType, ace.Header.AceFlags)
 		}
+		if ace.Mask != fileAllAccess {
+			t.Fatalf("child ACE %d for %s: mask %#x, want %#x", i, sid, ace.Mask, fileAllAccess)
+		}
+		switch {
+		case sid.Equals(system):
+			sawSystem = true
+		case sid.Equals(user.User.Sid):
+			sawUser = true
+		default:
+			t.Fatalf("child ACE %d grants unexpected SID %s", i, sid)
+		}
+	}
+	if !sawSystem || !sawUser {
+		t.Fatalf("child DACL grants SYSTEM=%v current user=%v, want both", sawSystem, sawUser)
 	}
 }
 
