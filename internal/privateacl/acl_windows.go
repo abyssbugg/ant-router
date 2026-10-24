@@ -58,7 +58,9 @@ func ApplyToPath(path string, sd *windows.SECURITY_DESCRIPTOR) error {
 }
 
 // ApplyToHandle replaces the DACL of an open object. The handle must have
-// been opened with WRITE_DAC. Unlike ApplyToPath it cannot be redirected by
+// been opened with both READ_CONTROL and WRITE_DAC: SetSecurityInfo reads the
+// existing descriptor before writing and fails with ERROR_ACCESS_DENIED
+// without READ_CONTROL. Unlike ApplyToPath it cannot be redirected by
 // a path swap after the handle was opened.
 func ApplyToHandle(handle windows.Handle, sd *windows.SECURITY_DESCRIPTOR) error {
 	dacl, _, err := sd.DACL()
