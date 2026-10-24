@@ -163,9 +163,14 @@ func doctorDaemonChecks(ctx context.Context, options cliOptions, factory clientF
 	if err != nil {
 		return []doctorCheck{{Name: "daemon", Status: doctorFail, Message: "daemon status unavailable"}, skipped}
 	}
+	cancel()
+	// The probe gets its own budget: a status reply that arrives near its
+	// deadline must not leave the probe an already-expired context.
+	probeCtx, cancelProbe := context.WithTimeout(ctx, doctorTimeout)
+	defer cancelProbe()
 	return []doctorCheck{
 		doctorDaemonStateCheck(status),
-		doctorDataPlaneCheck(daemonCtx, status.DataPlane, deps),
+		doctorDataPlaneCheck(probeCtx, status.DataPlane, deps),
 	}
 }
 

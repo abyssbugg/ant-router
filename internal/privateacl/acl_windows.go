@@ -3,8 +3,8 @@
 package privateacl
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -68,40 +68,71 @@ func ApplyToHandle(handle windows.Handle, sd *windows.SECURITY_DESCRIPTOR) error
 	return windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, protectedDACL, nil, nil, dacl, nil)
 }
 
-// Verify reports an error unless path has a protected DACL whose only
-// entries grant full access to SYSTEM and the current user.
+// fileAllAccess is FILE_ALL_ACCESS, the mask SDDL writes as "FA".
+const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1FF
+
+// Verify reports an error unless path has a protected DACL whose entries all
+// grant full access to SYSTEM or the current user, and that grants both.
 func Verify(path string) error {
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return err
 	}
-	sid, err := currentUserSID()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return fmt.Errorf("current user: %w", err)
+	}
+	if err := verifyDescriptor(sd, user.User.Sid); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
+// verifyDescriptor checks the DACL entries themselves, comparing SIDs by
+// value, so a process running as LocalSystem (whose user SID is SYSTEM)
+// verifies the descriptor this package builds for it.
+func verifyDescriptor(sd *windows.SECURITY_DESCRIPTOR, user *windows.SID) error {
+	control, _, err := sd.Control()
 	if err != nil {
 		return err
 	}
-	sddl := sd.String()
-	start := strings.Index(sddl, "D:")
-	if start < 0 {
-		return fmt.Errorf("%s has no DACL", path)
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return errors.New("DACL is not protected from inheritance")
 	}
-	dacl := sddl[start:]
-	if !strings.HasPrefix(dacl, "D:P") {
-		return fmt.Errorf("%s DACL %q is not protected", path, dacl)
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("no DACL: %w", err)
 	}
-	entries := strings.Split(strings.TrimSuffix(strings.TrimPrefix(dacl[strings.Index(dacl, "("):], "("), ")"), ")(")
-	if len(entries) != 2 {
-		return fmt.Errorf("%s DACL %q has %d entries, want SYSTEM and the current user only", path, dacl, len(entries))
+	if dacl == nil {
+		// A NULL DACL grants everyone full access.
+		return errors.New("DACL is null")
 	}
-	seen := map[string]bool{}
-	for _, entry := range entries {
-		fields := strings.Split(entry, ";")
-		if len(fields) != 6 || fields[0] != "A" || fields[2] != "FA" || (fields[5] != "SY" && fields[5] != sid) {
-			return fmt.Errorf("%s DACL %q grants access beyond SYSTEM and the current user", path, dacl)
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return err
+	}
+	var sawSystem, sawUser bool
+	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, index, &ace); err != nil {
+			return fmt.Errorf("read DACL entry %d: %w", index, err)
 		}
-		seen[fields[5]] = true
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return fmt.Errorf("DACL entry %d is not an access-allowed entry", index)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		isSystem, isUser := sid.Equals(system), sid.Equals(user)
+		if !isSystem && !isUser {
+			return fmt.Errorf("DACL entry %d grants access to %s", index, sid)
+		}
+		if ace.Mask != fileAllAccess {
+			return fmt.Errorf("DACL entry %d grants mask %#x, want full access", index, ace.Mask)
+		}
+		sawSystem = sawSystem || isSystem
+		sawUser = sawUser || isUser
 	}
-	if !seen["SY"] || !seen[sid] {
-		return fmt.Errorf("%s DACL %q must grant both SYSTEM and the current user", path, dacl)
+	if !sawSystem || !sawUser {
+		return errors.New("DACL must grant full access to both SYSTEM and the current user")
 	}
 	return nil
 }
