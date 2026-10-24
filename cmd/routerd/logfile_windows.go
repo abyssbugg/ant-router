@@ -22,7 +22,7 @@ func createPrivateLogFile(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	handle, err := windows.CreateFile(name, windows.FILE_APPEND_DATA|windows.SYNCHRONIZE|windows.READ_CONTROL|windows.WRITE_DAC,
+	handle, err := windows.CreateFile(name, windows.FILE_APPEND_DATA|windows.SYNCHRONIZE|windows.WRITE_DAC,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		privateacl.SecurityAttributes(descriptor), windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {

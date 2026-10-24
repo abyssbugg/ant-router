@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/service"
@@ -358,5 +359,43 @@ func TestDoctorRouterdValidationMatchesInstall(t *testing.T) {
 	h.service.routerd = "relative/routerd"
 	if _, report, _, _ := h.run(t); checkStatus(t, report, "routerd_binary").Status != doctorFail {
 		t.Fatalf("relative routerd must fail: %+v", checkStatus(t, report, "routerd_binary"))
+	}
+}
+
+// slowStatusClient answers Status only after a delay, like a daemon that
+// replies close to the doctor deadline.
+type slowStatusClient struct {
+	*fakeControlClient
+	delay time.Duration
+}
+
+func (c slowStatusClient) Status(ctx context.Context) (control.StatusResponse, error) {
+	time.Sleep(c.delay)
+	return c.fakeControlClient.Status(ctx)
+}
+
+func TestDoctorDataPlaneProbeHasItsOwnBudget(t *testing.T) {
+	previous := doctorTimeout
+	doctorTimeout = 400 * time.Millisecond
+	t.Cleanup(func() { doctorTimeout = previous })
+	h := newDoctorHarness(t)
+	client := slowStatusClient{fakeControlClient: h.client, delay: 300 * time.Millisecond}
+	factory := func(cliOptions) (controlClient, error) { return client, nil }
+	var remaining time.Duration
+	deps := h.service.deps()
+	deps.probeDataPlane = func(ctx context.Context, _ string) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Error("probe context has no deadline")
+		}
+		remaining = time.Until(deadline)
+		return ctx.Err()
+	}
+	report := runDoctor(context.Background(), h.options, factory, deps)
+	if remaining < doctorTimeout/2 {
+		t.Fatalf("probe budget = %v after a slow status reply, want its own %v", remaining, doctorTimeout)
+	}
+	if check := checkStatus(t, report, "data_plane"); check.Status != doctorOK {
+		t.Fatalf("data_plane = %+v", check)
 	}
 }

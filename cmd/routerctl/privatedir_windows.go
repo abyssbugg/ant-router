@@ -67,9 +67,9 @@ func ensurePrivateLogDir(stateRoot, logDir string) error {
 	return nil
 }
 
-// openDirectoryHandle opens path as a directory owned by the current user,
-// with the given access. With noReparse it opens a reparse point itself and
-// refuses it, rather than following it.
+// openDirectoryHandle opens path as a directory whose owner is the current
+// user or the token's default owner, with the given access. With noReparse
+// it opens a reparse point itself and refuses it, rather than following it.
 func openDirectoryHandle(path string, noReparse bool, access uint32) (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {

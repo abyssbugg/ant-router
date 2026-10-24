@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -74,5 +75,29 @@ func TestEnsurePrivateLogDirRefusesNonDirectoriesAndJunctions(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(target, "logs")); !os.IsNotExist(err) {
 		t.Fatalf("nothing may be created through the reparse point: %v", err)
+	}
+}
+
+// A component owned by another principal is refused. Changing an owner to
+// SYSTEM needs SeRestorePrivilege; hosts without it skip with a reason.
+func TestEnsurePrivateLogDirRefusesForeignOwnedComponents(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	foreign := filepath.Join(root, "work")
+	if err := os.MkdirAll(foreign, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user, err := windows.GetCurrentProcessToken().GetTokenUser(); err == nil && user.User.Sid.Equals(system) {
+		t.Skip("running as SYSTEM: there is no other owner to plant")
+	}
+	if err := windows.SetNamedSecurityInfo(foreign, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION, system, nil, nil, nil); err != nil {
+		t.Skipf("cannot assign another owner on this host: %v", err)
+	}
+	err = ensurePrivateLogDir(root, filepath.Join(foreign, "logs"))
+	if err == nil || !strings.Contains(err.Error(), "not the current user") {
+		t.Fatalf("ensurePrivateLogDir = %v, want a foreign-owner refusal", err)
 	}
 }

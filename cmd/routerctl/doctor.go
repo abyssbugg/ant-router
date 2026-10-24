@@ -16,7 +16,8 @@ import (
 	"github.com/abyssbugg/ant-router/internal/service"
 )
 
-const doctorTimeout = 3 * time.Second
+// doctorTimeout bounds each doctor probe; a variable so tests can shorten it.
+var doctorTimeout = 3 * time.Second
 
 const (
 	doctorOK   = "ok"

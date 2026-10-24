@@ -85,6 +85,7 @@ func TestVerifyDescriptorChecksEveryEntry(t *testing.T) {
 		{"deny entry", "D:P(A;;FA;;;SY)(D;;FA;;;" + sid + ")", "not an access-allowed entry"},
 		{"extra everyone read", "D:P(A;;FA;;;SY)(A;;FA;;;" + sid + ")(A;;FR;;;WD)", "grants access to"},
 		{"unprotected", "D:(A;;FA;;;SY)(A;;FA;;;" + sid + ")", "not protected"},
+		{"null DACL", "D:PNO_ACCESS_CONTROL", "DACL is null"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sd, err := windows.SecurityDescriptorFromString(tc.sddl)
