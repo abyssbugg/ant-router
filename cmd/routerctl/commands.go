@@ -201,6 +201,9 @@ func describeCLIError(err error) cliErrorDetail {
 	}
 	if serviceMessage, ok := serviceErrorMessage(err); ok {
 		message = serviceMessage
+		if errors.Is(err, errServiceTimeout) {
+			code = "timeout"
+		}
 	}
 	return cliErrorDetail{ExitCode: exit, Code: code, Message: message}
 }

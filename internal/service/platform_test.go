@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -107,7 +108,7 @@ func TestDaemonSpecRejectsInvalidInput(t *testing.T) {
 }
 
 func TestNewManagerSelectsBackend(t *testing.T) {
-	runner := fakeRunnerFunc(nil)
+	runner := fakeRunnerFunc(func(context.Context, string, ...string) ([]byte, []byte, error) { return nil, nil, nil })
 	// Paths must be absolute on the host running the test (a Unix literal
 	// such as "/home/u" is not absolute on Windows).
 	root := t.TempDir()
@@ -124,6 +125,25 @@ func TestNewManagerSelectsBackend(t *testing.T) {
 		}
 		if reflect.TypeOf(m) != reflect.TypeOf(want) {
 			t.Fatalf("NewManager(%s) = %T, want %T", goos, m, want)
+		}
+		// The backend must be wired to this platform's directories and
+		// runner, not merely be of the right type.
+		sameRunner := func(got Runner) bool {
+			return reflect.ValueOf(got).Pointer() == reflect.ValueOf(runner).Pointer()
+		}
+		switch b := m.(type) {
+		case *LaunchdBackend:
+			if b.home != p.Home || b.uid != p.UID || !sameRunner(b.runner) {
+				t.Fatalf("launchd wiring = home %q uid %d", b.home, b.uid)
+			}
+		case *SystemdBackend:
+			if b.configDir != p.ConfigDir || !sameRunner(b.runner) {
+				t.Fatalf("systemd wiring = configDir %q", b.configDir)
+			}
+		case *TaskSchedulerBackend:
+			if b.stateDir != p.StateDir || !sameRunner(b.runner) || b.currentUserSID == nil {
+				t.Fatalf("task scheduler wiring = stateDir %q", b.stateDir)
+			}
 		}
 	}
 	p.GOOS = "plan9"

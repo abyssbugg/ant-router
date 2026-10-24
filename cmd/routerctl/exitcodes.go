@@ -34,6 +34,12 @@ func exitCode(err error) int {
 	if errors.Is(err, errUsage) {
 		return ExitUsage
 	}
+	// Service errors carry their own classification, including context
+	// expiry inside a service operation, which is not a daemon connection
+	// failure.
+	if code, ok := serviceErrorExit(err); ok {
+		return code
+	}
 	var ctErr *controltransport.Error
 	if errors.As(err, &ctErr) && ctErr != nil && ctErr.Code == controltransport.CodeInvalidInstance {
 		return ExitUsage
@@ -72,9 +78,6 @@ func exitCode(err error) int {
 		case controltoken.CodeDurabilityUncertain:
 			return ExitInternal
 		}
-	}
-	if code, ok := serviceErrorExit(err); ok {
-		return code
 	}
 	var clientErr *control.ClientError
 	if errors.As(err, &clientErr) && clientErr != nil {

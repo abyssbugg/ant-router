@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"runtime"
 	"time"
@@ -65,7 +67,7 @@ func runDoctor(ctx context.Context, options cliOptions, factory clientFactory, d
 		doctorTokenCheck(paths),
 		doctorServiceCheck(ctx, paths, deps),
 	)
-	checks = append(checks, doctorDaemonChecks(ctx, options, factory)...)
+	checks = append(checks, doctorDaemonChecks(ctx, options, factory, deps)...)
 	return newDoctorReport(checks)
 }
 
@@ -79,10 +81,20 @@ func newDoctorReport(checks []doctorCheck) doctorReport {
 	return doctorReport{SchemaVersion: cliSchemaVersion, Healthy: healthy, Checks: checks}
 }
 
+// doctorRouterdCheck applies the same validation as service install, so a
+// binary that install would refuse is never reported as ok.
 func doctorRouterdCheck(deps serviceDeps) doctorCheck {
 	path, err := deps.lookupRouterd()
 	if err != nil {
 		return doctorCheck{Name: "routerd_binary", Status: doctorWarn, Message: "routerd not found next to routerctl"}
+	}
+	switch err := validateRouterd(path); {
+	case errors.Is(err, errRouterdNotFound):
+		return doctorCheck{Name: "routerd_binary", Status: doctorWarn, Message: "routerd not found next to routerctl"}
+	case errors.Is(err, errRouterdInaccessible):
+		return doctorCheck{Name: "routerd_binary", Status: doctorFail, Message: "routerd cannot be inspected"}
+	case err != nil:
+		return doctorCheck{Name: "routerd_binary", Status: doctorFail, Message: "routerd is not an executable regular file"}
 	}
 	return doctorCheck{Name: "routerd_binary", Status: doctorOK, Message: path}
 }
@@ -96,8 +108,10 @@ func doctorTokenCheck(paths runtimepaths.Paths) doctorCheck {
 		return doctorCheck{Name: "control_token", Status: doctorFail, Message: "control token cannot be inspected"}
 	case !info.Mode().IsRegular():
 		return doctorCheck{Name: "control_token", Status: doctorFail, Message: "control token is not a regular file"}
-	case runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0:
-		return doctorCheck{Name: "control_token", Status: doctorWarn, Message: fmt.Sprintf("control token is accessible by group or others (mode %#o)", info.Mode().Perm())}
+	case runtime.GOOS != "windows" && info.Mode().Perm() != 0o600:
+		// The token store loads only a 0600 token, so any other mode is a
+		// token the daemon and routerctl will refuse.
+		return doctorCheck{Name: "control_token", Status: doctorFail, Message: fmt.Sprintf("control token mode is %#o; it must be 0600", info.Mode().Perm())}
 	}
 	return doctorCheck{Name: "control_token", Status: doctorOK, Message: paths.TokenPath}
 }
@@ -107,7 +121,11 @@ func doctorServiceCheck(ctx context.Context, paths runtimepaths.Paths, deps serv
 	if err != nil {
 		return doctorCheck{Name: "service", Status: doctorFail, Message: "service label is invalid"}
 	}
-	manager, err := deps.newManager(serviceStateDir(paths))
+	dir, err := deps.serviceDir()
+	if err != nil {
+		return doctorCheck{Name: "service", Status: doctorFail, Message: "service manager unavailable"}
+	}
+	manager, err := deps.newManager(dir)
 	if err != nil {
 		var unsupported service.ErrUnsupportedPlatform
 		if errors.As(err, &unsupported) {
@@ -132,7 +150,7 @@ func doctorServiceCheck(ctx context.Context, paths runtimepaths.Paths, deps serv
 	return doctorCheck{Name: "service", Status: doctorWarn, Message: "state unknown"}
 }
 
-func doctorDaemonChecks(ctx context.Context, options cliOptions, factory clientFactory) []doctorCheck {
+func doctorDaemonChecks(ctx context.Context, options cliOptions, factory clientFactory, deps serviceDeps) []doctorCheck {
 	skipped := doctorCheck{Name: "data_plane", Status: doctorSkip, Message: "daemon unavailable"}
 	client, err := factory(options)
 	if err != nil {
@@ -146,16 +164,65 @@ func doctorDaemonChecks(ctx context.Context, options cliOptions, factory clientF
 		return []doctorCheck{{Name: "daemon", Status: doctorFail, Message: "daemon status unavailable"}, skipped}
 	}
 	return []doctorCheck{
-		{Name: "daemon", Status: doctorOK, Message: fmt.Sprintf("running (uptime %s)", time.Duration(status.UptimeSeconds)*time.Second)},
-		doctorDataPlaneCheck(status.DataPlane),
+		doctorDaemonStateCheck(status),
+		doctorDataPlaneCheck(daemonCtx, status.DataPlane, deps),
 	}
 }
 
-func doctorDataPlaneCheck(summary *control.DataPlaneSummary) doctorCheck {
+// doctorDaemonStateCheck reports the daemon lifecycle state: a daemon that
+// answers but is not serving is not healthy.
+func doctorDaemonStateCheck(status control.StatusResponse) doctorCheck {
+	uptime := time.Duration(status.UptimeSeconds) * time.Second
+	switch status.DaemonState {
+	case "running":
+		return doctorCheck{Name: "daemon", Status: doctorOK, Message: fmt.Sprintf("running (uptime %s)", uptime)}
+	case "starting", "draining":
+		return doctorCheck{Name: "daemon", Status: doctorWarn, Message: status.DaemonState}
+	case "stopped":
+		return doctorCheck{Name: "daemon", Status: doctorFail, Message: "stopped"}
+	}
+	return doctorCheck{Name: "daemon", Status: doctorFail, Message: "daemon state unknown"}
+}
+
+// doctorDataPlaneCheck reports whether an enabled data plane actually
+// accepts connections, not merely that it is configured.
+func doctorDataPlaneCheck(ctx context.Context, summary *control.DataPlaneSummary, deps serviceDeps) doctorCheck {
 	if summary == nil || !summary.Enabled {
 		return doctorCheck{Name: "data_plane", Status: doctorWarn, Message: "disabled"}
 	}
+	if err := deps.probeDataPlane(ctx, summary.BaseURL); err != nil {
+		return doctorCheck{Name: "data_plane", Status: doctorFail, Message: "data plane is not accepting connections"}
+	}
 	return doctorCheck{Name: "data_plane", Status: doctorOK, Message: summary.BaseURL}
+}
+
+// dialDataPlane opens, and immediately closes, a TCP connection to the data
+// plane listener named by baseURL.
+func dialDataPlane(ctx context.Context, baseURL string) error {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return err
+	}
+	if parsed.Hostname() == "" {
+		return errors.New("data plane URL has no host")
+	}
+	port := parsed.Port()
+	if port == "" {
+		switch parsed.Scheme {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		default:
+			return errors.New("data plane URL has no port")
+		}
+	}
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(parsed.Hostname(), port))
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func writeDoctorReport(writer io.Writer, options cliOptions, report doctorReport) error {

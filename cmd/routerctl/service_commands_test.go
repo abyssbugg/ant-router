@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/abyssbugg/ant-router/internal/filelock"
 	"github.com/abyssbugg/ant-router/internal/service"
 )
 
@@ -23,6 +26,8 @@ type fakeServiceManager struct {
 	installed                                              *service.Spec
 	calls                                                  []string
 	labels                                                 []string
+	// blockStart makes Start wait for its context, like a hung backend.
+	blockStart bool
 }
 
 func (m *fakeServiceManager) record(call, label string) {
@@ -40,8 +45,12 @@ func (m *fakeServiceManager) Uninstall(_ context.Context, label string) error {
 	m.record("uninstall", label)
 	return m.uninstallErr
 }
-func (m *fakeServiceManager) Start(_ context.Context, label string) error {
+func (m *fakeServiceManager) Start(ctx context.Context, label string) error {
 	m.record("start", label)
+	if m.blockStart {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	return m.startErr
 }
 func (m *fakeServiceManager) Stop(_ context.Context, label string) error {
@@ -60,6 +69,10 @@ type serviceHarness struct {
 	routerd    string
 	lookupErr  error
 	lookups    int
+	serviceDir string
+	probeErr   error
+	probes     []string
+	timeout    time.Duration
 }
 
 func (h *serviceHarness) deps() serviceDeps {
@@ -75,6 +88,12 @@ func (h *serviceHarness) deps() serviceDeps {
 			h.lookups++
 			return h.routerd, h.lookupErr
 		},
+		serviceDir: func() (string, error) { return h.serviceDir, nil },
+		timeout:    h.timeout,
+		probeDataPlane: func(_ context.Context, baseURL string) error {
+			h.probes = append(h.probes, baseURL)
+			return h.probeErr
+		},
 	}
 }
 
@@ -84,7 +103,11 @@ func newServiceHarness(t *testing.T) *serviceHarness {
 	if err := os.WriteFile(routerd, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return &serviceHarness{manager: &fakeServiceManager{status: service.Status{State: service.StateRunning}}, routerd: routerd}
+	return &serviceHarness{
+		manager:    &fakeServiceManager{status: service.Status{State: service.StateRunning}},
+		routerd:    routerd,
+		serviceDir: filepath.Join(t.TempDir(), "service"),
+	}
 }
 
 func runServiceCLI(t *testing.T, h *serviceHarness, options cliOptions, args ...string) (int, string, string) {
@@ -162,7 +185,7 @@ func TestServiceInstallBuildsDaemonSpec(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("log dir mode = %#o, want 0700", info.Mode().Perm())
 	}
-	if !slices.Equal(h.stateDirs, []string{filepath.Join(paths.InstanceDir, "service")}) {
+	if !slices.Equal(h.stateDirs, []string{h.serviceDir}) {
 		t.Fatalf("manager state dirs = %q", h.stateDirs)
 	}
 	if !slices.Equal(h.manager.calls, []string{"install", "status"}) {
@@ -196,9 +219,9 @@ func TestServiceInstallRejectsBadRouterd(t *testing.T) {
 		lookupErr error
 		message   string
 	}{
-		"relative":    {args: []string{"install", "--routerd", "bin/routerd"}, message: "routerd path must be an absolute path to a regular file"},
+		"relative":    {args: []string{"install", "--routerd", "bin/routerd"}, message: "routerd path must be an absolute path to an executable regular file"},
 		"missing":     {args: []string{"install", "--routerd", filepath.Join(dir, "absent")}, message: "routerd executable not found; pass --routerd with an absolute path"},
-		"directory":   {args: []string{"install", "--routerd", dir}, message: "routerd path must be an absolute path to a regular file"},
+		"directory":   {args: []string{"install", "--routerd", dir}, message: "routerd path must be an absolute path to an executable regular file"},
 		"lookup fail": {args: []string{"install"}, lookupErr: errors.New(serviceSecretSentinel), message: "routerd executable not found; pass --routerd with an absolute path"},
 	}
 	for name, tc := range cases {
@@ -273,6 +296,63 @@ func TestServiceErrorsAreMappedAndRedacted(t *testing.T) {
 		"backend status failure": {
 			configure: func(h *serviceHarness) { h.manager.statusErr = secret },
 			action:    "status", exit: ExitInternal, code: "internal", message: "service operation failed",
+		},
+		"label in use": {
+			configure: func(h *serviceHarness) { h.manager.installErr = service.ErrLabelInUse{Label: serviceSecretSentinel} },
+			action:    "install", exit: ExitConflict, code: "conflict", message: "the service label is already used by another service definition",
+		},
+		"not installed": {
+			configure: func(h *serviceHarness) { h.manager.startErr = service.ErrNotInstalled{Path: serviceSecretSentinel} },
+			action:    "start", exit: ExitConflict, code: "conflict", message: "service is not installed; run routerctl service install",
+		},
+		"definition not a regular file": {
+			configure: func(h *serviceHarness) {
+				h.manager.installErr = service.ErrNotRegularFile{Path: serviceSecretSentinel, Reason: serviceSecretSentinel}
+			},
+			action: "install", exit: ExitConflict, code: "conflict", message: "an existing service definition is not a regular file",
+		},
+		"relative backend path": {
+			configure: func(h *serviceHarness) { h.manager.installErr = service.ErrRelativePath{Path: serviceSecretSentinel} },
+			action:    "install", exit: ExitValidation, code: "validation", message: "service paths must be absolute",
+		},
+		"invalid label": {
+			configure: func(h *serviceHarness) { h.manager.stopErr = service.ErrInvalidLabel{Label: serviceSecretSentinel} },
+			action:    "stop", exit: ExitValidation, code: "validation", message: "service label is invalid",
+		},
+		"unsupported log path": {
+			configure: func(h *serviceHarness) {
+				h.manager.installErr = service.ErrUnsupportedLogPath{Path: serviceSecretSentinel}
+			},
+			action: "install", exit: ExitValidation, code: "validation", message: "service log path is not supported by this service manager",
+		},
+		"unsupported systemd": {
+			configure: func(h *serviceHarness) { h.manager.installErr = service.ErrUnsupportedSystemd{Version: 239} },
+			action:    "install", exit: ExitUnavailable, code: "unavailable", message: "the installed systemd is too old for user service management",
+		},
+		"backend stop failure": {
+			configure: func(h *serviceHarness) { h.manager.stopErr = secret },
+			action:    "stop", exit: ExitInternal, code: "internal", message: "service operation failed",
+		},
+		"backend uninstall failure": {
+			configure: func(h *serviceHarness) { h.manager.uninstallErr = secret },
+			action:    "uninstall", exit: ExitInternal, code: "internal", message: "service operation failed",
+		},
+		"backend install failure": {
+			configure: func(h *serviceHarness) { h.manager.installErr = secret },
+			action:    "install", exit: ExitInternal, code: "internal", message: "service operation failed",
+		},
+		"wrapped typed error keeps its classification": {
+			configure: func(h *serviceHarness) {
+				h.manager.stopErr = fmt.Errorf("%s: %w", serviceSecretSentinel, service.ErrNotInstalled{Path: "x"})
+			},
+			action: "stop", exit: ExitConflict, code: "conflict", message: "service is not installed; run routerctl service install",
+		},
+		"hung backend times out": {
+			configure: func(h *serviceHarness) {
+				h.manager.blockStart = true
+				h.timeout = 50 * time.Millisecond
+			},
+			action: "start", exit: ExitUnavailable, code: "timeout", message: "service manager did not respond in time",
 		},
 		"manager construction failure": {
 			configure: func(h *serviceHarness) { h.managerErr = secret },
@@ -365,7 +445,228 @@ func TestServiceInstallRejectsSymlinkedLogDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, _ := runServiceCLI(t, h, options, "install", "--routerd", h.routerd)
-	if code != ExitInternal || h.manager.installed != nil {
+	if code != ExitConflict || h.manager.installed != nil {
 		t.Fatalf("code = %d installed = %v; a symlinked log dir must be refused", code, h.manager.installed != nil)
+	}
+}
+
+func TestServiceCommandInterruptedByCaller(t *testing.T) {
+	h := newServiceHarness(t)
+	_, command, err := parseCLI([]string{"service", "start"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.manager.blockStart = true
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	var stdout, stderr bytes.Buffer
+	code := executeServiceCommand(ctx, testServiceOptions(t), command, &stdout, &stderr, h.deps())
+	if code != ExitUnavailable || stderr.String() != "ant-router: service operation was interrupted\n" {
+		t.Fatalf("code = %d stderr = %q", code, stderr.String())
+	}
+}
+
+func TestServiceInstallRejectsNonExecutableAndUninspectableRouterd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	t.Run("not executable", func(t *testing.T) {
+		h := newServiceHarness(t)
+		if err := os.Chmod(h.routerd, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, _, stderr := runServiceCLI(t, h, testServiceOptions(t), "install")
+		if code != ExitValidation || stderr != "ant-router: routerd path must be an absolute path to an executable regular file\n" || h.manager.installed != nil {
+			t.Fatalf("code = %d stderr = %q installed = %v", code, stderr, h.manager.installed != nil)
+		}
+	})
+	t.Run("cannot be inspected", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses directory search permission")
+		}
+		h := newServiceHarness(t)
+		locked := filepath.Join(t.TempDir(), "locked")
+		if err := os.Mkdir(locked, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		routerd := filepath.Join(locked, "routerd")
+		if err := os.WriteFile(routerd, []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+		code, _, stderr := runServiceCLI(t, h, testServiceOptions(t), "install", "--routerd", routerd)
+		if code != ExitValidation || stderr != "ant-router: routerd executable cannot be inspected\n" {
+			t.Fatalf("code = %d stderr = %q", code, stderr)
+		}
+	})
+}
+
+func TestServiceStateRootRecordGuardsTheInstanceLabel(t *testing.T) {
+	h := newServiceHarness(t)
+	first := testServiceOptions(t)
+	if code, _, stderr := runServiceCLI(t, h, first, "install", "--routerd", h.routerd); code != ExitSuccess {
+		t.Fatalf("install: code = %d stderr = %q", code, stderr)
+	}
+	label, err := service.DaemonLabel(first.Instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := serviceStateRootRecord(h.serviceDir, label)
+	data, err := os.ReadFile(record)
+	if err != nil || strings.TrimSpace(string(data)) != filepath.Clean(first.StateRoot) {
+		t.Fatalf("record = %q, %v", data, err)
+	}
+
+	// Same instance, different state root, service still installed: refused
+	// for every action, and the backend is never asked to change anything.
+	second := testServiceOptions(t)
+	second.Instance = first.Instance
+	for _, action := range []string{"install", "uninstall", "start", "stop", "status"} {
+		h.manager.calls = nil
+		args := []string{action}
+		if action == "install" {
+			args = append(args, "--routerd", h.routerd)
+		}
+		code, _, stderr := runServiceCLI(t, h, second, args...)
+		if code != ExitConflict || !strings.Contains(stderr, "installed for a different state directory") {
+			t.Fatalf("%s: code = %d stderr = %q", action, code, stderr)
+		}
+		if !slices.Equal(h.manager.calls, []string{"status"}) {
+			t.Fatalf("%s: calls = %q, want only the ownership status probe", action, h.manager.calls)
+		}
+	}
+
+	// A record whose service is gone is stale and is replaced.
+	h.manager.status = service.Status{State: service.StateNotInstalled}
+	if code, _, stderr := runServiceCLI(t, h, second, "install", "--routerd", h.routerd); code != ExitSuccess {
+		t.Fatalf("stale record: code = %d stderr = %q", code, stderr)
+	}
+	if data, _ := os.ReadFile(record); strings.TrimSpace(string(data)) != filepath.Clean(second.StateRoot) {
+		t.Fatalf("record after reinstall = %q", data)
+	}
+
+	// A record whose label is now owned by someone else is also stale.
+	if err := writeServiceStateRoot(context.Background(), h.serviceDir, label, first.StateRoot); err != nil {
+		t.Fatal(err)
+	}
+	h.manager.status = service.Status{}
+	h.manager.statusErr = service.ErrNotOwned{Path: "x"}
+	h.manager.calls = nil
+	runServiceCLI(t, h, second, "stop")
+	if !slices.Contains(h.manager.calls, "stop") {
+		t.Fatalf("not-owned record must be ignored: calls = %q", h.manager.calls)
+	}
+
+	// Uninstall from the owning root removes the record.
+	h.manager.statusErr = nil
+	h.manager.status = service.Status{State: service.StateRunning}
+	if code, _, stderr := runServiceCLI(t, h, first, "uninstall"); code != ExitSuccess {
+		t.Fatalf("uninstall: code = %d stderr = %q", code, stderr)
+	}
+	if _, err := os.Stat(record); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("record after uninstall: %v", err)
+	}
+}
+
+func TestServiceCommandsAreSerializedPerLabel(t *testing.T) {
+	h := newServiceHarness(t)
+	options := testServiceOptions(t)
+	label, err := service.DaemonLabel(options.Instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(h.serviceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	held, err := filelock.Acquire(context.Background(), filepath.Join(h.serviceDir, "."+label+".operation.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.timeout = 100 * time.Millisecond
+	code, _, stderr := runServiceCLI(t, h, options, "status")
+	if code != ExitUnavailable || stderr != "ant-router: service manager did not respond in time\n" || len(h.manager.calls) != 0 {
+		t.Fatalf("while locked: code = %d stderr = %q calls = %q", code, stderr, h.manager.calls)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runServiceCLI(t, h, options, "status"); code != ExitSuccess {
+		t.Fatalf("after release: code = %d stderr = %q", code, stderr)
+	}
+}
+
+func TestServiceInstallRefusesUnsafeLogDirectories(t *testing.T) {
+	cases := map[string]func(t *testing.T, instanceDir string){
+		"log path is a file": func(t *testing.T, instanceDir string) {
+			if err := os.MkdirAll(instanceDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(instanceDir, "logs"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"instance directory is a symlink": func(t *testing.T, instanceDir string) {
+			if runtime.GOOS == "windows" {
+				t.Skip("symlink creation requires privileges on Windows")
+			}
+			if err := os.MkdirAll(filepath.Dir(instanceDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(t.TempDir(), instanceDir); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, plant := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newServiceHarness(t)
+			options := testServiceOptions(t)
+			paths, err := resolveCLIPaths(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plant(t, paths.InstanceDir)
+			code, _, stderr := runServiceCLI(t, h, options, "install", "--routerd", h.routerd)
+			if code != ExitConflict || stderr != "ant-router: service log directory must be a private real directory inside the state directory\n" || h.manager.installed != nil {
+				t.Fatalf("code = %d stderr = %q installed = %v", code, stderr, h.manager.installed != nil)
+			}
+		})
+	}
+}
+
+func TestLogDirComponents(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	got, err := logDirComponents(root, filepath.Join(root, "instances", "work", "logs"))
+	if err != nil || !slices.Equal(got, []string{"instances", "work", "logs"}) {
+		t.Fatalf("components = %q, %v", got, err)
+	}
+	for _, bad := range []string{root, filepath.Dir(root), filepath.Join(filepath.Dir(root), "other", "logs"), "relative/logs"} {
+		if _, err := logDirComponents(root, bad); err == nil {
+			t.Fatalf("logDirComponents(%q) must fail", bad)
+		}
+	}
+}
+
+func TestRunDispatchesServiceAndDoctorWithInjectedDeps(t *testing.T) {
+	h := newServiceHarness(t)
+	options := testServiceOptions(t)
+	factory := func(cliOptions) (controlClient, error) { return nil, errors.New("no daemon") }
+	base := []string{"--state-dir", options.StateRoot, "--runtime-dir", options.RuntimeRoot, "--instance", options.Instance}
+	var stdout, stderr bytes.Buffer
+	code := runWithDeps(context.Background(), append(base, "service", "status"), strings.NewReader(""), &stdout, &stderr, factory, h.deps())
+	if code != ExitSuccess || !slices.Equal(h.manager.calls, []string{"status"}) || !strings.Contains(stdout.String(), "running") {
+		t.Fatalf("service: code = %d calls = %q stdout = %q stderr = %q", code, h.manager.calls, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	h.manager.calls = nil
+	runWithDeps(context.Background(), append(base, "doctor"), strings.NewReader(""), &stdout, &stderr, factory, h.deps())
+	if h.lookups != 1 || !slices.Equal(h.manager.calls, []string{"status"}) || !strings.Contains(stdout.String(), "routerd_binary") {
+		t.Fatalf("doctor: lookups = %d calls = %q stdout = %q", h.lookups, h.manager.calls, stdout.String())
 	}
 }

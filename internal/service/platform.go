@@ -47,7 +47,10 @@ type DaemonOptions struct {
 	// Executable is the absolute path of the routerd binary.
 	Executable string
 	// StateRoot and RuntimeRoot are passed to routerd as --state-dir and
-	// --runtime-dir. RuntimeRoot is empty on Windows and then omitted.
+	// --runtime-dir. An empty RuntimeRoot omits --runtime-dir so routerd
+	// uses its own default; that is the normal case on Windows, where
+	// runtimepaths has no default runtime root. A non-empty RuntimeRoot is
+	// passed through on every platform.
 	StateRoot   string
 	RuntimeRoot string
 	// LogPath receives daemon output: launchd and systemd redirect to it;

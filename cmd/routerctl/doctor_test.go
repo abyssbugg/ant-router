@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +29,7 @@ func newDoctorHarness(t *testing.T) *doctorHarness {
 		service: newServiceHarness(t),
 		client: &fakeControlClient{status: control.StatusResponse{
 			UptimeSeconds: 90,
+			DaemonState:   "running",
 			DataPlane:     &control.DataPlaneSummary{Enabled: true, BaseURL: "http://127.0.0.1:8787"},
 		}},
 		options: testServiceOptions(t),
@@ -141,7 +143,7 @@ func TestDoctorMissingTokenIsUnhealthy(t *testing.T) {
 	}
 }
 
-func TestDoctorWarnsOnPermissiveToken(t *testing.T) {
+func TestDoctorFailsOnPermissiveToken(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits are not meaningful on Windows")
 	}
@@ -149,17 +151,19 @@ func TestDoctorWarnsOnPermissiveToken(t *testing.T) {
 		mode   os.FileMode
 		status string
 		text   string
+		exit   int
 	}{
-		{0o640, doctorWarn, "0640"},
-		{0o604, doctorWarn, "0604"},
-		{0o644, doctorWarn, "0644"},
-		{0o600, doctorOK, "token"},
+		{0o640, doctorFail, "0640", ExitUnavailable},
+		{0o604, doctorFail, "0604", ExitUnavailable},
+		{0o644, doctorFail, "0644", ExitUnavailable},
+		{0o400, doctorFail, "0400", ExitUnavailable},
+		{0o600, doctorOK, "token", ExitSuccess},
 	} {
 		h := newDoctorHarness(t)
 		h.writeToken(t, "control-token-value", tc.mode)
 		code, report, _, _ := h.run(t)
 		check := checkStatus(t, report, "control_token")
-		if code != ExitSuccess || check.Status != tc.status || !strings.Contains(check.Message, tc.text) {
+		if code != tc.exit || check.Status != tc.status || !strings.Contains(check.Message, tc.text) {
 			t.Fatalf("mode %#o: code = %d check = %+v", tc.mode, code, check)
 		}
 	}
@@ -217,5 +221,142 @@ func TestDoctorNeverPrintsSecretsOrBackendDetail(t *testing.T) {
 	_, report, output, _ := h.run(t)
 	if strings.Contains(output, serviceSecretSentinel) || checkStatus(t, report, "daemon").Status != doctorFail {
 		t.Fatalf("daemon status error leaked or misreported: %q", output)
+	}
+}
+
+func TestDoctorRejectsTokenThatIsNotARegularFile(t *testing.T) {
+	cases := map[string]func(t *testing.T, tokenPath string){
+		"directory": func(t *testing.T, tokenPath string) {
+			if err := os.Mkdir(tokenPath, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"symlink": func(t *testing.T, tokenPath string) {
+			if runtime.GOOS == "windows" {
+				t.Skip("symlink creation requires privileges on Windows")
+			}
+			target := filepath.Join(t.TempDir(), "token")
+			if err := os.WriteFile(target, []byte("control-token-value"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, tokenPath); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, plant := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newDoctorHarness(t)
+			paths, err := resolveCLIPaths(h.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(paths.TokenPath); err != nil {
+				t.Fatal(err)
+			}
+			plant(t, paths.TokenPath)
+			code, report, _, _ := h.run(t)
+			check := checkStatus(t, report, "control_token")
+			if code != ExitUnavailable || check.Status != doctorFail || check.Message != "control token is not a regular file" {
+				t.Fatalf("code = %d check = %+v", code, check)
+			}
+		})
+	}
+}
+
+func TestDoctorReportsDaemonLifecycleState(t *testing.T) {
+	cases := map[string]struct {
+		state, status string
+		exit          int
+	}{
+		"running":  {"running", doctorOK, ExitSuccess},
+		"starting": {"starting", doctorWarn, ExitSuccess},
+		"draining": {"draining", doctorWarn, ExitSuccess},
+		"stopped":  {"stopped", doctorFail, ExitUnavailable},
+		"unknown":  {"exploded", doctorFail, ExitUnavailable},
+		"empty":    {"", doctorFail, ExitUnavailable},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newDoctorHarness(t)
+			h.client.status.DaemonState = tc.state
+			code, report, _, _ := h.run(t)
+			if got := checkStatus(t, report, "daemon"); got.Status != tc.status || code != tc.exit {
+				t.Fatalf("code = %d daemon = %+v, want %s", code, got, tc.status)
+			}
+		})
+	}
+}
+
+func TestDoctorProbesTheDataPlaneListener(t *testing.T) {
+	h := newDoctorHarness(t)
+	h.service.probeErr = errors.New(serviceSecretSentinel)
+	code, report, output, stderr := h.run(t)
+	check := checkStatus(t, report, "data_plane")
+	if code != ExitUnavailable || check.Status != doctorFail || check.Message != "data plane is not accepting connections" {
+		t.Fatalf("code = %d data_plane = %+v", code, check)
+	}
+	if strings.Contains(output+stderr, serviceSecretSentinel) {
+		t.Fatalf("doctor leaked probe error: %q %q", output, stderr)
+	}
+	if len(h.service.probes) == 0 || h.service.probes[0] != "http://127.0.0.1:8787" {
+		t.Fatalf("probes = %q", h.service.probes)
+	}
+
+	disabled := newDoctorHarness(t)
+	disabled.client.status.DataPlane = &control.DataPlaneSummary{Enabled: false}
+	if _, report, _, _ := disabled.run(t); checkStatus(t, report, "data_plane").Status != doctorWarn || len(disabled.service.probes) != 0 {
+		t.Fatalf("a disabled data plane must warn without probing: %+v probes = %q", report, disabled.service.probes)
+	}
+}
+
+func TestDialDataPlane(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	ctx := context.Background()
+	if err := dialDataPlane(ctx, "http://"+address); err != nil {
+		t.Fatalf("dial live listener: %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := dialDataPlane(ctx, "http://"+address); err == nil {
+		t.Fatal("dial of a closed listener must fail")
+	}
+	for _, bad := range []string{"http://", "unix:///tmp/socket", "://bad"} {
+		if err := dialDataPlane(ctx, bad); err == nil {
+			t.Fatalf("dialDataPlane(%q) must fail", bad)
+		}
+	}
+}
+
+func TestDoctorRouterdValidationMatchesInstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("execute permission bits are not meaningful on Windows")
+	}
+	h := newDoctorHarness(t)
+	if err := os.Chmod(h.service.routerd, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, report, _, _ := h.run(t)
+	check := checkStatus(t, report, "routerd_binary")
+	if code != ExitUnavailable || check.Status != doctorFail || check.Message != "routerd is not an executable regular file" {
+		t.Fatalf("code = %d routerd_binary = %+v", code, check)
+	}
+	h.service.routerd = "relative/routerd"
+	if _, report, _, _ := h.run(t); checkStatus(t, report, "routerd_binary").Status != doctorFail {
+		t.Fatalf("relative routerd must fail: %+v", checkStatus(t, report, "routerd_binary"))
 	}
 }
