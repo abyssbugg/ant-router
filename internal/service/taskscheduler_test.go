@@ -228,6 +228,8 @@ type fakeTask struct {
 type fakeFailure struct {
 	err     error
 	applied bool
+	// once makes only the first matching call fail.
+	once bool
 }
 
 // fakeScheduler models the ScheduledTasks cmdlets the backend sends through
@@ -249,7 +251,7 @@ func newFakeScheduler(t *testing.T) *fakeScheduler {
 }
 
 var (
-	cmdletPattern = regexp.MustCompile(`\b(Get|Register|Start|Stop|Unregister)-ScheduledTask -TaskPath '\\AntRouter\\' -TaskName '([^']*)'`)
+	cmdletPattern = regexp.MustCompile(`\b(Get|Export|Register|Start|Stop|Unregister)-ScheduledTask -TaskPath '\\AntRouter\\' -TaskName '([^']*)'`)
 	xmlPattern    = regexp.MustCompile(`FromBase64String\('([A-Za-z0-9+/=]*)'\)`)
 )
 
@@ -289,6 +291,9 @@ func (f *fakeScheduler) Run(ctx context.Context, name string, args ...string) ([
 	defer f.mu.Unlock()
 	f.ops = append(f.ops, op+" "+label)
 	failure, failing := f.fail[op]
+	if failing && failure.once {
+		delete(f.fail, op)
+	}
 	if failing && !failure.applied {
 		return nil, []byte("synthetic " + op + " failure"), failure.err
 	}
@@ -301,6 +306,11 @@ func (f *fakeScheduler) Run(ctx context.Context, name string, args ...string) ([
 		} else {
 			stdout = fmt.Sprintf("present\r\n%d\r\n%s\r\n%s\r\n.\r\n", task.state, task.userSID, task.description)
 		}
+	case "Export":
+		if task == nil {
+			return nil, []byte("task not found"), errors.New("exit status 1")
+		}
+		stdout = encodeUTF16Base64(task.xml) + "\r\n"
 	case "Register":
 		encoded := xmlPattern.FindStringSubmatch(script)
 		if encoded == nil {
@@ -411,8 +421,99 @@ func newTestBackend(t *testing.T, runner Runner) *TaskSchedulerBackend {
 	return backend
 }
 
+// previousTaskXML is the registered definition of an owned task that a
+// reinstall replaces; a rollback must restore exactly this document.
+var previousTaskXML = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>` + OwnershipMarker + `</Description></RegistrationInfo>
+  <Principals><Principal id="Author"><UserId>` + testSID + `</UserId></Principal></Principals>
+  <Actions Context="Author"><Exec><Command>C:\previous\routerd.exe</Command></Exec></Actions>
+</Task>`
+
 func ownedTask(state int) *fakeTask {
-	return &fakeTask{state: state, description: OwnershipMarker, userSID: testSID}
+	return &fakeTask{state: state, description: OwnershipMarker, userSID: testSID, xml: previousTaskXML}
+}
+
+func encodeUTF16Base64(text string) string {
+	units := utf16.Encode([]rune(text))
+	raw := make([]byte, 2*len(units))
+	for i, unit := range units {
+		raw[2*i], raw[2*i+1] = byte(unit), byte(unit>>8)
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+// A reinstall that cannot finish puts the previous definition back, and
+// restarts the task if it was running, instead of leaving the new
+// definition registered under a failed install.
+func TestTaskSchedulerReinstallFailureRestoresPreviousDefinition(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		state   int
+		failOp  string
+		ops     []string
+		wantRun int
+	}{
+		{"stop fails", 4, "Stop", []string{"Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Register test-service", "Start test-service"}, 4},
+		{"stop applied then fails while running", 4, "StopApplied", []string{"Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Register test-service", "Start test-service"}, 4},
+		{"stop fails while stopped", 3, "Stop", []string{"Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Register test-service"}, 3},
+		{"start fails while running", 4, "Start", []string{"Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Start test-service", "Stop test-service", "Register test-service", "Start test-service"}, 4},
+		{"start fails while stopped", 3, "Start", []string{"Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Start test-service", "Stop test-service", "Register test-service"}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheduler := newFakeScheduler(t)
+			scheduler.tasks["test-service"] = ownedTask(tc.state)
+			if tc.failOp == "StopApplied" {
+				scheduler.fail["Stop"] = fakeFailure{err: errors.New("exit status 1"), once: true, applied: true}
+			} else {
+				scheduler.fail[tc.failOp] = fakeFailure{err: errors.New("exit status 1"), once: true}
+			}
+			if err := newTestBackend(t, scheduler).Install(context.Background(), taskSpec(t)); err == nil {
+				t.Fatal("Install succeeded, want the reinstall failure")
+			}
+			expectOps(t, scheduler, tc.ops...)
+			task := scheduler.tasks["test-service"]
+			if task == nil || task.xml != previousTaskXML || task.state != tc.wantRun {
+				t.Fatalf("task after failed reinstall = %+v, want the previous definition in state %d", task, tc.wantRun)
+			}
+		})
+	}
+}
+
+// A failed restore is reported together with the original failure.
+func TestTaskSchedulerReinstallReportsRestoreFailure(t *testing.T) {
+	scheduler := newFakeScheduler(t)
+	scheduler.tasks["test-service"] = ownedTask(4)
+	errStop := errors.New("stop exit 1")
+	errRestore := errors.New("restore exit 2")
+	scheduler.fail["Stop"] = fakeFailure{err: errStop}
+	backend := newTestBackend(t, scheduler)
+	calls := 0
+	scheduler.beforeCall = func(op string) {
+		if op == "Register" {
+			calls++
+			if calls == 2 {
+				scheduler.mu.Lock()
+				scheduler.fail["Register"] = fakeFailure{err: errRestore}
+				scheduler.mu.Unlock()
+			}
+		}
+	}
+	err := backend.Install(context.Background(), taskSpec(t))
+	if !errors.Is(err, errStop) || !errors.Is(err, errRestore) || !strings.Contains(err.Error(), "restore previous task definition") {
+		t.Fatalf("Install err = %v, want the stop failure joined with the restore failure", err)
+	}
+}
+
+// Export failure aborts a reinstall before anything changes.
+func TestTaskSchedulerReinstallExportFailureChangesNothing(t *testing.T) {
+	scheduler := newFakeScheduler(t)
+	scheduler.tasks["test-service"] = ownedTask(4)
+	scheduler.fail["Export"] = fakeFailure{err: errors.New("exit status 1")}
+	if err := newTestBackend(t, scheduler).Install(context.Background(), taskSpec(t)); err == nil {
+		t.Fatal("Install succeeded despite export failure")
+	}
+	expectOps(t, scheduler, "Get test-service", "Export test-service")
 }
 
 func expectOps(t *testing.T, scheduler *fakeScheduler, want ...string) {
@@ -496,7 +597,7 @@ func TestTaskSchedulerInstallReplacesItsOwnTask(t *testing.T) {
 	}
 	// The running instance is stopped so the new definition takes effect
 	// (MultipleInstancesPolicy IgnoreNew would ignore the start otherwise).
-	expectOps(t, scheduler, "Get test-service", "Register test-service", "Stop test-service", "Start test-service")
+	expectOps(t, scheduler, "Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Start test-service")
 	if task := scheduler.tasks["test-service"]; task.state != 4 {
 		t.Fatalf("task state = %d, want running", task.state)
 	}
@@ -562,14 +663,15 @@ func TestTaskSchedulerInstallFailures(t *testing.T) {
 		present  bool
 	}{
 		{"query fails", nil, "Get", []string{"Get test-service"}, false},
-		{"register fails", nil, "Register", []string{"Get test-service", "Register test-service"}, false},
+		// A failed first registration is checked, and found absent.
+		{"register fails", nil, "Register", []string{"Get test-service", "Register test-service", "Get test-service"}, false},
 		// A fresh task that cannot start is rolled back: its logon trigger
 		// would otherwise launch the service the caller saw fail to install.
-		{"start fails on fresh install", nil, "Start", []string{"Get test-service", "Register test-service", "Start test-service", "Unregister test-service"}, false},
+		{"start fails on fresh install", nil, "Start", []string{"Get test-service", "Register test-service", "Start test-service", "Get test-service", "Stop test-service", "Unregister test-service"}, false},
 		// A reinstall keeps the (updated) owned task: there is no previous
 		// state to restore, and removing it would uninstall the service.
-		{"start fails on reinstall", ownedTask(3), "Start", []string{"Get test-service", "Register test-service", "Stop test-service", "Start test-service"}, true},
-		{"stop fails on reinstall", ownedTask(4), "Stop", []string{"Get test-service", "Register test-service", "Stop test-service"}, true},
+		{"start fails on reinstall", ownedTask(3), "Start", []string{"Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Start test-service", "Stop test-service", "Register test-service"}, true},
+		{"stop fails on reinstall", ownedTask(4), "Stop", []string{"Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Register test-service", "Start test-service"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			scheduler := newFakeScheduler(t)
@@ -832,5 +934,65 @@ func TestServiceCommandBuildsSystemPowerShell(t *testing.T) {
 		if _, err := serviceCommand(context.Background(), "powershell"); err == nil {
 			t.Fatalf("serviceCommand(powershell) accepted SystemRoot %q", value)
 		}
+	}
+}
+
+// A previous definition too large to re-register is refused before the
+// replacement is registered, so a failed reinstall can always roll back.
+func TestTaskSchedulerReinstallRefusesAnUnrestorableDefinition(t *testing.T) {
+	scheduler := newFakeScheduler(t)
+	task := ownedTask(4)
+	task.xml = previousTaskXML + "<!--" + strings.Repeat("x", maxEncodedCommand) + "-->"
+	scheduler.tasks["test-service"] = task
+	err := newTestBackend(t, scheduler).Install(context.Background(), taskSpec(t))
+	if err == nil || !strings.Contains(err.Error(), "previous task definition cannot be restored") {
+		t.Fatalf("Install err = %v, want the rollback preflight failure", err)
+	}
+	expectOps(t, scheduler, "Get test-service", "Export test-service")
+}
+
+// A cmdlet can take effect and still report an error (for example when
+// cancellation kills PowerShell). Install must roll back as if it had.
+func TestTaskSchedulerInstallRollsBackAppliedFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		existing *fakeTask
+		failOp   string
+		wantOps  []string
+		// wantXML/wantState describe the task left behind; wantXML "" means
+		// no task may remain.
+		wantXML   string
+		wantState int
+	}{
+		{"fresh register applied then fails", nil, "Register",
+			[]string{"Get test-service", "Register test-service", "Get test-service", "Stop test-service", "Unregister test-service"}, "", 0},
+		{"reinstall register applied then fails", ownedTask(4), "Register",
+			[]string{"Get test-service", "Export test-service", "Register test-service", "Register test-service"}, previousTaskXML, 4},
+		{"fresh start applied then fails", nil, "Start",
+			[]string{"Get test-service", "Register test-service", "Start test-service", "Get test-service", "Stop test-service", "Unregister test-service"}, "", 0},
+		{"reinstall of a stopped task: start applied then fails", ownedTask(3), "Start",
+			[]string{"Get test-service", "Export test-service", "Register test-service", "Stop test-service", "Start test-service", "Stop test-service", "Register test-service"}, previousTaskXML, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheduler := newFakeScheduler(t)
+			if tc.existing != nil {
+				scheduler.tasks["test-service"] = tc.existing
+			}
+			scheduler.fail[tc.failOp] = fakeFailure{err: errors.New("exit status 1"), applied: true, once: true}
+			if err := newTestBackend(t, scheduler).Install(context.Background(), taskSpec(t)); err == nil {
+				t.Fatal("Install succeeded, want the reported failure")
+			}
+			expectOps(t, scheduler, tc.wantOps...)
+			task := scheduler.tasks["test-service"]
+			if tc.wantXML == "" {
+				if task != nil {
+					t.Fatalf("task left behind after a failed first install: %+v", task)
+				}
+				return
+			}
+			if task == nil || task.xml != tc.wantXML || task.state != tc.wantState {
+				t.Fatalf("task = %+v, want the previous definition in state %d", task, tc.wantState)
+			}
+		})
 	}
 }

@@ -42,6 +42,12 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, factory clientFactory) int {
+	return runWithDeps(ctx, args, stdin, stdout, stderr, factory, defaultServiceDeps())
+}
+
+// runWithDeps is run with injectable service collaborators, so the service
+// and doctor dispatch can be tested without touching the host service manager.
+func runWithDeps(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, factory clientFactory, deps serviceDeps) int {
 	options, command, err := parseCLI(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -56,6 +62,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return ExitInternal
 		}
 		return ExitSuccess
+	}
+	if command.Name == "service" {
+		return executeServiceCommand(ctx, options, command, stdout, stderr, deps)
+	}
+	if command.Name == "doctor" {
+		return executeDoctor(ctx, options, stdout, stderr, factory, deps)
 	}
 	if command.Name == "codex" && command.Action == "token" {
 		return executeCodexToken(ctx, options, stdout, stderr)
