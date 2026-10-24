@@ -412,7 +412,8 @@ func TestServiceInstallTightensExistingLogDirectory(t *testing.T) {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(logDir, 0o755); err != nil {
+	// Special bits must be cleared too, not only group and other access.
+	if err := os.Chmod(logDir, 0o700|os.ModeSticky|os.ModeSetgid); err != nil {
 		t.Fatal(err)
 	}
 	if code, _, stderr := runServiceCLI(t, h, options, "install", "--routerd", h.routerd); code != ExitSuccess {
@@ -422,8 +423,8 @@ func TestServiceInstallTightensExistingLogDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o700 {
-		t.Fatalf("existing log dir mode = %#o, want 0700", info.Mode().Perm())
+	if info.Mode().Perm() != 0o700 || info.Mode()&(os.ModeSticky|os.ModeSetgid|os.ModeSetuid) != 0 {
+		t.Fatalf("existing log dir mode = %v, want drwx------", info.Mode())
 	}
 }
 

@@ -68,6 +68,55 @@ func ApplyToHandle(handle windows.Handle, sd *windows.SECURITY_DESCRIPTOR) error
 	return windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, protectedDACL, nil, nil, dacl, nil)
 }
 
+// CheckOwner reports an error unless the object behind handle is owned by
+// the current user or by the token's default owner (for an elevated
+// administrator, new objects are owned by BUILTIN\Administrators). The
+// handle must have been opened with READ_CONTROL.
+func CheckOwner(handle windows.Handle) error {
+	sd, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("read owner: %w", err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("read owner: %w", err)
+	}
+	if owner == nil {
+		return errors.New("object has no owner")
+	}
+	token := windows.GetCurrentProcessToken()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return fmt.Errorf("current user: %w", err)
+	}
+	if owner.Equals(user.User.Sid) {
+		return nil
+	}
+	defaultOwner, err := tokenDefaultOwner(token)
+	if err != nil {
+		return err
+	}
+	if owner.Equals(defaultOwner) {
+		return nil
+	}
+	return fmt.Errorf("owned by %s, not the current user", owner)
+}
+
+// tokenDefaultOwner returns the owner the token assigns to new objects.
+func tokenDefaultOwner(token windows.Token) (*windows.SID, error) {
+	var size uint32
+	_ = windows.GetTokenInformation(token, windows.TokenOwner, nil, 0, &size)
+	if size < uint32(unsafe.Sizeof(uintptr(0))) {
+		return nil, errors.New("token owner: empty")
+	}
+	buffer := make([]byte, size)
+	if err := windows.GetTokenInformation(token, windows.TokenOwner, &buffer[0], size, &size); err != nil {
+		return nil, fmt.Errorf("token owner: %w", err)
+	}
+	// TOKEN_OWNER is a single PSID pointing into the same buffer.
+	return (*(**windows.SID)(unsafe.Pointer(&buffer[0]))).Copy()
+}
+
 // fileAllAccess is FILE_ALL_ACCESS, the mask SDDL writes as "FA".
 const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1FF
 

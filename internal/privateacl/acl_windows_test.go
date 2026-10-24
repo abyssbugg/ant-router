@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -146,5 +147,100 @@ func TestApplyToHandleReplacesTheDACL(t *testing.T) {
 	}
 	if err := Verify(file); err != nil {
 		t.Fatalf("Verify after ApplyToHandle: %v", err)
+	}
+}
+
+// DirectoryDescriptor entries are inheritable, FileDescriptor entries are
+// not, and a file created inside a private directory inherits only the
+// SYSTEM and current-user entries.
+func TestDirectoryDescriptorPropagatesToChildren(t *testing.T) {
+	inheritance := func(t *testing.T, sd *windows.SECURITY_DESCRIPTOR) []uint8 {
+		t.Helper()
+		dacl, _, err := sd.DACL()
+		if err != nil || dacl == nil {
+			t.Fatalf("DACL: %v", err)
+		}
+		var flags []uint8
+		for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+			var ace *windows.ACCESS_ALLOWED_ACE
+			if err := windows.GetAce(dacl, i, &ace); err != nil {
+				t.Fatal(err)
+			}
+			flags = append(flags, ace.Header.AceFlags)
+		}
+		return flags
+	}
+	dirSD, err := DirectoryDescriptor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileSD, err := FileDescriptor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const oici = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+	for _, f := range inheritance(t, dirSD) {
+		if f&oici != oici {
+			t.Fatalf("directory ACE flags %#x lack OI|CI", f)
+		}
+	}
+	for _, f := range inheritance(t, fileSD) {
+		if f&oici != 0 {
+			t.Fatalf("file ACE flags %#x must not be inheritable", f)
+		}
+	}
+
+	dir := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyToPath(dir, dirSD); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(dir, "child")
+	if err := os.WriteFile(child, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	childSD, err := windows.GetNamedSecurityInfo(child, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := childSD.DACL()
+	if err != nil || dacl == nil || dacl.AceCount == 0 {
+		t.Fatalf("child DACL = %v, %v", dacl, err)
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if ace.Header.AceFlags&windows.INHERITED_ACE == 0 || (!sid.Equals(system) && !sid.Equals(user.User.Sid)) {
+			t.Fatalf("child ACE %d: flags %#x sid %s, want an inherited SYSTEM or current-user entry", i, ace.Header.AceFlags, sid)
+		}
+	}
+}
+
+func TestCheckOwnerAcceptsObjectsCreatedByThisProcess(t *testing.T) {
+	dir := t.TempDir()
+	name, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(name, windows.READ_CONTROL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+	if err := CheckOwner(handle); err != nil {
+		t.Fatalf("CheckOwner(temp dir) = %v", err)
 	}
 }

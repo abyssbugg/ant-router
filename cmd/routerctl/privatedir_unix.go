@@ -57,7 +57,7 @@ func ensurePrivateLogDir(stateRoot, logDir string) error {
 }
 
 // checkOwnedDirectory requires fd to be a directory owned by the effective
-// user and, when tighten is set, removes every group and other permission.
+// user and, when tighten is set, sets its mode to exactly 0700.
 func checkOwnedDirectory(fd int, path string, tighten bool) error {
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
@@ -69,7 +69,9 @@ func checkOwnedDirectory(fd int, path string, tighten bool) error {
 	if int(st.Uid) != os.Geteuid() {
 		return fmt.Errorf("%s is owned by another user", path)
 	}
-	if tighten && st.Mode&0o077 != 0 {
+	// Compare the whole mode, so setuid, setgid, and sticky bits are
+	// cleared as well as group and other permissions.
+	if tighten && st.Mode&0o7777 != 0o700 {
 		if err := unix.Fchmod(fd, 0o700); err != nil {
 			return fmt.Errorf("restrict %s: %w", path, err)
 		}

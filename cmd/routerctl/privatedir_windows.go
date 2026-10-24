@@ -39,7 +39,7 @@ func ensurePrivateLogDir(stateRoot, logDir string) error {
 			_ = windows.CloseHandle(handle)
 		}
 	}()
-	root, err := openDirectoryHandle(stateRoot, false)
+	root, err := openDirectoryHandle(stateRoot, false, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES)
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func ensurePrivateLogDir(stateRoot, logDir string) error {
 			!errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 			return fmt.Errorf("create %s: %w", current, err)
 		}
-		handle, err := openDirectoryHandle(current, true)
+		handle, err := openDirectoryHandle(current, true, windows.READ_CONTROL|windows.WRITE_DAC|windows.FILE_READ_ATTRIBUTES)
 		if err != nil {
 			return err
 		}
@@ -67,9 +67,10 @@ func ensurePrivateLogDir(stateRoot, logDir string) error {
 	return nil
 }
 
-// openDirectoryHandle opens path as a directory. With noReparse it opens the
-// reparse point itself and refuses it, rather than following it.
-func openDirectoryHandle(path string, noReparse bool) (windows.Handle, error) {
+// openDirectoryHandle opens path as a directory owned by the current user,
+// with the given access. With noReparse it opens a reparse point itself and
+// refuses it, rather than following it.
+func openDirectoryHandle(path string, noReparse bool, access uint32) (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return windows.InvalidHandle, err
@@ -79,7 +80,7 @@ func openDirectoryHandle(path string, noReparse bool) (windows.Handle, error) {
 		flags |= windows.FILE_FLAG_OPEN_REPARSE_POINT
 	}
 	handle, err := windows.CreateFile(name,
-		windows.READ_CONTROL|windows.WRITE_DAC|windows.FILE_READ_ATTRIBUTES,
+		access,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil, windows.OPEN_EXISTING, flags, 0)
 	if err != nil {
@@ -97,6 +98,10 @@ func openDirectoryHandle(path string, noReparse bool) (windows.Handle, error) {
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		_ = windows.CloseHandle(handle)
 		return windows.InvalidHandle, fmt.Errorf("%s is not a directory", path)
+	}
+	if err := privateacl.CheckOwner(handle); err != nil {
+		_ = windows.CloseHandle(handle)
+		return windows.InvalidHandle, fmt.Errorf("%s: %w", path, err)
 	}
 	return handle, nil
 }

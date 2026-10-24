@@ -67,8 +67,7 @@ func TestEnsurePrivateLogDirRefusesNonDirectoriesAndJunctions(t *testing.T) {
 	target := t.TempDir()
 	link := filepath.Join(root, "linked")
 	if err := os.Symlink(target, link); err != nil {
-		t.Logf("directory symlink unavailable: %v", err)
-		return
+		t.Skipf("directory symlink unavailable, reparse-point case not covered: %v", err)
 	}
 	if err := ensurePrivateLogDir(root, filepath.Join(link, "logs")); err == nil {
 		t.Fatal("a reparse point below the state root must be refused")
