@@ -20,6 +20,9 @@ type DataPlaneConfig struct {
 	Listen                string   `toml:"listen"`
 	MaxConcurrentRequests int      `toml:"max_concurrent_requests"`
 	ShutdownTimeout       Duration `toml:"shutdown_timeout"`
+	// VisionBridge names the public model alias that describes images for
+	// models lacking the image_input capability. Empty disables the bridge.
+	VisionBridge string `toml:"vision_bridge,omitempty"`
 }
 
 // MockProviderConfig controls the explicitly enabled deterministic mock provider.
@@ -47,6 +50,11 @@ func (c Config) normalized() Config {
 }
 
 func validateDataPlane(c Config) error {
+	if c.DataPlane.VisionBridge != "" {
+		if len(c.DataPlane.VisionBridge) > MaxModelIDBytes || !validModelIdentifier(c.DataPlane.VisionBridge) {
+			return &Error{Code: CodeValidationFailed, Path: "data_plane.vision_bridge", Err: fmt.Errorf("invalid public model alias")}
+		}
+	}
 	host, portText, err := net.SplitHostPort(c.DataPlane.Listen)
 	if err != nil || host != "127.0.0.1" {
 		return &Error{Code: CodeValidationFailed, Path: "data_plane.listen", Err: fmt.Errorf("must be an IPv4 loopback address with a port")}

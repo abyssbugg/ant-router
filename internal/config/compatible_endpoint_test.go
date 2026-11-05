@@ -225,3 +225,73 @@ func TestValidateChatWireImageInputAcceptedContinuationDeferred(t *testing.T) {
 		t.Fatal("chat wire accepted continuation")
 	}
 }
+
+func TestDecodeSchemaV8AcceptsVisionBridge(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(`schema_version = 8
+[data_plane]
+enabled = true
+listen = "127.0.0.1:8787"
+max_concurrent_requests = 4
+shutdown_timeout = "2s"
+vision_bridge = "vision-model"
+[[providers]]
+id = "mock"
+kind = "mock"
+enabled = true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DataPlane.VisionBridge != "vision-model" {
+		t.Fatalf("vision_bridge = %q", cfg.DataPlane.VisionBridge)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() failed: %v", err)
+	}
+	encoded, err := Canonical(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `vision_bridge = 'vision-model'`) && !strings.Contains(string(encoded), `vision_bridge = "vision-model"`) {
+		t.Fatalf("canonical output lost vision_bridge: %s", encoded)
+	}
+}
+
+func TestDecodeSchemaV7RejectsVisionBridge(t *testing.T) {
+	_, err := Decode(strings.NewReader(`schema_version = 7
+[data_plane]
+enabled = true
+listen = "127.0.0.1:8787"
+max_concurrent_requests = 4
+shutdown_timeout = "2s"
+vision_bridge = "vision-model"
+`))
+	if err == nil {
+		t.Fatal("v7 accepted vision_bridge")
+	}
+}
+
+func TestValidateVisionBridgeRules(t *testing.T) {
+	cfg := Default()
+	cfg.DataPlane.VisionBridge = "vision model"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid vision bridge alias accepted")
+	}
+	cfg.DataPlane.VisionBridge = "vision-model"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid vision bridge rejected: %v", err)
+	}
+	cfg.DataPlane.VisionBridge = strings.Repeat("a", 200)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("oversized vision bridge alias accepted")
+	}
+}
+
+func TestDecodeOlderSchemaRejectsVisionBridge(t *testing.T) {
+	for _, version := range []string{"2", "3", "4", "5", "6", "7"} {
+		document := "schema_version = " + version + "\n[data_plane]\nenabled = true\nlisten = \"127.0.0.1:8787\"\nmax_concurrent_requests = 4\nshutdown_timeout = \"2s\"\nvision_bridge = \"vision-model\"\n"
+		if _, err := Decode(strings.NewReader(document)); err == nil {
+			t.Fatalf("v%s accepted vision_bridge", version)
+		}
+	}
+}

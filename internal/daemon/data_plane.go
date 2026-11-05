@@ -8,6 +8,7 @@ import (
 	"github.com/abyssbugg/ant-router/internal/config"
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/dataplane"
+	"github.com/abyssbugg/ant-router/internal/execution"
 	"github.com/abyssbugg/ant-router/internal/inferencetoken"
 	"github.com/abyssbugg/ant-router/internal/runtimepaths"
 )
@@ -49,12 +50,16 @@ func buildDataPlane(paths runtimepaths.Paths, manager *config.Manager, providers
 	if providers == nil || providers.load() == nil || providers.load().registry == nil {
 		return nil, fmt.Errorf("provider registry is unavailable")
 	}
+	requestRuntime := dataplane.RequestRuntime(providers)
+	if configuration.DataPlane.VisionBridge != "" {
+		requestRuntime = execution.NewVisionBridge(providers, configuration.DataPlane.VisionBridge)
+	}
 	handler, err := dataplane.NewHandler(dataplane.HandlerOptions{
 		TokenSource:      liveInferenceTokenSource{store: tokenStore, instance: paths.Instance},
-		Executor:         providers,
+		Executor:         requestRuntime,
 		Catalog:          providers,
-		AffinityResolver: providers,
-		Runtime:          func() dataplane.RequestRuntime { return providers.load().registry },
+		AffinityResolver: requestRuntime,
+		Runtime:          func() dataplane.RequestRuntime { return requestRuntime },
 		ListenAddress:    configuration.DataPlane.Listen,
 		MaxConcurrent:    configuration.DataPlane.MaxConcurrentRequests,
 		RequestTimeout:   dataPlaneRequestTimeout,

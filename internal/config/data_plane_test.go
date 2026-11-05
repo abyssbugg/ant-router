@@ -117,7 +117,7 @@ func TestCanonicalIncludesDataPlaneSections(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(canonical)
-	for _, want := range []string{"schema_version = 7", "[data_plane]", "listen = '127.0.0.1:8787'"} {
+	for _, want := range []string{"schema_version = 8", "[data_plane]", "listen = '127.0.0.1:8787'"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("canonical config missing %q: %s", want, text)
 		}

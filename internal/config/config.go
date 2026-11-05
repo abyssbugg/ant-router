@@ -9,7 +9,8 @@ const (
 	AnthropicSchemaVersion        = 4
 	CodexSchemaVersion            = 5
 	BaselineSchemaVersion         = 6
-	SchemaVersion                 = 7
+	ChatWireSchemaVersion         = 7
+	SchemaVersion                 = 8
 	DefaultShutdownTimeout        = 30 * time.Second
 )
 

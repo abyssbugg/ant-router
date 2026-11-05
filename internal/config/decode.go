@@ -34,6 +34,7 @@ type wireDataPlane struct {
 	Listen                *string  `toml:"listen"`
 	MaxConcurrentRequests *int     `toml:"max_concurrent_requests"`
 	ShutdownTimeout       *string  `toml:"shutdown_timeout"`
+	VisionBridge          *string  `toml:"vision_bridge"`
 	_                     struct{} `toml:"" json:"-"`
 }
 
@@ -78,6 +79,10 @@ type wireCodex struct {
 	Priority                      *int     `toml:"priority"`
 	Visibility                    *string  `toml:"visibility"`
 	_                             struct{} `toml:"" json:"-"`
+}
+
+func rejectVisionBridgeField(version int) error {
+	return &Error{Code: CodeUnknownField, Path: "data_plane.vision_bridge", Err: fmt.Errorf("field is unavailable in schema version %d", version)}
 }
 
 func rejectProviderEndpointFields(providers []wireProvider, version int) error {
@@ -205,6 +210,9 @@ func Decode(r io.Reader) (Config, error) {
 		if err := rejectProviderEndpointFields(wire.Providers, ProviderRegistrySchemaVersion); err != nil {
 			return Config{}, err
 		}
+		if wire.DataPlane != nil && wire.DataPlane.VisionBridge != nil {
+			return Config{}, rejectVisionBridgeField(ProviderRegistrySchemaVersion)
+		}
 		for i, provider := range wire.Providers {
 			if provider.Kind != nil && ProviderKind(*provider.Kind) == ProviderKindAnthropic {
 				return Config{}, &Error{Code: CodeValidationFailed, Path: fmt.Sprintf("providers[%d].kind", i), Err: fmt.Errorf("provider kind is unavailable in schema version 3")}
@@ -231,6 +239,9 @@ func Decode(r io.Reader) (Config, error) {
 		if err := rejectProviderEndpointFields(wire.Providers, AnthropicSchemaVersion); err != nil {
 			return Config{}, err
 		}
+		if wire.DataPlane != nil && wire.DataPlane.VisionBridge != nil {
+			return Config{}, rejectVisionBridgeField(AnthropicSchemaVersion)
+		}
 		for i, provider := range wire.Providers {
 			for j, model := range provider.Models {
 				if model.Codex != nil {
@@ -248,11 +259,24 @@ func Decode(r io.Reader) (Config, error) {
 		if err := rejectProviderEndpointFields(wire.Providers, CodexSchemaVersion); err != nil {
 			return Config{}, err
 		}
+		if wire.DataPlane != nil && wire.DataPlane.VisionBridge != nil {
+			return Config{}, rejectVisionBridgeField(CodexSchemaVersion)
+		}
 		// Schema version 5 predates the written Codex capability baseline,
 		// so its valid payloads never carry all six capabilities. Mark the
 		// config so normalization migrates Codex-enabled models to v6.
 		cfg.v5Migrated = true
+	case ChatWireSchemaVersion:
+		if wire.DataPlane != nil && wire.DataPlane.VisionBridge != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "data_plane.vision_bridge", Err: fmt.Errorf("field is unavailable in schema version 7")}
+		}
+		if wire.MockProvider != nil {
+			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 6")}
+		}
 	case BaselineSchemaVersion:
+		if wire.DataPlane != nil && wire.DataPlane.VisionBridge != nil {
+			return Config{}, rejectVisionBridgeField(BaselineSchemaVersion)
+		}
 		if wire.MockProvider != nil {
 			return Config{}, &Error{Code: CodeUnknownField, Path: "mock_provider", Err: fmt.Errorf("field is unavailable in schema version 6")}
 		}
@@ -311,11 +335,14 @@ func Decode(r io.Reader) (Config, error) {
 			}
 			cfg.DataPlane.ShutdownTimeout = parsed
 		}
+		if wire.DataPlane.VisionBridge != nil {
+			cfg.DataPlane.VisionBridge = *wire.DataPlane.VisionBridge
+		}
 	}
 	if *wire.SchemaVersion == PreviousSchemaVersion && wire.MockProvider != nil && wire.MockProvider.Enabled != nil && *wire.MockProvider.Enabled {
 		cfg.Providers = []ProviderConfig{{ID: "mock", Kind: ProviderKindMock, Enabled: true}}
 	}
-	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == CodexSchemaVersion || *wire.SchemaVersion == BaselineSchemaVersion || *wire.SchemaVersion == SchemaVersion {
+	if *wire.SchemaVersion == ProviderRegistrySchemaVersion || *wire.SchemaVersion == AnthropicSchemaVersion || *wire.SchemaVersion == CodexSchemaVersion || *wire.SchemaVersion == BaselineSchemaVersion || *wire.SchemaVersion == ChatWireSchemaVersion || *wire.SchemaVersion == SchemaVersion {
 		if wire.Providers != nil {
 			cfg.Providers = make([]ProviderConfig, len(wire.Providers))
 		}
