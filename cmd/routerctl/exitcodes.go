@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/abyssbugg/ant-router/internal/agentpublication"
 	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
 	"github.com/abyssbugg/ant-router/internal/controltoken"
@@ -52,6 +53,12 @@ func exitCode(err error) int {
 	}
 	if errors.Is(err, codexintegration.ErrConflict) {
 		return ExitConflict
+	}
+	if errors.Is(err, agentpublication.ErrDrift) {
+		return ExitConflict
+	}
+	if errors.Is(err, agentpublication.ErrUnrepresentable) {
+		return ExitValidation
 	}
 	if errors.Is(err, codexintegration.ErrInvalid) {
 		return ExitValidation

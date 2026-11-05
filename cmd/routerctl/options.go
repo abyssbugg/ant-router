@@ -17,6 +17,7 @@ const (
 type cliOptions struct {
 	Instance, StateRoot, RuntimeRoot string
 	CodexHome, CodexBin              string
+	GeminiHome, AgentModel           string
 	AllowUntestedCodex               bool
 	JSON                             bool
 }
@@ -26,6 +27,7 @@ type cliCommand struct {
 	Action            string
 	Input             string
 	ShowToken         bool
+	Agent             string
 	Proof, Generation string
 	Args              []string
 }
@@ -46,6 +48,8 @@ func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
 	flags.StringVar(&options.StateRoot, "state-dir", "", "persistent state root")
 	flags.StringVar(&options.RuntimeRoot, "runtime-dir", "", "local runtime root")
 	flags.StringVar(&options.CodexHome, "codex-home", "", "isolated Codex home")
+	flags.StringVar(&options.GeminiHome, "gemini-home", "", "Gemini CLI home (default ~/.gemini)")
+	flags.StringVar(&options.AgentModel, "agent-model", "", "default public model alias for agent publication")
 	flags.StringVar(&options.CodexBin, "codex-bin", "", "Codex executable")
 	flags.BoolVar(&options.AllowUntestedCodex, "allow-untested-codex", false, "allow an untested newer Codex version")
 	flags.BoolVar(&options.JSON, "json", false, "emit JSON output")
@@ -90,6 +94,10 @@ func parseCLI(args []string, stderr io.Writer) (cliOptions, cliCommand, error) {
 		}
 	case "codex":
 		if err := parseCodexCommand(remaining, &command); err != nil {
+			return options, cliCommand{}, err
+		}
+	case "agent":
+		if err := parseAgentCommand(remaining, &command); err != nil {
 			return options, cliCommand{}, err
 		}
 	case "config":

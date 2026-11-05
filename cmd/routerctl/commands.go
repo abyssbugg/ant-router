@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/abyssbugg/ant-router/internal/agentpublication"
 	"github.com/abyssbugg/ant-router/internal/buildinfo"
 	"github.com/abyssbugg/ant-router/internal/codexintegration"
 	"github.com/abyssbugg/ant-router/internal/control"
@@ -185,10 +186,16 @@ func describeCLIError(err error) cliErrorDetail {
 		if errors.Is(err, codexintegration.ErrInvalid) {
 			message = "Codex integration request is invalid"
 		}
+		if errors.Is(err, agentpublication.ErrUnrepresentable) {
+			message = "agent settings cannot be merged safely"
+		}
 	case ExitConflict:
 		code, message = "conflict", "configuration changed; validate again"
 		if errors.Is(err, codexintegration.ErrConflict) {
 			message = "Codex integration changed; plan again"
+		}
+		if errors.Is(err, agentpublication.ErrDrift) {
+			message = "agent settings changed; resolve and retry"
 		}
 	case ExitUnavailable:
 		code, message = "unavailable", "configuration unavailable"

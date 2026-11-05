@@ -83,6 +83,9 @@ func runWithDeps(ctx context.Context, args []string, stdin io.Reader, stdout, st
 		}
 		return executeCodexService(ctx, options, command, stdin, stdout, stderr, service)
 	}
+	if command.Name == "agent" {
+		return executeAgent(ctx, options, command, stdout, stderr, factory)
+	}
 	client, err := factory(options)
 	if err != nil {
 		code := exitCode(err)
