@@ -71,7 +71,8 @@ type handler struct {
 	mux              *http.ServeMux
 }
 
-// NewHandler constructs the exact /v1/models and /v1/responses route set.
+// NewHandler constructs the exact /v1/models, /v1/responses, and
+// /v1/chat/completions route set.
 func NewHandler(options HandlerOptions) (http.Handler, error) {
 	if nilInterface(options.TokenSource) || nilInterface(options.Executor) || nilInterface(options.Catalog) || options.ListenAddress == "" || options.MaxConcurrent < 1 || options.MaxConcurrent > 1024 || options.RequestTimeout <= 0 || options.Clock == nil {
 		return nil, errors.New("data-plane options are invalid")
@@ -79,6 +80,7 @@ func NewHandler(options HandlerOptions) (http.Handler, error) {
 	h := &handler{tokens: options.TokenSource, executor: options.Executor, catalog: options.Catalog, affinityResolver: options.AffinityResolver, runtime: options.Runtime, listenAddress: options.ListenAddress, clock: options.Clock, requestTimeout: options.RequestTimeout, semaphore: make(chan struct{}, options.MaxConcurrent), mux: http.NewServeMux()}
 	h.mux.HandleFunc("/v1/models", h.models)
 	h.mux.HandleFunc("/v1/responses", h.responses)
+	h.mux.HandleFunc("/v1/chat/completions", h.chatCompletions)
 	return http.HandlerFunc(h.serve), nil
 }
 

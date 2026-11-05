@@ -29,6 +29,9 @@ func (c *countingIDs) EventID() (canonical.EventID, error) {
 func (c *countingIDs) ResponseID() (canonical.ResponseID, error) {
 	return canonical.GenerateResponseID(c.nextID())
 }
+func (c *countingIDs) RequestID() (canonical.RequestID, error) {
+	return canonical.GenerateRequestID(c.nextID())
+}
 
 func fixedItemID(t *testing.T, value byte) canonical.ItemID {
 	t.Helper()
